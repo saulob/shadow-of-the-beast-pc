@@ -1,0 +1,35 @@
+{
+  "$schema": "https://recomp.fyi/schema/v1.json",
+  "game": "Shadow of the Beast",
+  "system": "PS4",
+  "type": "recomp",
+  "original": {
+    "revision": "01.00",
+    "serial": "CUSA03762"
+  },
+  "project": "Shadow of the Beast PC Port",
+  "status": "in development",
+  "targets": [
+    "Windows"
+  ],
+  "toolchain": "shadPS4-derived runtime",
+  "approach": "Original PS4 x86-64 game code running directly on Windows through replacement PS4 system libraries and a Vulkan renderer derived from shadPS4",
+  "maintainers": [
+    {
+      "name": "saulob",
+      "link": "https://github.com/saulob"
+    }
+  ],
+  "links": [
+    {
+      "label": "Repository",
+      "url": "https://github.com/saulob/shadow-of-the-beast-pc"
+    }
+  ],
+  "tags": [
+    "launcher",
+    "Vulkan",
+    "Unreal Engine 4"
+  ],
+  "notes": "Bring-up foundation: TRG launcher, direct installation from the user's own compatible PS4 package, build fingerprint validation, native loader, PS4 system-library runtime, shadPS4-derived GNM/VideoOut core and actionable logs. Gameplay has not been tested yet. No game files are included."
+}

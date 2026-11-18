@@ -1,0 +1,86 @@
+Third-party notices
+===================
+
+shadPS4 (video core, shader recompiler, GNM/VideoOut)
+  https://github.com/shadps4-emu/shadPS4
+  GPL-2.0-or-later
+
+TRG Launcher
+  https://github.com/TekRantGaming/trg-launcher
+  MIT
+
+Dear ImGui
+  https://github.com/ocornut/imgui
+  MIT
+
+SDL3
+  https://github.com/libsdl-org/SDL
+  Zlib
+
+FreeType
+  https://freetype.org/
+  FreeType License / GPL-2.0
+
+Vulkan-Headers, Vulkan-Loader
+  https://github.com/KhronosGroup/Vulkan-Headers
+  Apache-2.0
+
+fmt
+  https://github.com/fmtlib/fmt
+  MIT
+
+Boost headers
+  https://www.boost.org/
+  Boost Software License 1.0
+
+tsl::robin-map
+  https://github.com/Tessil/robin-map
+  MIT
+
+Zydis
+  https://github.com/zyantific/zydis
+  MIT
+
+xxHash
+  https://github.com/Cyan4973/xxHash
+  BSD-2-Clause
+
+miniz
+  https://github.com/richgel999/miniz
+  MIT
+
+magic_enum
+  https://github.com/Neargye/magic_enum
+  MIT
+
+xbyak
+  https://github.com/herumi/xbyak
+  BSD-3-Clause
+
+sirit
+  https://github.com/FearlessTobi/sirit
+  BSD-2-Clause
+
+half
+  https://github.com/permutationlock/half
+  MIT
+
+ANGLE runtime (OpenGL ES backend, prebuilt)
+  https://github.com/google/angle
+  BSD-3-Clause
+
+LibAtrac9
+  https://github.com/Thealexbarney/LibAtrac9
+  MIT
+
+nanosvg
+  https://github.com/memononen/nanosvg
+  zlib
+
+Launcher navigation icons (assets/launcher/icons)
+  display.svg: "Display Television Tv Screen Gadget" by nickylimyeanfen, Inc Device Icons,
+  https://www.svgrepo.com/svg/381247/display-television-tv-screen-gadget, CC Attribution 4.0
+  play.svg, graphics.svg, gameplay.svg, controls.svg, about.svg: CC0; sources in assets/launcher/icons/SOURCES.md
+
+Sponsor heart (assets/launcher/sponsor-heart.svg)
+  CC0
