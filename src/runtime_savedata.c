@@ -77,11 +77,12 @@ static char memory_path[720];
 static uint64_t memory_size;
 static size_t mounts_done, unmounts_done, memory_writes;
 
+const char *runtime_savedata_title(void) { return title_id; }
 void runtime_savedata_configure(const char *title) {
     if (title && *title) snprintf(title_id,sizeof(title_id),"%s",title);
 }
 
-static int make_dirs(const char *path) {
+int runtime_file_make_dirs(const char *path) {
     char buffer[700];
     snprintf(buffer,sizeof(buffer),"%s",path);
     for (char *p=buffer+1;*p;++p) if (*p=='/') { *p=0; mkdir(buffer,0755); *p='/'; }
@@ -109,7 +110,7 @@ static void sync_dir(const char *path) {
 }
 #endif
 /* Temporary file, flushed to disk, then renamed over `path`: a reader sees the old file or the new one. */
-static int write_file_atomic(const char *path, const void *data, size_t size) {
+int runtime_file_write_atomic(const char *path, const void *data, size_t size) {
     char temp[760], dir[760];
     snprintf(temp,sizeof(temp),"%s" TEMP_SUFFIX,path);
     FILE *f=fopen(temp,"wb");
@@ -126,7 +127,7 @@ static int write_file_atomic(const char *path, const void *data, size_t size) {
 static void write_param(const char *meta, const Param *p) {
     char path[700]; snprintf(path,sizeof(path),"%s/param.bin",meta);
     Param copy=*p; copy.mtime=time(NULL);
-    if (write_file_atomic(path,&copy,sizeof(copy))) printf("Save: cannot write %s\n",path);
+    if (runtime_file_write_atomic(path,&copy,sizeof(copy))) printf("Save: cannot write %s\n",path);
 }
 static int read_param(const char *meta, Param *p) {
     char path[700]; snprintf(path,sizeof(path),"%s/param.bin",meta);
@@ -192,7 +193,7 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint64
     }
     if (slot<0) { pthread_mutex_unlock(&lock); return ERR_MOUNT_FULL; }
     if (!(mode & (MODE_CREATE|MODE_CREATE2)) && !exists) { pthread_mutex_unlock(&lock); return ERR_NOT_FOUND; }
-    if (!exists && (make_dirs(host) || make_dirs(meta))) { pthread_mutex_unlock(&lock); return ERR_INTERNAL; }
+    if (!exists && (runtime_file_make_dirs(host) || runtime_file_make_dirs(meta))) { pthread_mutex_unlock(&lock); return ERR_INTERNAL; }
     if (!exists) { Param empty={0}; write_param(meta,&empty); }
     slots[slot].used=1;
     slots[slot].read_only=0;
@@ -314,7 +315,7 @@ static int32_t icon_save(const MountPoint *point, const Icon *icon) {
     int32_t r=slot>=0 && slots[slot].read_only ? ERR_NO_PERMISSION : ERR_NOT_MOUNTED;
     if (slot>=0 && !slots[slot].read_only) {
         char path[700]; snprintf(path,sizeof(path),"%s/icon0.png",slots[slot].meta);
-        r=write_file_atomic(path,icon->buffer,icon->data_size) ? ERR_INTERNAL : 0;
+        r=runtime_file_write_atomic(path,icon->buffer,icon->data_size) ? ERR_INTERNAL : 0;
     }
     pthread_mutex_unlock(&lock);
     return r;
@@ -400,7 +401,7 @@ static ABI int32_t memory_setup(int32_t user, uint64_t size, const Param *param)
     char base[600], dir[640];
     root(user,NULL,base,sizeof(base));
     snprintf(dir,sizeof(dir),"%s.memory",base);
-    if (make_dirs(dir)) return ERR_INTERNAL;
+    if (runtime_file_make_dirs(dir)) return ERR_INTERNAL;
     pthread_mutex_lock(&lock);
     snprintf(memory_path,sizeof(memory_path),"%s/memory.dat",dir);
     FILE *f=fopen(memory_path,"r+b");

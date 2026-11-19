@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(shadow_of_the_beast_pc VERSION 0.1.0 LANGUAGES C CXX)
+project(shadow_of_the_beast_pc VERSION 0.2.0 LANGUAGES C CXX)
 set(SOTB_PORT_VERSION "${PROJECT_VERSION}")
 
 if (NOT WIN32)
@@ -69,10 +69,12 @@ set(SOTB_RUNTIME_SOURCES
     src/runtime_fiber.c
     src/runtime_file.c
     src/runtime_http_uri.c
+    src/local_np_store.c
     src/runtime_kernel.c
     src/runtime_memory.c
     src/runtime_mutex.c
     src/runtime_ngs2.c
+    src/runtime_np_local.c
     src/runtime_pad.c
     src/runtime_redzone.c
     src/runtime_rtc.c
@@ -87,6 +89,7 @@ set(SOTB_RUNTIME_SOURCES
 set(SOTB_GAME_SOURCES
     src/loader.c
     src/import_slots.c
+    src/guest_patches.c
     src/isa_emulate.c
     src/compat_win.c
     src/module_diagnostics.c
@@ -108,6 +111,11 @@ target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotbgpu sotb_atr
 add_executable(import_slots_test EXCLUDE_FROM_ALL tests/import_slots_test.c src/import_slots.c)
 target_include_directories(import_slots_test PRIVATE src)
 target_compile_options(import_slots_test PRIVATE -Wall -Wextra -Werror)
+
+add_executable(guest_patches_test EXCLUDE_FROM_ALL tests/guest_patches_tests.c)
+target_include_directories(guest_patches_test PRIVATE src)
+target_compile_definitions(guest_patches_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
+target_compile_options(guest_patches_test PRIVATE -Wall -Wextra -Werror)
 
 add_executable(ngs2_test EXCLUDE_FROM_ALL tests/ngs2_test.c src/runtime_ngs2.c)
 target_include_directories(ngs2_test PRIVATE src)

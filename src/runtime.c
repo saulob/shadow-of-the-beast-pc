@@ -247,6 +247,8 @@ uintptr_t runtime_resolve(const char *name, int is_data) {
     if (memory) return memory;
     uintptr_t kernel = runtime_kernel_resolve(name);
     if (kernel) return kernel;
+    uintptr_t np_local = runtime_np_local_resolve(name);
+    if (np_local) return np_local;
     uintptr_t services = runtime_services_resolve(name);
     if (services) return services;
     uintptr_t rtc = runtime_rtc_resolve(name);

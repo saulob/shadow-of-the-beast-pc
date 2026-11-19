@@ -84,12 +84,13 @@ static ABI int32_t user_list(int32_t *ids) {
     pthread_mutex_unlock(&lock);
     return 0;
 }
+const char *runtime_local_user_name(void) { return getenv("SOTB_USER_NAME") ? getenv("SOTB_USER_NAME") : "Player"; }
 static ABI int32_t user_name(int32_t id,char *name,uint64_t size) {
     const int player=runtime_user_player(id);
     if (!player || !name) return USER_INVALID_ARGUMENT;
     char numbered[16];
     snprintf(numbered,sizeof(numbered),"Player %d",player);
-    const char *value=player>1 ? numbered : getenv("SOTB_USER_NAME") ? getenv("SOTB_USER_NAME") : "Player";
+    const char *value=player>1 ? numbered : runtime_local_user_name();
     if (strlen(value)+1>size) return (int32_t)0x8096000a; /* BUFFER_TOO_SHORT */
     strcpy(name,value); return 0;
 }
@@ -964,3 +965,7 @@ static const RuntimeExport exports[]={
     {"sceVoiceInit",ok_void}, {"sceVoiceEnd",ok_void},
 };
 uintptr_t runtime_services_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }
+uintptr_t runtime_services_symbol(const char *symbol) {
+    for (size_t i=0;i<sizeof(exports)/sizeof(*exports);++i) if (!strcmp(exports[i].name,symbol)) return (uintptr_t)exports[i].function;
+    return 0;
+}

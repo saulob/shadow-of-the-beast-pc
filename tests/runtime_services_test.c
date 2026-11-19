@@ -1,4 +1,7 @@
 #include "runtime.h"
+#include "runtime_np_local.h"
+#include "local_np_store.h"
+#include "compat_win.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -125,11 +128,20 @@ static void test_offline_contracts(void) {
     CHECK(((Read)by_name("sceVoiceQoSReadPacket"))(1, NULL, &size) == 0 && size == 0);
 }
 
+#include "runtime_np_local_tests.inc"
+
 int main(void) {
+    setvbuf(stdout, NULL, _IONBF, 0);
     runtime_start(1);
     test_ime();
     test_every_added_import_resolves();
     test_offline_contracts();
+    test_targeted_overrides();
+    test_state_callback_delivery();
+    test_remote_services_stay_offline();
+    test_local_score();
+    test_local_tus();
+    compat_remove_tree(TEST_USER_DIR);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -13,3 +13,5 @@ void sotbgpu_choice_set_input(uint32_t (*buttons)(void)) { (void)buttons; }
 int sotbgpu_overlay_captures_input(void) { return 0; }
 int sotbgpu_latency_trace_enabled(void) { return 0; }
 uint64_t sotbgpu_latency_press_ns(void) { return 0; }
+
+uintptr_t runtime_guest_offset(uintptr_t address) { (void)address; return UINTPTR_MAX; }

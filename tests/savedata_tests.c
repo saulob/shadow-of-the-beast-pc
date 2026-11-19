@@ -392,7 +392,7 @@ static void test_transferring_mount(void) {
     CHECK(transfer(&m, &r) == ERR_NOT_FOUND);
     char demo_dir[900];
     snprintf(demo_dir, sizeof(demo_dir), "%s/savedata/1/CUSA17627/SAVEDATA00", user_root);
-    CHECK(make_dirs(demo_dir) == 0);
+    CHECK(runtime_file_make_dirs(demo_dir) == 0);
     char demo_file[960];
     snprintf(demo_file, sizeof(demo_file), "%s/ROBO13.DAT", demo_dir);
     FILE *f = fopen(demo_file, "wb");

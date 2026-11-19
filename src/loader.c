@@ -10,6 +10,7 @@
 #include <time.h>
 
 #include "import_slots.h"
+#include "guest_patches.h"
 #include "isa_emulate.h"
 #include "module_diagnostics.h"
 #include "runtime.h"
@@ -159,6 +160,10 @@ static void report_import_users(uint32_t id) {
         if (used[u]) printf(" %s", unit_name(u - 1, unit, sizeof(unit)));
     }
     putchar('\n');
+}
+
+uintptr_t runtime_guest_offset(uintptr_t address) {
+    return image && address - (uintptr_t)image < 0x20000000 ? address - (uintptr_t)image : UINTPTR_MAX;
 }
 
 static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argument) {
@@ -1083,6 +1088,12 @@ int main(int argc, char **argv) {
         _exit(missing ? 1 : 0);
     }
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
+    {
+        const size_t cave_size = round_page(GUEST_PATCH_CAVE_SIZE);
+        unsigned char *cave = allocate(cave_size);
+        guest_patches_apply(image, size, cave, cave_size);
+        protect(cave, cave_size, 5);
+    }
     if (gpu_enabled) {
         uint64_t *triples = calloc(ns * 3, sizeof(*triples));
         if (!triples) fail_running("allocation failed");

@@ -132,6 +132,16 @@ void runtime_savedata_report(void);
 #define RUNTIME_SAVE_PARAM_SIZE 1328
 int runtime_savedata_param(int32_t user, const char *dir, void *param);
 int runtime_savedata_icon(int32_t user, const char *dir, char *out, size_t size);
+const char *runtime_savedata_title(void);
+int runtime_file_make_dirs(const char *path);
+/* Temporary file, flushed, then renamed over `path`; 0 on success. */
+int runtime_file_write_atomic(const char *path, const void *data, size_t size);
+/* Offset of a host address inside the guest image, or UINTPTR_MAX outside it. */
+uintptr_t runtime_guest_offset(uintptr_t address);
+/* Offline services only for callers that the local services were proven to need; others see the normal offline state. */
+uintptr_t runtime_np_local_resolve(const char *name);
+uintptr_t runtime_services_symbol(const char *symbol);
+const char *runtime_local_user_name(void);
 void runtime_thread_attach_host(const char *name);
 /* Name of a guest thread handle, or NULL when it is not a live thread. */
 const char *runtime_thread_name(void *handle);
