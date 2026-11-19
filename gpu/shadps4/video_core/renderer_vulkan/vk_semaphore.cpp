@@ -70,6 +70,9 @@ void Semaphore::Wait(u64 tick) {
         if (result == vk::Result::eTimeout) {
             continue;
         }
+        if (result == vk::Result::eErrorDeviceLost) {
+            instance.ReportDeviceFault();
+        }
         ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost while waiting for the GPU");
         UNREACHABLE_MSG("Timeline semaphore wait failed: {}", vk::to_string(result));
     }

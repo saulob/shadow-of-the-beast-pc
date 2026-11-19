@@ -43,6 +43,10 @@ constexpr vk::BufferUsageFlags ReadFlags =
 constexpr vk::BufferUsageFlags AllFlags =
     ReadFlags | vk::BufferUsageFlagBits::eTransferDst | vk::BufferUsageFlagBits::eStorageBuffer;
 
+/// Set by the Vulkan instance when sparse buffers are created with sparseResidencyAliased. A
+/// migrated arena binds the memory of the arena it replaces, which needs the aliased flag.
+inline bool sparse_aliased_enabled = false;
+
 struct UniqueBuffer {
     explicit UniqueBuffer(vk::Device device, VmaAllocator allocator);
     ~UniqueBuffer();

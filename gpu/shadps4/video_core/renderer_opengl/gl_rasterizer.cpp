@@ -584,19 +584,6 @@ void Rasterizer::BindTexture(const Shader::Info& info,
 
 void Rasterizer::BindStage(const Shader::Info& info, StageLocations& locations,
                            const Shader::Backend::GLSL::Stage& glsl) {
-    if (locations.user_data >= 0) {
-        std::array<u32, Shader::NUM_USER_DATA_REGS> user_data{};
-        const auto registers = info.UserData();
-        u32 mask = info.ud_mask.mask;
-        for (u32 slot = 0; mask != 0; ++slot) {
-            const u32 index = std::countr_zero(mask);
-            mask &= mask - 1;
-            user_data[slot] = registers[index];
-        }
-        if (UniformChanged(locations.sent_user_data, user_data)) {
-            gl::Uniform4uiv(locations.user_data, 4, user_data.data());
-        }
-    }
     if (locations.buffers >= 0) {
         std::array<std::array<u32, 2>, Shader::NUM_BUFFERS> table{};
         const auto& regs = liverpool->regs;
@@ -1178,9 +1165,12 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Vulkan::PreparedD
         return;
     }
     const bool quad_list = gles && regs.primitive_type == AmdGpu::PrimitiveType::QuadList;
+    std::optional<SequentialRects> sequential_rects;
     if (rect_list && is_indexed && !rect_tables) {
-        Report("indexed rectangle lists are not implemented");
-        return;
+        sequential_rects = SequentialIndexedRects(index_offset);
+        if (!sequential_rects) {
+            return;
+        }
     }
     AttachedTargets targets{};
     if (!BindTargets(*program, targets)) {
@@ -1201,7 +1191,10 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Vulkan::PreparedD
         BindStage(*program->fragment->info, program->fs, program->fragment->glsl);
     }
     // Elements on OpenGL ES have no base vertex here, and gl_VertexID would not include it anyway.
-    const u32 moved_vertices = gles && (is_indexed || quad_list || rect_list) ? vertex_offset : 0;
+    u32 moved_vertices = gles && (is_indexed || quad_list || rect_list) ? vertex_offset : 0;
+    if (sequential_rects) {
+        moved_vertices += sequential_rects->first_vertex;
+    }
     GLsizei rect_strips = 0;
     const bool prepared =
         rect_tables ? PrepareIndexedRectangles(*program, index_offset, vertex_offset, instance_offset, rect_strips)
@@ -1212,7 +1205,7 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Vulkan::PreparedD
 
     u32 index_ring_offset = 0;
     bool index16 = regs.index_buffer_type.index_type == AmdGpu::IndexType::Index16;
-    GLsizei count = GLsizei(regs.num_indices);
+    GLsizei count = sequential_rects ? GLsizei(sequential_rects->vertices) : GLsizei(regs.num_indices);
     if (quad_list) {
         if (regs.num_indices > ring.Capacity() / sizeof(u32) / 2) {
             Report("a quad list larger than the stream ring was dropped");
@@ -1316,6 +1309,19 @@ void Rasterizer::Draw(bool is_indexed, u32 index_offset, const Vulkan::PreparedD
                         program->fragment ? program->fragment->info->pgm_hash : 0),
                     count);
     }
+}
+
+std::optional<Rasterizer::SequentialRects> Rasterizer::SequentialIndexedRects(u32 index_offset) {
+    const auto indices = GuestIndexRange(index_offset);
+    std::optional<u32> base;
+    VisitGuestIndices(indices.address, indices.count, indices.size,
+                      [&](auto span) { base = SequentialRectBase(span); });
+    if (!base) {
+        ReportFirst("an indexed rectangle list without consecutive indices was skipped",
+                    fmt::format("{} indices", indices.count));
+        return std::nullopt;
+    }
+    return SequentialRects{*base, indices.count};
 }
 
 void Rasterizer::DrawIndirect(bool, VAddr, u32, u32, u32, VAddr, u16, u16) {

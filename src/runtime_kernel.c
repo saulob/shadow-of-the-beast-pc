@@ -108,18 +108,7 @@ static ABI uint64_t tsc_frequency(void) {
 uint64_t runtime_process_time_us(void) { return process_time(); }
 uint64_t runtime_process_time_counter(void) { return process_time_counter(); }
 uint64_t runtime_tsc_frequency(void) { return tsc_frequency(); }
-static int sleep_ns(uint64_t ns) {
-    int r=0;
-    runtime_thread_wait_begin("sleep");
-#ifdef _WIN32
-    compat_sleep_ns(ns);
-#else
-    struct timespec t={.tv_sec=(time_t)(ns/1000000000),.tv_nsec=(long)(ns%1000000000)};
-    while (nanosleep(&t,&t)) if (errno!=EINTR) { r=errno; break; }
-#endif
-    runtime_thread_wait_end();
-    return r;
-}
+static void sleep_ns(uint64_t ns) { runtime_thread_sleep_ns(ns); }
 static ABI int32_t kernel_usleep(uint32_t usec) { sleep_ns((uint64_t)usec*1000); return 0; }
 static ABI int32_t posix_usleep(uint32_t usec) { sleep_ns((uint64_t)usec*1000); return 0; }
 static ABI uint32_t posix_sleep(uint32_t seconds) { sleep_ns((uint64_t)seconds*1000000000); return 0; }
@@ -316,7 +305,7 @@ static ABI int32_t guest_sysctl(const int32_t *name,uint32_t namelen,void *old,u
     fprintf(stderr,"STOP: unsupported sysctl mib");
     for (uint32_t i=0;i<namelen && i<8;++i) fprintf(stderr," %d",name[i]);
     fputc('\n',stderr);
-    exit(21);
+    runtime_exit(21);
 }
 
 /* ---- pthread_once and thread-specific data ---- */

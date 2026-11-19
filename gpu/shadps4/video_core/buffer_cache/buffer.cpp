@@ -110,12 +110,27 @@ void UniqueBuffer::Create(vk::BufferCreateInfo& buffer_ci, MemoryType mem_type,
                         buffer_ci.size >> 20, BufferTypeName(mem_type),
                         vk::to_string(vk::Result{result}));
         }
+        if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+            // A full card: the buffer goes to system memory, where the card reaches it over the
+            // bus, instead of the game ending.
+            VmaAllocationCreateInfo host_ci = alloc_ci;
+            host_ci.usage = VMA_MEMORY_USAGE_AUTO_PREFER_HOST;
+            host_ci.preferredFlags = 0;
+            result = vmaCreateBuffer(allocator, &buffer_ci_unsafe, &host_ci, &unsafe_buffer,
+                                     &allocation, out_alloc_info);
+            LOG_WARNING(Render_Vulkan, "Placing a {} MiB {} buffer in system memory: {}",
+                        buffer_ci.size >> 20, BufferTypeName(mem_type),
+                        vk::to_string(vk::Result{result}));
+        }
         ASSERT_MSG(result == VK_SUCCESS, "Failed allocating buffer with error {}",
                    vk::to_string(vk::Result{result}));
         buffer = vk::Buffer{unsafe_buffer};
     } else {
         buffer_ci.flags |=
             vk::BufferCreateFlagBits::eSparseBinding | vk::BufferCreateFlagBits::eSparseResidency;
+        if (sparse_aliased_enabled) {
+            buffer_ci.flags |= vk::BufferCreateFlagBits::eSparseAliased;
+        }
         buffer = Vulkan::Check(device.createBuffer(buffer_ci));
     }
 

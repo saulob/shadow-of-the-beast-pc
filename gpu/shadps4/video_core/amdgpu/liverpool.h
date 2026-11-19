@@ -35,6 +35,8 @@ struct VideoOutPort;
 namespace AmdGpu {
 
 union PM4Header;
+struct PM4CmdStrmoutBufferUpdate;
+struct PM4CmdGetLodStats;
 
 struct Liverpool {
     static constexpr u32 GfxQueueId = 0u;
@@ -117,6 +119,9 @@ public:
         return num_submits == 0 && work_retired;
     }
 
+    /// Host copies and fences deferred to the recording threads are written. GPU thread only.
+    void WaitDeferredWrites();
+
     void SetVoPort(Libraries::VideoOut::VideoOutPort* port) {
         vo_port = port;
     }
@@ -160,7 +165,7 @@ public:
         std::array<u32, Pm4BufferSize> tmp_packet;
         u32 tmp_dwords;
     };
-    Common::SlotVector<AscQueueInfo> asc_queues{};
+    Common::SlotVector<AscQueueInfo> asc_queues{64};
 
     std::thread::id GetGpuCommandProcessorThread() {
         return gpu_id;
@@ -206,14 +211,16 @@ private:
     };
 
     /// `guest_dcb`: where a snapshot `dcb` was submitted from; null when `dcb` is read in place.
-    Task ProcessGraphics(std::span<const u32> dcb, std::span<const u32> ccb, u64 seq = NoSeq,
-                         const u32* guest_dcb = nullptr);
+    Task ProcessGraphics(std::span<const u32> dcb, u64 seq = NoSeq, const u32* guest_dcb = nullptr);
     Task ProcessCeUpdate(std::span<const u32> ccb);
     template <bool is_indirect = false>
     Task ProcessCompute(std::span<const u32> acb, u32 vqid);
 
     void ProcessCommands();
+    void ProcessCeQueue();
     void Process(std::stop_token stoken);
+    void HandleStrmoutBufferUpdate(const PM4CmdStrmoutBufferUpdate* strmout);
+    void HandleGetLodStats(const PM4CmdGetLodStats* get_lod);
 
     struct Submission {
         Task::Handle task;
@@ -225,26 +232,27 @@ private:
         ComputeProgram cs_state{};
     };
     std::array<GpuQueue, NumTotalQueues> mapped_queues{};
+    /// Constant engine submissions in FIFO order across graphics submissions (guarded by the
+    /// graphics queue's m_access). The CCB words are copied: the task outlives the DCB's snapshot.
+    struct CeSubmission {
+        Task::Handle task;
+        std::vector<u32> words;
+    };
+    std::queue<CeSubmission> ce_submits;
     CommandSnapshots command_snapshots;
     u32 num_mapped_queues{1u}; // GFX is always available
 
     VAddr indirect_args_addr{};
     u32 num_counter_pairs{};
     u64 pixel_counter{};
+    u32 vgt_strmout_buffer_filled_size[4]{};
 
     struct ConstantEngine {
-        void Reset() {
-            ce_count = 0;
-            de_count = 0;
-            ce_compare_count = 0;
-        }
-
         [[nodiscard]] u32 Diff() const {
             ASSERT_MSG(ce_count >= de_count, "DE counter is ahead of CE");
             return ce_count - de_count;
         }
 
-        u32 ce_compare_count{};
         u32 ce_count{};
         u32 de_count{};
         static std::array<u8, 48_KB> constants_heap;

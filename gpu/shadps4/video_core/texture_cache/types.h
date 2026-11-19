@@ -63,6 +63,10 @@ struct SubresourceExtent {
     u32 levels = 1;
     u32 layers = 1;
 
+    [[nodiscard]] bool Contains(const SubresourceExtent& other) const noexcept {
+        return levels >= other.levels && layers >= other.layers;
+    }
+
     auto operator<=>(const SubresourceExtent&) const = default;
 };
 

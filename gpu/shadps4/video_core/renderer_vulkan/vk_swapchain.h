@@ -18,6 +18,66 @@ namespace Vulkan {
 class Instance;
 class Scheduler;
 
+/// Suboptimal is a Vulkan success code: the image was acquired or presented and the frame goes on.
+/// It asks for one recreation; a replacement that is suboptimal again is kept until a clean frame,
+/// or a surface that always reports it would get a new swapchain every frame.
+class SwapchainHealth {
+public:
+    enum class Result { Success, Suboptimal, OutOfDate, Failure };
+
+    /// Returns whether the acquired image can be used.
+    bool Acquire(Result result) {
+        clean_acquire = result == Result::Success;
+        return Observe(result);
+    }
+
+    /// Returns whether the image was queued for display.
+    bool Present(Result result) {
+        const bool usable = Observe(result);
+        if (result == Result::Success && clean_acquire) {
+            replaced_suboptimal = false;
+        }
+        return usable;
+    }
+
+    void Recreated() {
+        replaced_suboptimal = recreate && suboptimal_only;
+        recreate = false;
+        suboptimal_only = false;
+        clean_acquire = false;
+    }
+
+    bool NeedsRecreation() const {
+        return recreate;
+    }
+
+private:
+    bool Observe(Result result) {
+        switch (result) {
+        case Result::Success:
+            return true;
+        case Result::Suboptimal:
+            if (!replaced_suboptimal && !recreate) {
+                recreate = true;
+                suboptimal_only = true;
+            }
+            return true;
+        case Result::OutOfDate:
+            recreate = true;
+            suboptimal_only = false;
+            return false;
+        case Result::Failure:
+            break;
+        }
+        return false;
+    }
+
+    bool recreate = false;
+    bool suboptimal_only = false;     ///< only a suboptimal result asked for the pending recreation
+    bool replaced_suboptimal = false; ///< this swapchain replaced a suboptimal one and stays
+    bool clean_acquire = false;
+};
+
 class Swapchain {
 public:
     explicit Swapchain(const Instance& instance, const Frontend::WindowSDL& window);
@@ -65,6 +125,10 @@ public:
 
     u32 GetImageCount() const {
         return image_count;
+    }
+
+    bool NeedsRecreation() const {
+        return health.NeedsRecreation();
     }
 
     u32 GetFrameIndex() const {
@@ -145,7 +209,7 @@ private:
     std::string logged_images;
     u32 image_index = 0;
     u32 frame_index = 0;
-    bool needs_recreation = true;
+    SwapchainHealth health;
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
 };

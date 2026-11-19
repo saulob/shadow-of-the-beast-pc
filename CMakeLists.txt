@@ -115,7 +115,7 @@ target_compile_options(ngs2_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(ngs2_test PRIVATE -pthread)
 
 add_executable(runtime_services_test EXCLUDE_FROM_ALL tests/runtime_services_test.c tests/runtime_test_stubs.c
-    ${SOTB_RUNTIME_SOURCES} src/compat_win.c src/runtime_log.c)
+    ${SOTB_RUNTIME_SOURCES} src/compat_win.c src/runtime_log.c src/isa_emulate.c)
 target_include_directories(runtime_services_test PRIVATE src tests launcher gpu/shim ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(runtime_services_test PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
 target_compile_definitions(runtime_services_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
@@ -167,3 +167,29 @@ add_custom_command(TARGET shadow_of_the_beast POST_BUILD
 
 set_source_files_properties(src/shadow_of_the_beast.rc PROPERTIES OBJECT_DEPENDS
     "${CMAKE_SOURCE_DIR}/packaging/icons/app-icon.ico;${CMAKE_SOURCE_DIR}/src/shadow_of_the_beast.manifest;${CMAKE_BINARY_DIR}/generated/sotb_version.h")
+
+add_executable(image_descriptor_test EXCLUDE_FROM_ALL tests/image_descriptor_tests.cpp gpu/shadps4/video_core/amdgpu/pixel_format.cpp
+    gpu/shadps4/video_core/amdgpu/tiling.cpp)
+set_target_properties(image_descriptor_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(image_descriptor_test PRIVATE $<TARGET_PROPERTY:sotbgpu,INCLUDE_DIRECTORIES>)
+target_compile_definitions(image_descriptor_test PRIVATE $<TARGET_PROPERTY:sotbgpu,COMPILE_DEFINITIONS>)
+target_compile_options(image_descriptor_test PRIVATE -Wall -Wextra)
+target_link_libraries(image_descriptor_test PRIVATE fmt::fmt)
+
+add_executable(hdr_format_test EXCLUDE_FROM_ALL tests/hdr_format_tests.cpp gpu/shadps4/video_core/amdgpu/pixel_format.cpp gpu/shadps4/common/number_utils.cpp)
+set_target_properties(hdr_format_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(hdr_format_test PRIVATE $<TARGET_PROPERTY:sotbgpu,INCLUDE_DIRECTORIES>)
+target_compile_definitions(hdr_format_test PRIVATE $<TARGET_PROPERTY:sotbgpu,COMPILE_DEFINITIONS>)
+target_compile_options(hdr_format_test PRIVATE -Wall -Wextra)
+target_link_libraries(hdr_format_test PRIVATE fmt::fmt)
+
+add_executable(blend_min_max_test EXCLUDE_FROM_ALL tests/blend_min_max_tests.cpp)
+set_target_properties(blend_min_max_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(blend_min_max_test PRIVATE $<TARGET_PROPERTY:sotbgpu,INCLUDE_DIRECTORIES>)
+target_compile_definitions(blend_min_max_test PRIVATE $<TARGET_PROPERTY:sotbgpu,COMPILE_DEFINITIONS>)
+target_compile_options(blend_min_max_test PRIVATE -Wall -Wextra)
+
+add_executable(identity_lut_test EXCLUDE_FROM_ALL tests/identity_lut_tests.cpp)
+set_target_properties(identity_lut_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(identity_lut_test PRIVATE gpu/shadps4)
+target_compile_options(identity_lut_test PRIVATE -Wall -Wextra -Werror)

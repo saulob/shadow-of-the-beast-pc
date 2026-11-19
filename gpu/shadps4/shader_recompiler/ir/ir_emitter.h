@@ -45,6 +45,7 @@ public:
     void Barrier();
     void WorkgroupMemoryBarrier();
     void DeviceMemoryBarrier();
+    void SubgroupBarrier();
 
     [[nodiscard]] U32 GetUserData(IR::ScalarReg reg);
 
@@ -54,6 +55,9 @@ public:
     [[nodiscard]] T GetVectorReg(IR::VectorReg reg);
     void SetScalarReg(IR::ScalarReg reg, const U32F32& value);
     void SetVectorReg(IR::VectorReg reg, const U32F32& value);
+
+    [[nodiscard]] U32 VMovRelS(IR::VectorReg reg, const U32& m0);
+    void VMovRelD(IR::VectorReg reg, const U32& value, const U32& m0);
 
     [[nodiscard]] Value GetVirtualReg(IR::VirtualReg reg);
     void SetVirtualReg(IR::VirtualReg reg, const Value& value);
@@ -92,8 +96,13 @@ public:
     void SetPatch(Patch patch, const F32& value);
 
     [[nodiscard]] Value LoadShared(int bit_size, bool is_signed, const U32& offset,
-                                   bool is_gds = false);
-    void WriteShared(int bit_size, const Value& value, const U32& offset, bool is_gds = false);
+                                   bool is_gds = false, bool is_scratch = false);
+    void WriteShared(int bit_size, const Value& value, const U32& offset, bool is_gds = false,
+                     bool is_scratch = false);
+
+    [[nodiscard]] U32 LoadSharedU32Scratch(const U32& offset);
+    [[nodiscard]] U64 LoadSharedU64Scratch(const U32& offset);
+    void WriteSharedU32Scratch(const U32& value, const U32& offset);
 
     [[nodiscard]] U32U64 SharedAtomicIAdd(const U32& address, const U32U64& data, bool is_gds);
     [[nodiscard]] U32U64 SharedAtomicISub(const U32& address, const U32U64& data, bool is_gds);
@@ -101,6 +110,8 @@ public:
                                           bool is_gds);
     [[nodiscard]] U32U64 SharedAtomicIMax(const U32& address, const U32U64& data, bool is_signed,
                                           bool is_gds);
+    [[nodiscard]] F32 SharedAtomicFMax(const U32& address, const F32& data, bool is_gds);
+    [[nodiscard]] F32 SharedAtomicFMin(const U32& address, const F32& data, bool is_gds);
     [[nodiscard]] U32U64 SharedAtomicAnd(const U32& address, const U32U64& data, bool is_gds);
     [[nodiscard]] U32U64 SharedAtomicOr(const U32& address, const U32U64& data, bool is_gds);
     [[nodiscard]] U32U64 SharedAtomicXor(const U32& address, const U32U64& data, bool is_gds);
@@ -171,7 +182,8 @@ public:
     [[nodiscard]] U32 DataAppend(const U32& gds_dw_offset);
     [[nodiscard]] U32 DataConsume(const U32& gds_dw_offset);
     [[nodiscard]] U32 LaneId();
-    [[nodiscard]] U32 WarpId();
+    [[nodiscard]] U32 WaveId();
+    [[nodiscard]] U32 SubgroupId();
     [[nodiscard]] U32 QuadBroadcast(const U32& value, const U32& index);
     [[nodiscard]] U32 Shuffle(const U32& value, const U32& index);
     [[nodiscard]] U32 ShuffleXor(const U32& value, const U32& mask);
@@ -267,7 +279,6 @@ public:
     [[nodiscard]] F32F64 FPMedTri(const F32F64& a, const F32F64& b, const F32F64& c);
 
     [[nodiscard]] U32U64 IAdd(const U32U64& a, const U32U64& b);
-    [[nodiscard]] Value IAddCarry(const U32& a, const U32& b);
     [[nodiscard]] U32U64 ISub(const U32U64& a, const U32U64& b);
     [[nodiscard]] U32 IMulHi(const U32& a, const U32& b, bool is_signed = false);
     [[nodiscard]] U32U64 IMul(const U32U64& a, const U32U64& b);
@@ -410,7 +421,10 @@ public:
     void ImageWrite(const Value& handle, const Value& coords, const U32& lod,
                     const U32& multisampling, const Value& color, TextureInstInfo info);
 
-    [[nodiscard]] F32 CubeFaceIndex(const Value& cube_coords);
+    [[nodiscard]] F32 CubeFaceIndex(const Value& x, const Value& y, const Value& z);
+    [[nodiscard]] F32 CubeFaceCoordS(const Value& x, const Value& y, const Value& z);
+    [[nodiscard]] F32 CubeFaceCoordT(const Value& x, const Value& y, const Value& z);
+    [[nodiscard]] F32 CubeFaceMajorAxis(const Value& x, const Value& y, const Value& z);
 
     void EmitVertex();
     void EmitPrimitive();

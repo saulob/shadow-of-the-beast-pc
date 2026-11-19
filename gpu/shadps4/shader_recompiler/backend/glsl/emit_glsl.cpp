@@ -53,8 +53,6 @@ constexpr const char* HelperUmulHi =
     "uint m1=ah*bl+(t>>16u);uint m2=al*bh+(m1&0xFFFFu);return ah*bh+(m1>>16u)+(m2>>16u);}\n";
 constexpr const char* HelperSmulHi =
     "uint smulhi(uint a,uint b){uint r=umulhi(a,b);if(int(a)<0)r-=b;if(int(b)<0)r-=a;return r;}\n";
-constexpr const char* HelperAddCarry =
-    "uvec2 uaddc(uint a,uint b){uint r=a+b;return uvec2(r,r<a?1u:0u);}\n";
 constexpr const char* HelperSmod =
     "uint smod(uint a,uint b){int x=int(a),y=int(b);int r=x-y*(x/y);"
     "if(r!=0&&((r<0)!=(y<0)))r+=y;return uint(r);}\n";
@@ -101,6 +99,14 @@ constexpr const char* HelperPackUnorm2101010 =
     "vec4 up_un1010102(uint p){return vec4(float(p&0x3FFu),float((p>>10u)&0x3FFu),"
     "float((p>>20u)&0x3FFu),float(p>>30u))/vec4(1023.0,1023.0,1023.0,3.0);}\n";
 
+constexpr const char* HelperCube =
+    "float cube_sel(vec3 v,float xr,float yr,float zr){vec3 a=abs(v);"
+    "return (a.z>=a.x&&a.z>=a.y)?zr:(a.y>=a.x?yr:xr);}\n"
+    "float cube_id(vec3 v){return cube_sel(v,v.x<0.0?1.0:0.0,v.y<0.0?3.0:2.0,v.z<0.0?5.0:4.0);}\n"
+    "float cube_sc(vec3 v){return cube_sel(v,v.x<0.0?v.z:-v.z,v.x,v.z<0.0?-v.x:v.x);}\n"
+    "float cube_tc(vec3 v){return cube_sel(v,-v.y,v.y<0.0?-v.z:v.z,-v.y);}\n"
+    "float cube_ma(vec3 v){return cube_sel(v,v.x*2.0,v.y*2.0,v.z*2.0);}\n";
+
 constexpr u32 NumDimensions(AmdGpu::ImageType type) {
     switch (type) {
     case AmdGpu::ImageType::Color1D:
@@ -124,6 +130,7 @@ std::string SamplerTypeName(AmdGpu::ImageType type, AmdGpu::NumberClass number_c
         base = "1DArray";
         break;
     case AmdGpu::ImageType::Color2DArray:
+    case AmdGpu::ImageType::Cube:
         base = "2DArray";
         break;
     case AmdGpu::ImageType::Color3D:
@@ -518,6 +525,15 @@ private:
         }
     }
 
+    // Cube coordinates arrive as (sc/|2ma|+1.5, tc/|2ma|+1.5, face+8*cube) and are sampled as a
+    // 2D array of faces.
+    std::string SampleCoords(AmdGpu::ImageType type, const std::string& coords) {
+        if (type != AmdGpu::ImageType::Cube) {
+            return coords;
+        }
+        return fmt::format("vec3({0}.xy-1.0,{0}.z-2.0*floor({0}.z/8.0))", coords);
+    }
+
     std::string ShadowCoords(AmdGpu::ImageType type, const std::string& coords,
                              const std::string& dref) {
         switch (type) {
@@ -527,6 +543,7 @@ private:
         case AmdGpu::ImageType::Color1DArray:
             return fmt::format("vec3({},{})", coords, dref);
         case AmdGpu::ImageType::Color2DArray:
+        case AmdGpu::ImageType::Cube:
             return fmt::format("vec4({},{})", coords, dref);
         default:
             Fail("a depth comparison on this image type");
@@ -537,12 +554,13 @@ private:
     void EmitSampleImplicit(const IR::Inst& inst) {
         const u32 handle = inst.Arg(0).U32();
         const auto sampler = SamplerName(handle, false, false);
-        const auto coords = Ref(inst.Arg(1));
+        const auto type = ViewType(handle);
+        const auto coords = SampleCoords(type, Ref(inst.Arg(1)));
         const IR::Value bias = inst.Arg(2);
         const IR::Value offset = inst.Arg(3);
         const auto bias_text = bias.IsEmpty() ? std::string{} : "," + Ref(bias);
         std::string call;
-        if (offset.IsEmpty()) {
+        if (offset.IsEmpty() || type == AmdGpu::ImageType::Cube) {
             call = fmt::format("texture({},{}{})", sampler, coords, bias_text);
         } else {
             call = fmt::format("textureOffset({},{},{}{})", sampler, coords,
@@ -554,11 +572,12 @@ private:
     void EmitSampleExplicit(const IR::Inst& inst) {
         const u32 handle = inst.Arg(0).U32();
         const auto sampler = SamplerName(handle, false, false);
-        const auto coords = Ref(inst.Arg(1));
+        const auto type = ViewType(handle);
+        const auto coords = SampleCoords(type, Ref(inst.Arg(1)));
         const auto lod = Ref(inst.Arg(2));
         const IR::Value offset = inst.Arg(3);
         std::string call;
-        if (offset.IsEmpty()) {
+        if (offset.IsEmpty() || type == AmdGpu::ImageType::Cube) {
             call = fmt::format("textureLod({},{},{})", sampler, coords, lod);
         } else {
             call = fmt::format("textureLodOffset({},{},{},{})", sampler, coords, lod,
@@ -571,24 +590,33 @@ private:
         const u32 handle = inst.Arg(0).U32();
         const auto type = ViewType(handle);
         const auto sampler = SamplerName(handle, true, false);
-        const auto coords = ShadowCoords(type, Ref(inst.Arg(1)), Ref(inst.Arg(2)));
+        const auto coords =
+            ShadowCoords(type, SampleCoords(type, Ref(inst.Arg(1))), Ref(inst.Arg(2)));
         const IR::Value lod_or_bias = inst.Arg(3);
         const IR::Value offset = inst.Arg(4);
-        if (!offset.IsEmpty()) {
+        const bool is_array = type == AmdGpu::ImageType::Color2DArray ||
+                              type == AmdGpu::ImageType::Cube;
+        if (!offset.IsEmpty() && type != AmdGpu::ImageType::Cube) {
             Fail("a depth comparison with a texel offset");
         }
-        if (type == AmdGpu::ImageType::Color2DArray && explicit_lod) {
+        if (is_array && explicit_lod) {
             Fail("an explicit LOD depth comparison on an array image");
         }
         std::string call;
         if (explicit_lod) {
             call = fmt::format("textureLod({},{},{})", sampler, coords, Ref(lod_or_bias));
-        } else if (lod_or_bias.IsEmpty() || type == AmdGpu::ImageType::Color2DArray) {
+        } else if (lod_or_bias.IsEmpty() || is_array) {
             call = fmt::format("texture({},{})", sampler, coords);
         } else {
             call = fmt::format("texture({},{},{})", sampler, coords, Ref(lod_or_bias));
         }
         Assign(inst, fmt::format("vec4({},0.0,0.0,0.0)", call));
+    }
+
+    void EmitCubeOp(const IR::Inst& inst, const char* name) {
+        Assign(inst, Call(HelperCube, name,
+                          {fmt::format("vec3({},{},{})", Ref(inst.Arg(0)), Ref(inst.Arg(1)),
+                                       Ref(inst.Arg(2)))}));
     }
 
     void EmitImageRead(const IR::Inst& inst) {
@@ -862,6 +890,7 @@ private:
         case Opcode::Void:
         case Opcode::Prologue:
         case Opcode::Barrier:
+        case Opcode::SubgroupBarrier:
         case Opcode::WorkgroupMemoryBarrier:
         case Opcode::DeviceMemoryBarrier:
             break;
@@ -884,9 +913,8 @@ private:
             Assign(inst, BufferDword(inst.Arg(0).U32(), Ref(inst.Arg(1))));
             break;
         case Opcode::GetUserData: {
-            const u32 index = info.ud_mask.Index(inst.Arg(0).ScalarReg());
-            uses_user_data = true;
-            Assign(inst, fmt::format("{}ud[{}][{}]", prefix, index >> 2, index & 3));
+            const u32 reg = static_cast<u32>(inst.Arg(0).ScalarReg());
+            Assign(inst, BufferDword(FlatBufferSlot(), fmt::format("{}u", reg)));
             break;
         }
         case Opcode::GetAttribute:
@@ -921,6 +949,9 @@ private:
             break;
         case Opcode::UndefF32:
             Assign(inst, "0.0");
+            break;
+        case Opcode::UndefF32x2:
+            Assign(inst, "vec2(0.0)");
             break;
 
         case Opcode::LoadBufferU8: {
@@ -1216,9 +1247,6 @@ private:
         case Opcode::IAdd32:
             Binary(inst, "+");
             break;
-        case Opcode::IAddCarry32:
-            Assign(inst, Call(HelperAddCarry, "uaddc", {Ref(inst.Arg(0)), Ref(inst.Arg(1))}));
-            break;
         case Opcode::ISub32:
             Binary(inst, "-");
             break;
@@ -1451,12 +1479,13 @@ private:
         case Opcode::ImageGradient: {
             const u32 handle = inst.Arg(0).U32();
             const auto sampler = SamplerName(handle, false, false);
-            const auto coords = Ref(inst.Arg(1));
+            const auto type = ViewType(handle);
+            const auto coords = SampleCoords(type, Ref(inst.Arg(1)));
             const auto dx = Ref(inst.Arg(2));
             const auto dy = Ref(inst.Arg(3));
             const IR::Value offset = inst.Arg(4);
             const auto call =
-                offset.IsEmpty()
+                offset.IsEmpty() || type == AmdGpu::ImageType::Cube
                     ? fmt::format("textureGrad({},{},{},{})", sampler, coords, dx, dy)
                     : fmt::format("textureGradOffset({},{},{},{},{})", sampler, coords, dx, dy,
                                   Offset(offset, OffsetDimensions(ViewType(handle))));
@@ -1465,6 +1494,18 @@ private:
         }
         case Opcode::ImageRead:
             EmitImageRead(inst);
+            break;
+        case Opcode::CubeFaceIndex:
+            EmitCubeOp(inst, "cube_id");
+            break;
+        case Opcode::CubeFaceCoordS:
+            EmitCubeOp(inst, "cube_sc");
+            break;
+        case Opcode::CubeFaceCoordT:
+            EmitCubeOp(inst, "cube_tc");
+            break;
+        case Opcode::CubeFaceMajorAxis:
+            EmitCubeOp(inst, "cube_ma");
             break;
         case Opcode::ImageQueryDimensions:
             EmitQueryDimensions(inst);
@@ -1479,9 +1520,6 @@ private:
     void BuildDeclarations() {
         std::string out;
         stage.uses_ring = uses_buffers;
-        if (uses_user_data) {
-            out += fmt::format("uniform uvec4 {}ud[4];\n", prefix);
-        }
         if (uses_buffers) {
             out += Gles() ? "uniform highp usampler2D sotb_ring;\n" : "uniform usamplerBuffer sotb_ring;\n";
             out += fmt::format("uniform uvec2 {}buffers[{}];\n", prefix,
@@ -1594,7 +1632,6 @@ private:
     std::string body;
     std::vector<const char*> helpers; ///< in dependency order
     std::unordered_map<IR::Block*, std::vector<std::pair<IR::Inst*, IR::Value>>> phi_moves;
-    bool uses_user_data = false;
     bool uses_buffers = false;
     bool uses_transform = false;
     bool uses_base_vertex = false;

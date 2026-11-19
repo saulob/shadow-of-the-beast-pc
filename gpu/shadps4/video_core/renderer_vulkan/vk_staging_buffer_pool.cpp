@@ -107,12 +107,16 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
 StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool deferred) {
     std::scoped_lock lock{large_mutex};
     auto& cache = large_caches[u32(type)];
-    const u64 max_size = std::max(size + size / 4, RoundAllocationSize(size));
+    // Held requests (readbacks) come in arbitrary sizes: power-of-two buckets let their buffers be
+    // reused instead of allocating one per request.
+    const u64 alloc_size = deferred ? std::bit_ceil(std::max<u64>(size, 256_KB)) : size;
+    const u64 max_size = deferred ? alloc_size * 2 - 1
+                                  : std::max(size + size / 4, RoundAllocationSize(size));
 
     LargeBuffer* best{};
     for (LargeBuffer& entry : cache) {
         const u64 entry_size = entry.buffer->SizeBytes();
-        if (entry.held || entry_size < size || entry_size > max_size ||
+        if (entry.held || entry_size < alloc_size || entry_size > max_size ||
             !scheduler.IsFree(entry.tick)) {
             continue;
         }
@@ -123,8 +127,9 @@ StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool
 
     if (!best) {
         best = &cache.emplace_back(LargeBuffer{
-            .buffer = std::make_unique<VideoCore::Buffer>(instance, 0, RoundAllocationSize(size),
-                                                          type, "StagingBufferPool:Dedicated"),
+            .buffer = std::make_unique<VideoCore::Buffer>(
+                instance, 0, deferred ? alloc_size : RoundAllocationSize(size), type,
+                "StagingBufferPool:Dedicated"),
             .tick = 0,
             .last_used_frame = frame,
             .held = false,

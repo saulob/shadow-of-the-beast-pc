@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <span>
 #include <vector>
 #include <boost/container/static_vector.hpp>
@@ -44,25 +45,7 @@ struct InfoPersistent {
     SamplerResourceList samplers;
     FMaskResourceList fmasks;
 
-    struct UserDataMask {
-        void Set(IR::ScalarReg reg) noexcept {
-            mask |= 1 << static_cast<u32>(reg);
-        }
-
-        u32 Index(IR::ScalarReg reg) const noexcept {
-            const u32 reg_mask = (1 << static_cast<u32>(reg)) - 1;
-            return std::popcount(mask & reg_mask);
-        }
-
-        u32 NumRegs() const noexcept {
-            return std::popcount(mask);
-        }
-
-        u32 mask;
-    };
-    UserDataMask ud_mask{};
     u32 fetch_shader_sgpr_base{};
-    u32 shared_memory_scratch_size{};
 
     u64 pgm_hash{};
 
@@ -128,20 +111,41 @@ struct Info : InfoPersistent {
     CopyShaderData gs_copy_data;
     u32 uses_patches{};
 
+    struct SharedMemorySegment {
+        IR::Type used_types{};
+        u32 size{};
+        u32 alignment{};
+
+        void UseType(IR::Type type) {
+            used_types |= type;
+        }
+        void SetMinAlignment(u32 min_align) {
+            alignment = std::max(alignment, min_align);
+        }
+        void SetMinSize(u32 min_size) {
+            size = std::max(size, min_size);
+        }
+    };
+
+    SharedMemorySegment shared_guest_segment{};
+    SharedMemorySegment shared_scratch_segment{};
+
+    bool uses_aliased_shared_memory{};
+
     VAddr pgm_base;
     bool has_storage_images{};
     bool has_discard{};
     bool has_image_gather{};
     bool has_image_query{};
-    bool has_readconst{};
+    bool has_flatbuf{};
     bool uses_buffer_atomic_float_min_max{};
     bool uses_image_atomic_float_min_max{};
+    bool uses_subgroup_id{};
     bool uses_lane_id{};
     bool uses_shader_clock{};
     bool uses_group_quad{};
     bool uses_group_shuffle{};
     bool uses_group_ballot{};
-    IR::Type shared_types{};
     bool uses_fp16{};
     bool uses_fp64{};
     bool uses_pack_10_11_11{};
@@ -151,6 +155,7 @@ struct Info : InfoPersistent {
     bool stores_tess_level_outer{};
     bool stores_tess_level_inner{};
     bool translation_failed{};
+    bool has_movrel{};
 
     std::array<Interpolation, IR::NumParams> fs_interpolation{};
 
@@ -220,21 +225,9 @@ struct Info : InfoPersistent {
         return data;
     }
 
-    void PushUd(Backend::Bindings& bnd, PushData& push) const {
-        const auto ud = UserData();
-        u32 mask = ud_mask.mask;
-        while (mask) {
-            const u32 index = std::countr_zero(mask);
-            ASSERT(bnd.user_data < NUM_USER_DATA_REGS && index < NUM_USER_DATA_REGS);
-            mask &= ~(1U << index);
-            push.ud_regs[bnd.user_data++] = ud[index];
-        }
-    }
-
     void AddBindings(Backend::Bindings& bnd) const {
         bnd.buffer += buffers.size();
         bnd.unified += buffers.size() + images.size() + samplers.size();
-        bnd.user_data += ud_mask.NumRegs();
     }
 
     void RefreshFlatBuf() {

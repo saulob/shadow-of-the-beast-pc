@@ -14,14 +14,15 @@ namespace VideoCore {
 
 vk::ImageViewType ConvertImageViewType(AmdGpu::ImageType type) {
     switch (type) {
+    // 1D images are lowered to 2D with height 1 and cubes are viewed as 2D arrays of faces.
     case AmdGpu::ImageType::Color1D:
-        return vk::ImageViewType::e1D;
-    case AmdGpu::ImageType::Color1DArray:
-        return vk::ImageViewType::e1DArray;
     case AmdGpu::ImageType::Color2D:
     case AmdGpu::ImageType::Color2DMsaa:
         return vk::ImageViewType::e2D;
+    case AmdGpu::ImageType::Color1DArray:
     case AmdGpu::ImageType::Color2DArray:
+    case AmdGpu::ImageType::Color2DMsaaArray:
+    case AmdGpu::ImageType::Cube:
         return vk::ImageViewType::e2DArray;
     case AmdGpu::ImageType::Color3D:
         return vk::ImageViewType::e3D;
@@ -34,12 +35,13 @@ bool IsViewTypeCompatible(AmdGpu::ImageType view_type, AmdGpu::ImageType image_t
     switch (view_type) {
     case AmdGpu::ImageType::Color1D:
     case AmdGpu::ImageType::Color1DArray:
-        return image_type == AmdGpu::ImageType::Color1D;
     case AmdGpu::ImageType::Color2D:
     case AmdGpu::ImageType::Color2DArray:
     case AmdGpu::ImageType::Color2DMsaa:
     case AmdGpu::ImageType::Color2DMsaaArray:
-        return image_type == AmdGpu::ImageType::Color2D || image_type == AmdGpu::ImageType::Color3D;
+    case AmdGpu::ImageType::Cube:
+        return image_type == AmdGpu::ImageType::Color1D ||
+               image_type == AmdGpu::ImageType::Color2D || image_type == AmdGpu::ImageType::Color3D;
     case AmdGpu::ImageType::Color3D:
         return image_type == AmdGpu::ImageType::Color3D;
     default:
@@ -90,7 +92,7 @@ ImageViewInfo::ImageViewInfo(const AmdGpu::DepthBuffer& depth_buffer, AmdGpu::De
 }
 
 ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info_,
-                     const Image& image)
+                     const Image& image, vk::Image view_image)
     : info{info_} {
     vk::ImageViewUsageCreateInfo usage_ci{.usage = image.usage_flags};
     if (!info.is_storage) {
@@ -142,9 +144,9 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
         }
     }
 
-    const vk::ImageViewCreateInfo image_view_ci = {
+    vk::ImageViewCreateInfo image_view_ci = {
         .pNext = &usage_ci,
-        .image = image.GetImage(),
+        .image = view_image,
         .viewType = ConvertImageViewType(info.type),
         .format = instance.GetSupportedFormat(format, image.format_features),
         .components = info.mapping,
@@ -159,6 +161,10 @@ ImageView::ImageView(const Vulkan::Instance& instance, const ImageViewInfo& info
     if (!IsViewTypeCompatible(info.type, image.info.type)) {
         LOG_ERROR(Render_Vulkan, "image view type {} is incompatible with image type {}",
                   magic_enum::enum_name(info.type), magic_enum::enum_name(image.info.type));
+        info.type = image.info.type == AmdGpu::ImageType::Color3D ? AmdGpu::ImageType::Color3D
+                    : info.range.extent.layers > 1                 ? AmdGpu::ImageType::Color2DArray
+                                                                   : AmdGpu::ImageType::Color2D;
+        image_view_ci.viewType = ConvertImageViewType(info.type);
     }
 
     auto [view_result, view] = instance.GetDevice().createImageViewUnique(image_view_ci);

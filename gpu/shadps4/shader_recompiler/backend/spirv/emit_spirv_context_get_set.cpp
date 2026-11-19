@@ -47,12 +47,7 @@ static std::pair<Id, bool> OutputAttrComponentType(EmitContext& ctx, IR::Attribu
 }
 
 Id EmitGetUserData(EmitContext& ctx, IR::ScalarReg reg) {
-    const u32 index = ctx.binding.user_data + ctx.info.ud_mask.Index(reg);
-    const u32 half = PushData::UdRegsIndex + (index >> 2);
-    const Id ud_ptr{ctx.OpAccessChain(ctx.TypePointer(spv::StorageClass::PushConstant, ctx.U32[1]),
-                                      ctx.push_data_block, ctx.ConstU32(half),
-                                      ctx.ConstU32(index & 3))};
-    const Id ud_reg{ctx.OpLoad(ctx.U32[1], ud_ptr)};
+    const Id ud_reg{ctx.EmitFlatbufferLoad(ctx.ConstU32(static_cast<u32>(reg)))};
     ctx.Name(ud_reg, fmt::format("ud_{}", u32(reg)));
     return ud_reg;
 }
@@ -303,6 +298,9 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 elemen
     if (IR::IsMrt(attr)) {
         const u32 index{u32(attr) - u32(IR::Attribute::RenderTarget0)};
         const auto& info{ctx.frag_outputs.at(index)};
+        if (element < 3 && ctx.runtime_info.hw.fs.color_buffers[index].blend_self_scale) {
+            value = ctx.OpFMul(ctx.F32[1], value, value);
+        }
         if (info.num_components == 1) {
             return op_store(info.id);
         } else {
@@ -327,8 +325,13 @@ void EmitSetAttribute(EmitContext& ctx, IR::Attribute attr, Id value, u32 elemen
         return op_store(ctx.output_viewport_index);
     case IR::Attribute::Depth:
         return op_store(ctx.frag_depth);
-    case IR::Attribute::SampleMask:
-        return op_store(ctx.OpAccessChain(ctx.output_u32, ctx.sample_mask, ctx.u32_zero_value));
+    case IR::Attribute::SampleMask: {
+        const Id pointer{ctx.OpAccessChain(ctx.output_u32, ctx.sample_mask, ctx.u32_zero_value)};
+        const Id current{ctx.OpLoad(ctx.U32[1], pointer)};
+        ctx.OpStore(pointer,
+                    ctx.OpBitwiseAnd(ctx.U32[1], current, ctx.OpBitcast(ctx.U32[1], value)));
+        return;
+    }
     case IR::Attribute::StencilRef:
         if (ctx.profile.supports_shader_stencil_export) {
             return op_store(ctx.stencil_ref);
@@ -584,6 +587,14 @@ void EmitGetVectorRegister(EmitContext& ctx) {
 }
 
 void EmitSetVectorRegister(EmitContext& ctx) {
+    UNREACHABLE_MSG("Unreachable instruction");
+}
+
+void EmitVMovRelS(EmitContext&) {
+    UNREACHABLE_MSG("Unreachable instruction");
+}
+
+void EmitVMovRelD(EmitContext&) {
     UNREACHABLE_MSG("Unreachable instruction");
 }
 

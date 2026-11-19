@@ -350,7 +350,7 @@ void runtime_memory_reserve(void) {
     if (base!=(void *)USER_MIN) {
         fprintf(stderr,"STOP: cannot reserve the PS4 address range %p-%p (%s)\n",(void *)USER_MIN,(void *)USER_MAX,
                 base==MAP_FAILED ? strerror(errno) : "the kernel placed it elsewhere");
-        exit(21);
+        runtime_exit(21);
     }
     reserved=1;
 }
@@ -388,7 +388,7 @@ static void queue_hook(int kind, uintptr_t address, uint64_t size) {
     if (pending_count==pending_capacity) {
         size_t capacity=pending_capacity ? pending_capacity*2 : 64;
         PendingHook *grown=realloc(pending,capacity*sizeof(*grown));
-        if (!grown) { fputs("STOP: GPU hook queue allocation failed\n",stderr); exit(21); }
+        if (!grown) { fputs("STOP: GPU hook queue allocation failed\n",stderr); runtime_exit(21); }
         pending=grown; pending_capacity=capacity;
     }
     pending[pending_count++]=(PendingHook){kind,address,size};

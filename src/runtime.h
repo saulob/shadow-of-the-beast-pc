@@ -2,6 +2,8 @@
 #define SOTB_RUNTIME_H
 #include <stdint.h>
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
 #ifdef _WIN32
 #include "compat_win.h"
 /* No signals on Windows: the exception handler resumes the thread in sotb_longjmp
@@ -15,6 +17,13 @@ typedef sotb_jmp_buf sigjmp_buf;
 extern __thread sigjmp_buf *runtime_fault_recover;
 #define ABI __attribute__((sysv_abi))
 typedef void (ABI *GuestCallback)(void);
+/* Ends the process without atexit handlers or C++ static destructors: those would tear down the video core under
+ * the window, GPU, audio and guest threads, which keep running. */
+static inline __attribute__((noreturn)) void runtime_exit(int status) {
+    fprintf(stderr,"Runtime: process ends with status %d\n",status);
+    fflush(NULL);
+    _Exit(status);
+}
 void runtime_start(uint64_t capabilities);
 uintptr_t runtime_resolve(const char *name, int is_data);
 void runtime_report(void);
@@ -129,6 +138,15 @@ const char *runtime_thread_name(void *handle);
 /* `what` must be a string literal: it is read after the call by the hang report. */
 void runtime_thread_wait_begin(const char *what);
 void runtime_thread_wait_end(void);
+/* Deferred cancellation (scePthreadCancel): the target exits at its next cancellation point (join, condition,
+ * semaphore or event flag wait, sleep). A blocking wait registers a wake callback that makes it return; it runs
+ * with the thread's wait lock held and must not block. wait_enter returns nonzero when a cancellation is already
+ * pending; the caller then ends the wait, releases its locks and calls runtime_thread_test_cancel. */
+int runtime_thread_wait_enter(void (*wake)(void *, void *), void *first, void *second);
+void runtime_thread_test_cancel(const char *point);
+void runtime_thread_sleep_ns(uint64_t ns);
+/* Wakes a waiter blocked on `cond` with `mutex` held, so it is already waiting rather than on its way in. */
+void runtime_thread_wake_condition(void *cond, void *mutex);
 /* What a live thread is blocked in, or NULL when running. */
 const char *runtime_thread_wait_state(void *handle, uint64_t *waited_us);
 uint64_t runtime_memory_flexible_available(void);

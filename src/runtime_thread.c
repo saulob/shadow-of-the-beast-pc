@@ -30,6 +30,9 @@
 #define MIN_STACK (64*1024)
 #define DEFAULT_STACK (1024*1024)
 #define DEFAULT_PRIO 700
+#define CANCELED_RESULT ((void *)1)
+#define SLEEP_SLICE_NS UINT64_C(20000000)
+#define WAKE_ATTEMPTS 64
 
 typedef void *(ABI *GuestEntry)(void *);
 typedef struct ThreadAttr {
@@ -49,6 +52,10 @@ typedef struct GuestThread {
     char name[32];
     uint32_t id;
     int detached, finished, joined, host_owned;
+    int cancel_pending;
+    pthread_mutex_t wait_lock; /* guards wake* against the thread leaving its wait */
+    void (*wake)(void *,void *);
+    void *wake_first,*wake_second;
     const char *wait;
     uint64_t wait_since_us;
 #ifdef _WIN32
@@ -64,6 +71,7 @@ typedef struct GuestThread {
 } GuestThread;
 
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t changed=PTHREAD_COND_INITIALIZER; /* with `lock`: a thread finished or a cancellation was requested */
 static ThreadAttr *attributes;
 static GuestThread *threads;
 static _Thread_local GuestThread *current;
@@ -105,18 +113,18 @@ static DWORD tls_slot=TLS_OUT_OF_INDEXES;
 uint32_t runtime_thread_tcb_offset(void) {
     if (tls_slot==TLS_OUT_OF_INDEXES) {
         tls_slot=TlsAlloc();
-        if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); exit(21); }
+        if (tls_slot>=64) { fprintf(stderr,"STOP: no TEB TLS slot below 64 (got %lu)\n",tls_slot); runtime_exit(21); }
     }
     return 0x1480+8*(uint32_t)tls_slot;
 }
 static void set_gs(void *base) {
     runtime_thread_tcb_offset();
-    if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); exit(21); }
+    if (!TlsSetValue(tls_slot,base)) { fprintf(stderr,"STOP: TlsSetValue failed (%lu)\n",GetLastError()); runtime_exit(21); }
 }
 #define tls_block_alloc(size) _aligned_malloc(size,64)
 #else
 static void set_gs(void *base) {
-    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); exit(21); }
+    if (syscall(SYS_arch_prctl,ARCH_SET_GS,(unsigned long)base)) { perror("STOP: arch_prctl(ARCH_SET_GS)"); runtime_exit(21); }
 }
 #define tls_block_alloc(size) aligned_alloc(64,size)
 #endif
@@ -142,6 +150,7 @@ static GuestThread *new_thread(void) {
     GuestThread *t=calloc(1,sizeof(*t));
     if (!t) return NULL;
     t->id=atomic_fetch_add_explicit(&next_id,1,memory_order_relaxed);
+    pthread_mutex_init(&t->wait_lock,NULL);
     t->attr=(ThreadAttr){.magic=ATTR_MAGIC,.policy=1,.prio=DEFAULT_PRIO,.stack=DEFAULT_STACK,.affinity=0x7f};
     return t;
 }
@@ -199,7 +208,9 @@ void runtime_thread_wait_begin(const char *what) {
 }
 void runtime_thread_wait_end(void) {
     GuestThread *t=current;
-    if (t) __atomic_store_n(&t->wait,NULL,__ATOMIC_RELEASE);
+    if (!t) return;
+    if (t->wake) { pthread_mutex_lock(&t->wait_lock); t->wake=NULL; pthread_mutex_unlock(&t->wait_lock); }
+    __atomic_store_n(&t->wait,NULL,__ATOMIC_RELEASE);
 }
 const char *runtime_thread_wait_state(void *handle,uint64_t *waited_us) {
     GuestThread *t=find_thread(handle);
@@ -353,6 +364,64 @@ static void set_host_name(const char *name) {
 #define exit_setjmp(t) setjmp((t)->exit_jump)
 #define exit_longjmp(t) longjmp((t)->exit_jump,1)
 #endif
+static int cancel_requested(const GuestThread *t) {
+    return __atomic_load_n(&t->cancel_pending,__ATOMIC_ACQUIRE);
+}
+static __attribute__((noreturn)) void cancel_exit(GuestThread *t,const char *point) {
+    printf("Runtime: thread '%s' exited by cancellation at %s\n",t->name,point);
+    __atomic_store_n(&t->wait,NULL,__ATOMIC_RELEASE);
+    t->result=CANCELED_RESULT;
+    exit_longjmp(t);
+}
+void runtime_thread_wake_condition(void *cond,void *mutex) {
+    for (int attempt=0;attempt<WAKE_ATTEMPTS;++attempt) {
+        if (!pthread_mutex_trylock(mutex)) {
+            pthread_cond_broadcast(cond);
+            pthread_mutex_unlock(mutex);
+            return;
+        }
+        sched_yield();
+    }
+    pthread_cond_broadcast(cond);
+}
+void runtime_thread_test_cancel(const char *point) {
+    GuestThread *t=current;
+    if (t && !t->host_owned && cancel_requested(t)) cancel_exit(t,point);
+}
+int runtime_thread_wait_enter(void (*wake)(void *,void *),void *first,void *second) {
+    GuestThread *t=current;
+    if (!t || t->host_owned) return 0;
+    pthread_mutex_lock(&t->wait_lock);
+    t->wake=wake; t->wake_first=first; t->wake_second=second;
+    pthread_mutex_unlock(&t->wait_lock);
+    return cancel_requested(t);
+}
+static void wake_waiter(GuestThread *t) {
+    pthread_mutex_lock(&t->wait_lock);
+    if (t->wake) t->wake(t->wake_first,t->wake_second);
+    pthread_mutex_unlock(&t->wait_lock);
+}
+static void host_sleep(uint64_t ns) {
+#ifdef _WIN32
+    compat_sleep_ns(ns);
+#else
+    struct timespec t={.tv_sec=(time_t)(ns/1000000000),.tv_nsec=(long)(ns%1000000000)};
+    while (nanosleep(&t,&t) && errno==EINTR) {}
+#endif
+}
+/* Sleeps in slices so a cancellation request is seen within one slice. */
+void runtime_thread_sleep_ns(uint64_t ns) {
+    runtime_thread_test_cancel("sleep");
+    runtime_thread_wait_begin("sleep");
+    while (ns>SLEEP_SLICE_NS) {
+        host_sleep(SLEEP_SLICE_NS);
+        ns-=SLEEP_SLICE_NS;
+        runtime_thread_test_cancel("sleep");
+    }
+    host_sleep(ns);
+    runtime_thread_wait_end();
+    runtime_thread_test_cancel("sleep");
+}
 /* A PS4 thread starts on zeroed stack; guest code reads locals it never initialised. */
 static __attribute__((noinline)) void scrub_stack(void) {
     char buffer[16*1024];
@@ -370,6 +439,7 @@ static void *host_start(void *p) {
 #ifndef _WIN32
     queue_for_reap_locked(t);
 #endif
+    pthread_cond_broadcast(&changed);
     pthread_mutex_unlock(&lock);
     return t->result;
 }
@@ -403,7 +473,7 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     *out=t;
     int e=pthread_create(&t->host,&host,host_start,t);
     pthread_attr_destroy(&host);
-    if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); exit(21); }
+    if (e) { fprintf(stderr,"STOP: host pthread_create failed: %d\n",e); runtime_exit(21); }
 #ifdef _WIN32
     if (t->detached) pthread_detach(t->host);
 #endif
@@ -416,14 +486,24 @@ static ABI int32_t thread_create(GuestThread **out,ThreadAttr **attr,GuestEntry 
 }
 static ABI int32_t thread_join(GuestThread *t,void **result) {
     if (!find_thread(t) || t->host_owned) return ERR(3);
-    if (t==current) return ERR(11);
-    if (t->detached || t->joined) return ERR(22);
+    GuestThread *self=current;
+    if (t==self) return ERR(11);
+    runtime_thread_test_cancel("join");
+    pthread_mutex_lock(&lock);
+    if (t->detached || t->joined) { pthread_mutex_unlock(&lock); return ERR(22); }
     t->joined=1;
-    void *value=NULL;
     runtime_thread_wait_begin("join");
-    int e=pthread_join(t->host,&value);
+    while (!t->finished && !(self && cancel_requested(self))) pthread_cond_wait(&changed,&lock);
     runtime_thread_wait_end();
-    if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); exit(21); }
+    if (!t->finished) {
+        t->joined=0;
+        pthread_mutex_unlock(&lock);
+        cancel_exit(self,"join");
+    }
+    pthread_mutex_unlock(&lock);
+    void *value=NULL;
+    int e=pthread_join(t->host,&value);
+    if (e) { fprintf(stderr,"STOP: host pthread_join failed: %d\n",e); runtime_exit(21); }
     if (result) *result=t->result;
 #ifndef _WIN32
     if (t->stack) release_stack(t);
@@ -447,13 +527,26 @@ static ABI int32_t thread_detach(GuestThread *t) {
     return 0;
 }
 static ABI int32_t thread_cancel(GuestThread *t) {
-    if (!find_thread(t) || t->finished) return ERR(3);
-    fputs("STOP: scePthreadCancel of a running thread is not supported\n",stderr);
-    exit(21);
+    if (!find_thread(t)) return ERR(3);
+    if (t->host_owned) return ERR(1);
+    int32_t result=0, newly=0;
+    pthread_mutex_lock(&lock);
+    if (t->finished) result=ERR(3);
+    else if (!t->cancel_pending) {
+        __atomic_store_n(&t->cancel_pending,1,__ATOMIC_RELEASE);
+        newly=1;
+        pthread_cond_broadcast(&changed);
+    }
+    pthread_mutex_unlock(&lock);
+    if (newly) {
+        printf("Runtime: thread '%s' cancellation requested\n",t->name);
+        wake_waiter(t);
+    }
+    return result;
 }
 static ABI __attribute__((noreturn)) void thread_exit(void *value) {
     GuestThread *t=runtime_thread_current();
-    if (t->host_owned) { fputs("STOP: pthread_exit on host-owned/main thread\n",stderr); exit(21); }
+    if (t->host_owned) { fputs("STOP: pthread_exit on host-owned/main thread\n",stderr); runtime_exit(21); }
     t->result=value;
     /* No host unwinder: guest frames have no registered FDEs. */
     exit_longjmp(t);

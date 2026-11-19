@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -149,6 +150,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         info.props.fp_denorm_mode16_64 = program.settings.fp_denorm_mode64;
         info.props.fp_round_mode32 = program.settings.fp_round_mode32;
         info.props.fp_round_mode16_64 = program.settings.fp_round_mode64;
+        info.props.dx10_clamp = program.settings.dx10_clamp;
     };
     info.Initialize(stage, l_stage);
     switch (stage) {
@@ -221,6 +223,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         info.hw.fs.addr_flags = regs.ps_input_addr;
         info.hw.fs.num_inputs = regs.num_interp;
         info.hw.fs.front_face_all_bits = regs.barycentric_control.front_face_all_bits;
+        info.hw.fs.depth_before_shader = regs.depth_shader_control.depth_before_shader;
         info.hw.fs.num_samples =
             regs.ps_input_addr.sample_coverage_ena && regs.ps_input_ena.sample_coverage_ena
                 ? regs.aa_config.NumSamples()
@@ -233,6 +236,42 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
                                (stencil_ref_export_enable << 1) |
                                (regs.depth_shader_control.mask_export_enable << 2) |
                                (regs.depth_shader_control.coverage_to_mask_enable << 3);
+        const u32 sample_bits = (1u << (1u << regs.aa_config.msaa_num_samples)) - 1u;
+        std::array<u16, 4> aa_mask;
+        for (u32 pixel = 0; pixel < 4; ++pixel) {
+            aa_mask[pixel] = regs.aa_mask.pixel[pixel] & sample_bits;
+        }
+        info.hw.fs.aa_mask_per_pixel =
+            !std::ranges::all_of(aa_mask, [&](u16 mask) { return mask == aa_mask[0]; });
+        if (info.hw.fs.aa_mask_per_pixel) {
+            info.hw.fs.aa_mask = aa_mask;
+        }
+        const auto mrt0_export_format = regs.color_export_format.GetFormat(0);
+        const bool mrt0_alpha = mrt0_export_format >= AmdGpu::ShaderExportFormat::AR_32 &&
+                                mrt0_export_format <= AmdGpu::ShaderExportFormat::ABGR_32;
+        info.hw.fs.alpha_to_mask_enable =
+            regs.alpha_to_mask.enable && !regs.depth_shader_control.alpha_to_mask_disable &&
+            mrt0_alpha &&
+            (regs.color_shader_mask.GetMask(0) & AmdGpu::ColorBufferMask::ComponentA) != 0;
+        info.hw.fs.coverage_to_mask_enable = regs.depth_shader_control.coverage_to_mask_enable;
+        if (info.hw.fs.alpha_to_mask_enable || info.hw.fs.coverage_to_mask_enable ||
+            regs.depth_shader_control.mask_export_enable) {
+            info.hw.fs.msaa_num_samples = regs.aa_config.msaa_num_samples;
+        }
+        if (regs.depth_shader_control.mask_export_enable) {
+            info.hw.fs.mask_export_num_samples = regs.depth_eqaa.mask_export_num_samples;
+        }
+        if (info.hw.fs.alpha_to_mask_enable || info.hw.fs.coverage_to_mask_enable) {
+            info.hw.fs.alpha_to_mask_num_samples =
+                std::min<u32>(regs.depth_eqaa.alpha_to_mask_num_samples, 4);
+            info.hw.fs.alpha_to_mask_eqaa_disable = regs.depth_eqaa.alpha_to_mask_eqaa_disable;
+            u32 offsets = 0;
+            for (u32 pixel = 0; pixel < 4; ++pixel) {
+                offsets |= regs.alpha_to_mask.Offset(pixel) << (3 * pixel);
+            }
+            info.hw.fs.alpha_to_mask_offsets = offsets;
+            info.hw.fs.mrt0_export_format = mrt0_export_format;
+        }
         const auto& cb0_blend = regs.blend_control[0];
         if (cb0_blend.enable) {
             info.hw.fs.dual_source_blending =
@@ -274,11 +313,13 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
     case HwStage::Compute: {
         const auto& cs_pgm = liverpool->GetCsRegs();
         info.props.num_user_data = cs_pgm.settings.num_user_regs;
-        info.props.num_allocated_vgprs = cs_pgm.settings.num_vgprs * 4;
+        // Each increment allocates 4 registers, where 0 = 4 registers.
+        info.props.num_allocated_vgprs = (cs_pgm.settings.num_vgprs + 1) * 4;
         info.props.fp_denorm_mode32 = cs_pgm.settings.fp_denorm_mode32;
         info.props.fp_denorm_mode16_64 = cs_pgm.settings.fp_denorm_mode64;
         info.props.fp_round_mode32 = cs_pgm.settings.fp_round_mode32;
         info.props.fp_round_mode16_64 = cs_pgm.settings.fp_round_mode64;
+        info.props.dx10_clamp = cs_pgm.settings.dx10_clamp;
         info.hw.cs.workgroup_size = {cs_pgm.num_thread_x.full, cs_pgm.num_thread_y.full,
                                      cs_pgm.num_thread_z.full};
         info.hw.cs.tgid_enable = {cs_pgm.IsTgidEnabled(0), cs_pgm.IsTgidEnabled(1),
@@ -295,6 +336,7 @@ const Shader::RuntimeInfo& PipelineCache::BuildRuntimeInfo(PipelineSelection& se
         info.sw.vs.step_rate_1 = regs.vgt_instance_step_rate_1;
         info.sw.vs.vertex_sgpr_offset = sel.draw_indirect_params.vertex_sgpr_offset;
         info.sw.vs.instance_sgpr_offset = sel.draw_indirect_params.instance_sgpr_offset;
+        info.sw.vs.is_indirect = sel.draw_indirect_params.is_indirect;
         info.sw.vs.tess_emulated_primitive =
             regs.primitive_type == AmdGpu::PrimitiveType::RectList ||
             regs.primitive_type == AmdGpu::PrimitiveType::QuadList;
@@ -328,6 +370,8 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         .max_viewport_width = instance.GetMaxViewportWidth(),
         .max_viewport_height = instance.GetMaxViewportHeight(),
         .max_shared_memory_size = instance.MaxComputeSharedMemorySize(),
+        .max_geometry_output_vertices = instance.MaxGeometryOutputVertices(),
+        .max_geometry_total_output_components = instance.MaxGeometryTotalOutputComponents(),
         .supported_spirv = SpirvVersion1_6,
         .subgroup_size = instance.SubgroupSize(),
         .sparse_page_shift = sparse_page_shift,
@@ -374,8 +418,10 @@ PipelineCache::PipelineCache(const Instance& instance_, Scheduler& scheduler_,
         // sotb: older NVIDIA GPUs (Pascal) have no barycentrics.
         .needs_integer_interpolation_fix = !instance.IsFragmentShaderBarycentricSupported() &&
                                            instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
+        // A GCN wave split across host subgroups needs workgroup barriers for its LDS accesses.
         .needs_lds_barriers = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary ||
-                              instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
+                              instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp ||
+                              instance.SubgroupSize() < 64,
         .needs_buffer_offsets = instance.StorageMinAlignment() > 4,
         .needs_unorm_fixup = instance.GetDriverID() == vk::DriverId::eMesaKosmickrisp,
         .needs_clip_distance_emulation = instance.GetDriverID() == vk::DriverId::eNvidiaProprietary,
@@ -582,6 +628,9 @@ void PipelineCache::PublishShaders(bool wait) {
 }
 
 void PipelineCache::PublishGraphics(bool wait) {
+    if (pending_graphics.empty()) {
+        return;
+    }
     for (auto it = pending_graphics.begin(); it != pending_graphics.end();) {
         auto build = it.value();
         if (wait) {
@@ -599,7 +648,9 @@ void PipelineCache::PublishGraphics(bool wait) {
         }
         const auto key = it.key();
         build->pipeline->PublishStages(build->live_infos);
-        RegisterPipelineData(key, std::hash<GraphicsPipelineKey>{}(key), build->data);
+        if (!build->pipeline->Failed()) {
+            RegisterPipelineData(key, std::hash<GraphicsPipelineKey>{}(key), build->data);
+        }
         graphics_pipelines.emplace(key, std::move(build->pipeline));
         ++num_new_pipelines;
         it = pending_graphics.erase(it);
@@ -687,7 +738,7 @@ const GraphicsPipeline* PipelineCache::TryPreparedPipeline(const PreparedDraw& p
         }
     }
     const auto it = graphics_pipelines.find(prepared.key);
-    return it != graphics_pipelines.end() ? it->second.get() : nullptr;
+    return it != graphics_pipelines.end() && !it->second->Failed() ? it->second.get() : nullptr;
 }
 
 const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectParams params,
@@ -713,7 +764,7 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
     if (AsyncCompilation() && !sel.regs->stage_enable.hs_en && !EmulatorSettings.IsShaderCollect()) {
         const auto found = graphics_pipelines.find(sel.graphics_key);
         if (found != graphics_pipelines.end()) {
-            return found->second.get();
+            return found->second->Failed() ? nullptr : found->second.get();
         }
         if (!pending_graphics.contains(sel.graphics_key) && compiler->HasCapacity()) {
             PhaseTimer capture{g_sotb_snapshot_ns};
@@ -748,6 +799,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         ++g_sotb_pending_draws;
         return nullptr;
     }
+    if (last_graphics_pipeline && sel.graphics_key == last_graphics_key) {
+        return last_graphics_pipeline;
+    }
     const auto [it, is_new] = graphics_pipelines.try_emplace(sel.graphics_key);
     if (is_new) {
         const auto pipeline_hash = std::hash<GraphicsPipelineKey>{}(sel.graphics_key);
@@ -759,7 +813,9 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
             instance, scheduler, desc_heap, profile, sel.graphics_key, *pipeline_cache, sel.infos,
             sel.runtime_infos, sel.fetch_shader, sel.modules, sdata, false);
 
-        RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
+        if (!it->second->Failed()) {
+            RegisterPipelineData(sel.graphics_key, pipeline_hash, sdata);
+        }
         ++num_new_pipelines;
 
         if (EmulatorSettings.IsShaderCollect()) {
@@ -772,7 +828,12 @@ const GraphicsPipeline* PipelineCache::GetGraphicsPipeline(const DrawIndirectPar
         }
         sel.fetch_shader.reset();
     }
-    return it->second.get();
+    if (it->second->Failed()) {
+        return nullptr;
+    }
+    last_graphics_key = sel.graphics_key;
+    last_graphics_pipeline = it->second.get();
+    return last_graphics_pipeline;
 }
 
 const ComputePipeline* PipelineCache::GetComputePipeline() {
@@ -792,7 +853,9 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
         it.value() = std::make_unique<ComputePipeline>(instance, scheduler, desc_heap, profile,
                                                        *pipeline_cache, compute_key, *sel.infos[0],
                                                        sel.modules[0], sdata, false);
-        RegisterPipelineData(compute_key, sdata);
+        if (!it->second->Failed()) {
+            RegisterPipelineData(compute_key, sdata);
+        }
         ++num_new_pipelines;
 
         if (EmulatorSettings.IsShaderCollect()) {
@@ -800,7 +863,7 @@ const ComputePipeline* PipelineCache::GetComputePipeline() {
             module_related_pipelines[m].emplace_back(compute_key);
         }
     }
-    return it->second.get();
+    return it->second->Failed() ? nullptr : it->second.get();
 }
 
 bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
@@ -829,6 +892,13 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     key.logic_op = regs.color_control.rop3;
     key.depth_samples = db_enabled ? regs.depth_buffer.NumSamples() : 1;
     key.num_samples = key.depth_samples;
+    key.sample_mask = 0;
+    for (const u16 pixel_mask : regs.aa_mask.pixel) {
+        key.sample_mask |= pixel_mask;
+    }
+    if (key.sample_mask == 0) {
+        key.sample_mask = ~vk::SampleMask{};
+    }
     key.cb_shader_mask = regs.color_shader_mask;
 
     const bool skip_cb_binding =
@@ -839,7 +909,8 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     // First pass to fill render target information needed by shader recompiler
     for (s32 cb = 0; cb < AmdGpu::NUM_COLOR_BUFFERS && !skip_cb_binding; ++cb) {
         const auto& col_buf = regs.color_buffers[cb];
-        if (!col_buf || !regs.color_target_mask.GetMask(cb)) {
+        if (!col_buf ||
+            !(regs.color_target_mask.GetMask(cb) & regs.color_shader_mask.GetMask(cb))) {
             // No attachment bound or writing to it is disabled.
             continue;
         }
@@ -851,6 +922,14 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
         color_buffer.num_conversion = col_buf.GetNumberConversion();
         color_buffer.export_format = regs.color_export_format.GetFormat(cb);
         color_buffer.swizzle = col_buf.Swizzle();
+
+        const auto& bc = regs.blend_control[cb];
+        color_buffer.blend_self_scale =
+            bc.enable && !col_buf.info.blend_bypass &&
+            (bc.color_func == AmdGpu::BlendControl::BlendFunc::Min ||
+             bc.color_func == AmdGpu::BlendControl::BlendFunc::Max) &&
+            bc.color_src_factor == AmdGpu::BlendControl::BlendFactor::SrcColor &&
+            bc.color_dst_factor == AmdGpu::BlendControl::BlendFactor::DstColor;
 
     }
 
@@ -864,7 +943,8 @@ bool PipelineCache::RefreshGraphicsKey(PipelineSelection& sel) {
     bool all_color_samples_same = true;
     for (s32 cb = 0; cb < key.num_color_attachments && !skip_cb_binding; ++cb) {
         const auto& col_buf = regs.color_buffers[cb];
-        const u32 target_mask = regs.color_target_mask.GetMask(cb);
+        const u32 target_mask =
+            regs.color_target_mask.GetMask(cb) & regs.color_shader_mask.GetMask(cb);
         if (!col_buf || !target_mask) {
             continue;
         }
@@ -935,7 +1015,7 @@ bool PipelineCache::RefreshGraphicsStages(PipelineSelection& sel) {
             return false;
         }
         if (fetch_shader_) {
-            sel.fetch_shader = fetch_shader_;
+            sel.fetch_shader = std::move(fetch_shader_);
         }
         return true;
     };
@@ -1242,6 +1322,7 @@ std::optional<vk::ShaderModule> PipelineCache::ReplaceShader(vk::ShaderModule mo
         }
     }
     if (module_related_pipelines.contains(module)) {
+        last_graphics_pipeline = nullptr;
         auto& pipeline_keys = module_related_pipelines[module];
         for (auto& key : pipeline_keys) {
             if (std::holds_alternative<GraphicsPipelineKey>(key)) {

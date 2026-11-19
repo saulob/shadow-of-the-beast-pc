@@ -10,3 +10,16 @@ Backported from upstream after b4e7ae7 (2026-10-02), recompiler correctness fixe
   mode (#5126), e518a6515 S_SUBB_U32 SCC wrap (#5031), 282e5c792 S_ADDC_U32 SCC carry-out (#5030),
   fb6367d29 32-bit literals in the high dword of 64-bit floats (#5114), 94e217781 V_BFM_B32 (#5185),
   d1cb90dbb ADDC (#5200), dd43d1cac V_CVT_PK_U8_F32 (#5194), ef08b1e1f V_ALIGNBIT/ALIGNBYTE (#5186).
+Synced (2026-11-18) against shadPS4 741d9b75, Odin Sphere, Alienation, Dragon's Crown, 13 Sentinels and Driveclub (ca23464), generic fixes only:
+  V_MOVREL deferred lowering (#5134), sharp dw2 shift pattern (#5352), unsigned 11/11/10 export clamp, omod/DX10 clamp helper, OpNClamp,
+  early fragment tests without depth/stencil export, float min/max atomics without the extension, global CE queue (#5446, #5406),
+  blank flip submit done, large tile dispatches split by dispatchBase, depth overlap per-dimension extents and format guard,
+  GC eviction budget and VRAM-relative floors, pending-write stamping after the draw commit, pipeline creation failure retry,
+  graphics pipeline memoization, preload fixes (sample mask, discard stage), compute VGPR allocation (n+1)*4, attachment-sharing
+  barrier between rendering instances, host-read barrier, suboptimal swapchain recreation, AMD sparse alias guard blocks, lazily
+  allocated page-state table, arena spill to host memory when VRAM is full, equeue lifetime and lost-wakeup fixes.
+Image types (2026-11-18): #5133 1D images lowered to 2D, cube as 2D array with SPIR-V face math (CubeFaceIndex/CoordS/CoordT/MajorAxis),
+  #5171 1D gradient/offset, #5203 1D image atomics; cube faces clamp-sampled, cube texel offsets ignored, MSAA array images.
+Not taken: #5212 slot vector, #5112/#5219 renderer and texture-cache refactors, #5100 buffer-cache rework,
+  #5181 flat-buffer user data, #5516 shared-memory segments, #5538 shader HLE merge removal (each needs coordinated changes in files
+  this tree does not share with any source).

@@ -8,6 +8,7 @@
 #include "shader_recompiler/ir/debug_print.h"
 #include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/ir/opcodes.h"
+#include "shader_recompiler/ir/shared_memory.h"
 #include "shader_recompiler/ir/value.h"
 
 namespace Shader::IR {
@@ -106,6 +107,10 @@ void IREmitter::Barrier() {
     Inst(Opcode::Barrier);
 }
 
+void IREmitter::SubgroupBarrier() {
+    Inst(Opcode::SubgroupBarrier);
+}
+
 void IREmitter::WorkgroupMemoryBarrier() {
     Inst(Opcode::WorkgroupMemoryBarrier);
 }
@@ -151,6 +156,17 @@ void IREmitter::SetVectorReg(IR::VectorReg reg, const U32F32& value) {
     ASSERT(reg < IR::VectorReg::Max);
     const U32 value_typed = value.Type() == Type::F32 ? BitCast<U32>(F32{value}) : U32{value};
     Inst(Opcode::SetVectorRegister, reg, value_typed);
+}
+
+U32 IREmitter::VMovRelS(IR::VectorReg reg, const U32& m0) {
+    ASSERT(reg < IR::VectorReg::Max);
+    return Inst<U32>(Opcode::VMovRelS, reg, m0);
+}
+
+void IREmitter::VMovRelD(IR::VectorReg reg, const U32& value, const U32& m0) {
+    ASSERT(reg < IR::VectorReg::Max);
+    const U32 value_typed = value.Type() == Type::F32 ? BitCast<U32>(F32{value}) : U32{value};
+    Inst(Opcode::VMovRelD, reg, value_typed, m0);
 }
 
 Value IREmitter::GetVirtualReg(IR::VirtualReg reg) {
@@ -276,33 +292,49 @@ void IREmitter::SetPatch(Patch patch, const F32& value) {
     Inst(Opcode::SetPatch, patch, value);
 }
 
-Value IREmitter::LoadShared(int bit_size, bool is_signed, const U32& offset, bool is_gds) {
+Value IREmitter::LoadShared(int bit_size, bool is_signed, const U32& offset, bool is_gds,
+                            bool is_scratch) {
+    SharedMemory::Flags flags{is_gds, is_scratch};
     switch (bit_size) {
     case 16:
-        return Inst<U16>(Opcode::LoadSharedU16, Flags{is_gds}, offset);
+        return Inst<U16>(Opcode::LoadSharedU16, Flags{flags}, offset);
     case 32:
-        return Inst<U32>(Opcode::LoadSharedU32, Flags{is_gds}, offset);
+        return Inst<U32>(Opcode::LoadSharedU32, Flags{flags}, offset);
     case 64:
-        return Inst<U64>(Opcode::LoadSharedU64, Flags{is_gds}, offset);
+        return Inst<U64>(Opcode::LoadSharedU64, Flags{flags}, offset);
     default:
         UNREACHABLE_MSG("Invalid bit size {}", bit_size);
     }
 }
 
-void IREmitter::WriteShared(int bit_size, const Value& value, const U32& offset, bool is_gds) {
+void IREmitter::WriteShared(int bit_size, const Value& value, const U32& offset, bool is_gds,
+                            bool is_scratch) {
+    SharedMemory::Flags flags{is_gds, is_scratch};
     switch (bit_size) {
     case 16:
-        Inst(Opcode::WriteSharedU16, Flags{is_gds}, offset, value);
+        Inst(Opcode::WriteSharedU16, Flags{flags}, offset, value);
         break;
     case 32:
-        Inst(Opcode::WriteSharedU32, Flags{is_gds}, offset, value);
+        Inst(Opcode::WriteSharedU32, Flags{flags}, offset, value);
         break;
     case 64:
-        Inst(Opcode::WriteSharedU64, Flags{is_gds}, offset, value);
+        Inst(Opcode::WriteSharedU64, Flags{flags}, offset, value);
         break;
     default:
         UNREACHABLE_MSG("Invalid bit size {}", bit_size);
     }
+}
+
+U32 IREmitter::LoadSharedU32Scratch(const U32& offset) {
+    return U32{LoadShared(32, false, offset, false, true)};
+}
+
+U64 IREmitter::LoadSharedU64Scratch(const U32& offset) {
+    return U64{LoadShared(64, false, offset, false, true)};
+}
+
+void IREmitter::WriteSharedU32Scratch(const U32& value, const U32& offset) {
+    WriteShared(32, value, offset, false, true);
 }
 
 U32U64 IREmitter::SharedAtomicIAdd(const U32& address, const U32U64& data, bool is_gds) {
@@ -342,6 +374,14 @@ U32U64 IREmitter::SharedAtomicIMax(const U32& address, const U32U64& data, bool 
     default:
         ThrowInvalidType(data.Type());
     }
+}
+
+F32 IREmitter::SharedAtomicFMax(const U32& address, const F32& data, bool is_gds) {
+    return Inst<F32>(Opcode::SharedAtomicFMax32, Flags{is_gds}, address, data);
+}
+
+F32 IREmitter::SharedAtomicFMin(const U32& address, const F32& data, bool is_gds) {
+    return Inst<F32>(Opcode::SharedAtomicFMin32, Flags{is_gds}, address, data);
 }
 
 U32U64 IREmitter::SharedAtomicAnd(const U32& address, const U32U64& data, bool is_gds) {
@@ -641,8 +681,12 @@ U32 IREmitter::LaneId() {
     return Inst<U32>(Opcode::LaneId);
 }
 
-U32 IREmitter::WarpId() {
-    return Inst<U32>(Opcode::WarpId);
+U32 IREmitter::WaveId() {
+    return Inst<U32>(Opcode::WaveId);
+}
+
+U32 IREmitter::SubgroupId() {
+    return Inst<U32>(Opcode::SubgroupId);
 }
 
 U32 IREmitter::QuadBroadcast(const U32& value, const U32& index) {
@@ -938,7 +982,9 @@ U32 IREmitter::Pack2x16(const AmdGpu::NumberFormat number_format, const Value& v
     case AmdGpu::NumberFormat::Float:
         return Inst<U32>(Opcode::PackHalf2x16, vector);
     default:
-        UNREACHABLE_MSG("Unsupported 2x16 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 2x16 number format {}, using Unorm",
+                    number_format);
+        return Inst<U32>(Opcode::PackUnorm2x16, vector);
     }
 }
 
@@ -955,7 +1001,9 @@ Value IREmitter::Unpack2x16(const AmdGpu::NumberFormat number_format, const U32&
     case AmdGpu::NumberFormat::Float:
         return Inst(Opcode::UnpackHalf2x16, value);
     default:
-        UNREACHABLE_MSG("Unsupported 2x16 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 2x16 number format {}, using Unorm",
+                    number_format);
+        return Inst(Opcode::UnpackUnorm2x16, value);
     }
 }
 
@@ -970,7 +1018,9 @@ U32 IREmitter::Pack4x8(const AmdGpu::NumberFormat number_format, const Value& ve
     case AmdGpu::NumberFormat::Sint:
         return Inst<U32>(Opcode::PackSint4x8, vector);
     default:
-        UNREACHABLE_MSG("Unsupported 4x8 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 4x8 number format {}, using Unorm",
+                    number_format);
+        return Inst<U32>(Opcode::PackUnorm4x8, vector);
     }
 }
 
@@ -985,7 +1035,9 @@ Value IREmitter::Unpack4x8(const AmdGpu::NumberFormat number_format, const U32& 
     case AmdGpu::NumberFormat::Sint:
         return Inst(Opcode::UnpackSint4x8, value);
     default:
-        UNREACHABLE_MSG("Unsupported 4x8 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 4x8 number format {}, using Unorm",
+                    number_format);
+        return Inst(Opcode::UnpackUnorm4x8, value);
     }
 }
 
@@ -994,7 +1046,9 @@ U32 IREmitter::Pack10_11_11(const AmdGpu::NumberFormat number_format, const Valu
     case AmdGpu::NumberFormat::Float:
         return Inst<U32>(Opcode::PackUfloat10_11_11, vector);
     default:
-        UNREACHABLE_MSG("Unsupported 10_11_11 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 10_11_11 number format {}, using Float",
+                    number_format);
+        return Inst<U32>(Opcode::PackUfloat10_11_11, vector);
     }
 }
 
@@ -1009,7 +1063,9 @@ U32 IREmitter::Pack2_10_10_10(const AmdGpu::NumberFormat number_format, const Va
     case AmdGpu::NumberFormat::Sint:
         return Inst<U32>(Opcode::PackSint2_10_10_10, vector);
     default:
-        UNREACHABLE_MSG("Unsupported 2_10_10_10 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 2_10_10_10 number format {}, using Unorm",
+                    number_format);
+        return Inst<U32>(Opcode::PackUnorm2_10_10_10, vector);
     }
 }
 
@@ -1024,7 +1080,9 @@ Value IREmitter::Unpack2_10_10_10(const AmdGpu::NumberFormat number_format, cons
     case AmdGpu::NumberFormat::Sint:
         return Inst(Opcode::UnpackSint2_10_10_10, value);
     default:
-        UNREACHABLE_MSG("Unsupported 2_10_10_10 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 2_10_10_10 number format {}, using Unorm",
+                    number_format);
+        return Inst(Opcode::UnpackUnorm2_10_10_10, value);
     }
 }
 
@@ -1033,7 +1091,9 @@ Value IREmitter::Unpack10_11_11(const AmdGpu::NumberFormat number_format, const 
     case AmdGpu::NumberFormat::Float:
         return Inst(Opcode::UnpackUfloat10_11_11, value);
     default:
-        UNREACHABLE_MSG("Unsupported 10_11_11 number format: {}", number_format);
+        LOG_WARNING(Render_Recompiler, "Unsupported 10_11_11 number format {}, using Float",
+                    number_format);
+        return Inst(Opcode::UnpackUfloat10_11_11, value);
     }
 }
 
@@ -1447,18 +1507,6 @@ U32U64 IREmitter::IAdd(const U32U64& a, const U32U64& b) {
         return Inst<U32>(Opcode::IAdd32, a, b);
     case Type::U64:
         return Inst<U64>(Opcode::IAdd64, a, b);
-    default:
-        ThrowInvalidType(a.Type());
-    }
-}
-
-Value IREmitter::IAddCarry(const U32& a, const U32& b) {
-    if (a.Type() != b.Type()) {
-        UNREACHABLE_MSG("Mismatching types {} and {}", a.Type(), b.Type());
-    }
-    switch (a.Type()) {
-    case Type::U32:
-        return Inst(Opcode::IAddCarry32, a, b);
     default:
         ThrowInvalidType(a.Type());
     }
@@ -2178,8 +2226,20 @@ void IREmitter::ImageWrite(const Value& handle, const Value& coords, const U32& 
     Inst(Opcode::ImageWrite, Flags{info}, handle, coords, lod, multisampling, color);
 }
 
-[[nodiscard]] F32 IREmitter::CubeFaceIndex(const Value& cube_coords) {
-    return Inst<F32>(Opcode::CubeFaceIndex, cube_coords);
+[[nodiscard]] F32 IREmitter::CubeFaceIndex(const Value& x, const Value& y, const Value& z) {
+    return Inst<F32>(Opcode::CubeFaceIndex, x, y, z);
+}
+
+[[nodiscard]] F32 IREmitter::CubeFaceCoordS(const Value& x, const Value& y, const Value& z) {
+    return Inst<F32>(Opcode::CubeFaceCoordS, x, y, z);
+}
+
+[[nodiscard]] F32 IREmitter::CubeFaceCoordT(const Value& x, const Value& y, const Value& z) {
+    return Inst<F32>(Opcode::CubeFaceCoordT, x, y, z);
+}
+
+[[nodiscard]] F32 IREmitter::CubeFaceMajorAxis(const Value& x, const Value& y, const Value& z) {
+    return Inst<F32>(Opcode::CubeFaceMajorAxis, x, y, z);
 }
 
 // Debug print maps to SPIRV's NonSemantic DebugPrintf instruction

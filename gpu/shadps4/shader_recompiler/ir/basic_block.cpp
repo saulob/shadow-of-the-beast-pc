@@ -5,6 +5,7 @@
 #include <initializer_list>
 #include <map>
 #include "shader_recompiler/ir/basic_block.h"
+#include "shader_recompiler/ir/shared_memory.h"
 #include "shader_recompiler/ir/value.h"
 
 namespace Shader::IR {
@@ -166,6 +167,12 @@ std::string DumpBlock(const Block& block, const std::map<const Block*, size_t>& 
             const auto info = inst.Flags<BufferInstInfo>();
             ret += fmt::format(" (sharp_source={}, flatbuf_off_dw={:#x}) ", bool(info.sharp_source),
                                info.flatbuf_off_dw.Value());
+        } else if (op == Opcode::LoadSharedU16 || op == Opcode::LoadSharedU32 ||
+                   op == Opcode::LoadSharedU64 || op == Opcode::WriteSharedU16 ||
+                   op == Opcode::WriteSharedU32 || op == Opcode::WriteSharedU64) {
+            if (inst.Flags<SharedMemory::Flags>().is_scratch.Value()) {
+                ret += " (scratch)";
+            }
         }
         const size_t arg_count{inst.NumArgs()};
         for (size_t arg_index = 0; arg_index < arg_count; ++arg_index) {

@@ -34,8 +34,10 @@ static vk::ImageUsageFlags ImageUsageFlags(const Vulkan::Instance& instance,
             }
             // Always create images with storage flag to avoid needing re-creation in case of e.g
             // compute clears This sacrifices a bit of performance but is less work. ExtendedUsage
-            // flag is also used.
-            usage |= vk::ImageUsageFlagBits::eStorage;
+            // flag is also used. The exception here is for multisample images when storage is not
+            // supported, where even with ExtendedUsage we may get only one supported sample back.
+            if (info.num_samples == 1 || instance.IsMultisampleStorageImageSupported())
+                usage |= vk::ImageUsageFlagBits::eStorage;
         }
     } else {
         // Similarly to above, we specify storage usage. This is typically not supported by
@@ -51,10 +53,11 @@ static vk::ImageType ConvertImageType(AmdGpu::ImageType type) noexcept {
     switch (type) {
     case AmdGpu::ImageType::Color1D:
     case AmdGpu::ImageType::Color1DArray:
-        return vk::ImageType::e1D;
     case AmdGpu::ImageType::Color2D:
     case AmdGpu::ImageType::Color2DMsaa:
     case AmdGpu::ImageType::Color2DArray:
+    case AmdGpu::ImageType::Color2DMsaaArray:
+    case AmdGpu::ImageType::Cube:
         return vk::ImageType::e2D;
     case AmdGpu::ImageType::Color3D:
         return vk::ImageType::e3D;
@@ -130,6 +133,12 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
                     image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
         result = vmaCreateImage(allocator, &image_ci_unsafe, &alloc_ci, &unsafe_image, &allocation,
                                 &alloc_info);
+    }
+    if (result == VK_ERROR_OUT_OF_DEVICE_MEMORY) {
+        LOG_CRITICAL(Render_Vulkan,
+                     "Image {}x{}x{} could not be allocated after the over-budget and system-memory "
+                     "attempts",
+                     image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
     }
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));
@@ -220,10 +229,7 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
         .initialLayout = vk::ImageLayout::eUndefined,
     };
 
-    backing = &backing_images.emplace_back();
-    backing->num_samples = info.num_samples;
-    backing->image = UniqueImage{instance.GetDevice(), instance.GetAllocator()};
-    backing->image.Create(image_ci);
+    backing = &AddBacking(image_ci, info.num_samples);
 
     Vulkan::SetObjectName(instance.GetDevice(), GetImage(),
                           "Image {}x{}x{} {} {} {:#x}:{:#x} L:{} M:{} S:{}", info.size.width,
@@ -233,6 +239,28 @@ Image::Image(const Vulkan::Instance& instance, Vulkan::Runtime& runtime_,
 }
 
 Image::~Image() = default;
+
+Image::BackingImage& Image::AddBacking(const vk::ImageCreateInfo& create_info, u32 num_samples) {
+    const auto& instance = runtime->GetInstance();
+    auto& added_backing = backing_images.emplace_back();
+    added_backing.num_samples = num_samples;
+    added_backing.image = UniqueImage{instance.GetDevice(), instance.GetAllocator()};
+    added_backing.image.Create(create_info);
+    return added_backing;
+}
+
+ImageView& Image::FindView(const ImageViewInfo& view_info, BackingImage& view_backing) {
+    const auto& view_infos = view_backing.image_view_infos;
+    const auto it = std::ranges::find(view_infos, view_info);
+    if (it != view_infos.end()) {
+        return (*slot_image_views)[view_backing.image_view_ids[std::distance(view_infos.begin(), it)]];
+    }
+    const auto view_id = slot_image_views->Insert(runtime->GetInstance(), view_info, *this,
+                                                  view_backing.image.image);
+    view_backing.image_view_infos.emplace_back(view_info);
+    view_backing.image_view_ids.emplace_back(view_id);
+    return (*slot_image_views)[view_id];
+}
 
 ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_samples) {
     if (ensure_guest_samples && backing->num_samples > 1 != info.num_samples > 1) {
@@ -248,7 +276,8 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
         const auto view_id = backing->image_view_ids[backing->last_view];
         return (*slot_image_views)[view_id];
     }
-    const auto view_id = slot_image_views->insert(runtime->GetInstance(), view_info, *this);
+    const auto view_id =
+        slot_image_views->Insert(runtime->GetInstance(), view_info, *this, backing->image.image);
     backing->image_view_infos.emplace_back(view_info);
     backing->image_view_ids.emplace_back(view_id);
     return (*slot_image_views)[view_id];
@@ -257,8 +286,14 @@ ImageView& Image::FindView(const ImageViewInfo& view_info, bool ensure_guest_sam
 void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                         vk::PipelineStageFlags2 dst_stage,
                         std::optional<SubresourceRange> subres_range) {
-    auto& last_state = backing->state;
-    auto& subresource_states = backing->subresource_states;
+    GetBarriers(barriers, *backing, dst_layout, dst_mask, dst_stage, subres_range);
+}
+
+void Image::GetBarriers(Barriers& barriers, BackingImage& image_backing, vk::ImageLayout dst_layout,
+                        vk::AccessFlags2 dst_mask, vk::PipelineStageFlags2 dst_stage,
+                        std::optional<SubresourceRange> subres_range) {
+    auto& last_state = image_backing.state;
+    auto& subresource_states = image_backing.subresource_states;
     const auto needs_barrier = [&](const State& state) {
         return NeedsBarrier(state, dst_layout, dst_mask, dst_stage);
     };
@@ -306,7 +341,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
                         .newLayout = dst_layout,
                         .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                        .image = GetImage(),
+                        .image = image_backing.image.image,
                         .subresourceRange{
                             .aspectMask = aspect_mask,
                             .baseMipLevel = mip,
@@ -339,7 +374,7 @@ void Image::GetBarriers(Barriers& barriers, vk::ImageLayout dst_layout, vk::Acce
             .newLayout = dst_layout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = GetImage(),
+            .image = image_backing.image.image,
             .subresourceRange{
                 .aspectMask = aspect_mask,
                 .baseMipLevel = 0,

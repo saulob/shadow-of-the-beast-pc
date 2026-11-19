@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <bit>
+#include <utility>
 #include "common/logging/classes.h"
 #include "shader_recompiler/info.h"
 #include "shader_recompiler/ir/basic_block.h"
@@ -84,6 +86,23 @@ static std::vector<IR::Block*> FindUniformBlocks(const IR::Program& program) {
     return blocks;
 }
 
+static IR::Inst* FindBallotForMaskedBitCount(const IR::Inst& mbcnt) {
+    IR::Value value = mbcnt.Arg(0);
+    if (value.IsImmediate()) {
+        return nullptr;
+    }
+    IR::Inst* inst = value.Inst();
+    if (inst->GetOpcode() != IR::Opcode::CompositeExtractU32x2 || inst->Arg(0).IsImmediate()) {
+        return nullptr;
+    }
+    inst = inst->Arg(0).Inst();
+    if (inst->GetOpcode() != IR::Opcode::UnpackUint2x32 || inst->Arg(0).IsImmediate()) {
+        return nullptr;
+    }
+    inst = inst->Arg(0).Inst();
+    return inst->GetOpcode() == IR::Opcode::Ballot ? inst : nullptr;
+}
+
 void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info,
                            const Profile& profile) {
     if (program.info.hw_stage != HwStage::Compute || profile.subgroup_size == 64) {
@@ -98,15 +117,25 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
 
     std::vector<IR::Inst*> worklist;
     const auto uniform_blocks = FindUniformBlocks(program);
+    // The shared-memory exchange needs a workgroup barrier, which divergent control flow cannot
+    // execute: such operations stay subgroup-wide (32 lanes) and are reported once per opcode.
+    bool reported_ballot = false;
+    bool reported_read_lane = false;
     for (IR::Block* block : program.blocks) {
         const bool is_uniform = std::ranges::contains(uniform_blocks, block);
         const auto push_worklist = [&](IR::Inst& inst) {
             if (is_uniform) {
                 worklist.push_back(&inst);
-            } else {
-                LOG_WARNING(Render_Recompiler, "{} instruction in non uniform control flow",
-                            inst.GetOpcode());
+                return;
             }
+            const bool is_ballot = inst.GetOpcode() == IR::Opcode::Ballot;
+            bool& reported = is_ballot ? reported_ballot : reported_read_lane;
+            if (std::exchange(reported, true)) {
+                return;
+            }
+            LOG_WARNING(Render_Recompiler,
+                        "{} instruction in non uniform control flow (cs {:#x}): left subgroup-wide",
+                        inst.GetOpcode(), program.info.pgm_hash);
         };
         for (IR::Inst& inst : block->Instructions()) {
             if (inst.GetOpcode() == IR::Opcode::ReadLane && inst.Arg(1).IsImmediate()) {
@@ -118,9 +147,12 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
                 if (std::ranges::any_of(inst.Uses(), is_unpack)) {
                     push_worklist(inst);
                 }
-            } else if (inst.GetOpcode() == IR::Opcode::GetAttributeU32 &&
-                       inst.Arg(0).Attribute() == IR::Attribute::SubgroupLtMask) {
-                worklist.push_back(&inst);
+            } else if (inst.GetOpcode() == IR::Opcode::MaskedBitCount32) {
+                IR::Inst* const ballot = FindBallotForMaskedBitCount(inst);
+                if (ballot == nullptr ||
+                    std::ranges::contains(uniform_blocks, ballot->GetParent())) {
+                    worklist.push_back(&inst);
+                }
             }
         }
     }
@@ -128,47 +160,51 @@ void LowerWave64BallotPass(IR::Program& program, const RuntimeInfo& runtime_info
         return;
     }
 
-    const u32 scratch_base = Common::AlignUp(runtime_info.hw.cs.shared_memory_size, sizeof(u64));
     const u32 scratch_size =
         (Common::AlignUp(num_threads, 64) / profile.subgroup_size) * sizeof(u32);
-    program.info.shared_memory_scratch_size =
-        scratch_base + scratch_size - runtime_info.hw.cs.shared_memory_size;
+    Info::SharedMemorySegment& shared_scratch_segment = program.info.shared_scratch_segment;
 
     for (IR::Inst* inst : worklist) {
         LOG_INFO(Render_Recompiler, "Lowering {} instruction for wave64", inst->GetOpcode());
         IR::IREmitter ir{*inst->GetParent(), IR::Block::InstructionList::s_iterator_to(*inst)};
         const IR::U32 invocation_index = ir.GetAttributeU32(IR::Attribute::LocalInvocationIndex);
-        const IR::U32 subgroup_id = ir.ShiftRightLogical(invocation_index, ir.Imm32(5));
+        const IR::U32 subgroup_id = ir.SubgroupId();
         if (inst->GetOpcode() == IR::Opcode::Ballot) {
             const IR::U32 mask_low =
                 IR::U32{ir.CompositeExtract(ir.UnpackUint2x32(ir.Ballot(IR::U1{inst->Arg(0)})), 0)};
-            const IR::U32 offset =
-                ir.IAdd(ir.Imm32(scratch_base), ir.ShiftLeftLogical(subgroup_id, ir.Imm32(2u)));
-            ir.WriteShared(32, mask_low, offset);
+            const IR::U32 offset = ir.ShiftLeftLogical(subgroup_id, ir.Imm32(2u));
+            ir.WriteSharedU32Scratch(mask_low, offset);
             ir.Barrier();
-            const IR::U64 mask = IR::U64{ir.LoadShared(64, false, offset)};
+            const IR::U64 mask{ir.LoadSharedU64Scratch(offset)};
             ir.Barrier();
             inst->ReplaceUsesWithAndRemove(mask);
+            shared_scratch_segment.SetMinSize(scratch_size);
         } else if (inst->GetOpcode() == IR::Opcode::ReadLane) {
             const IR::U32 lane32 = ir.BitwiseAnd(IR::U32{inst->Arg(1)}, ir.Imm32(31));
             const IR::U32 half = ir.ShiftRightLogical(IR::U32{inst->Arg(1)}, ir.Imm32(5u));
-            const IR::U32 offset =
-                ir.IAdd(ir.Imm32(scratch_base), ir.ShiftLeftLogical(subgroup_id, ir.Imm32(2u)));
-            ir.WriteShared(32, ir.ReadLane(IR::U32{inst->Arg(0)}, lane32), offset);
+            const IR::U32 offset = ir.ShiftLeftLogical(subgroup_id, ir.Imm32(2u));
+            ir.WriteSharedU32Scratch(ir.ReadLane(IR::U32{inst->Arg(0)}, lane32), offset);
             ir.Barrier();
-            const IR::U32 value =
-                IR::U32{ir.LoadShared(32, false,
-                                      ir.IAdd(ir.BitwiseAnd(offset, ir.Imm32(~7u)),
-                                              ir.ShiftLeftLogical(half, ir.Imm32(2u))))};
+            const IR::U32 value = ir.LoadSharedU32Scratch(ir.IAdd(
+                ir.BitwiseAnd(offset, ir.Imm32(~7u)), ir.ShiftLeftLogical(half, ir.Imm32(2u))));
             ir.Barrier();
             inst->ReplaceUsesWithAndRemove(value);
-        } else if (inst->GetOpcode() == IR::Opcode::GetAttributeU32 &&
-                   inst->Arg(0).Attribute() == IR::Attribute::SubgroupLtMask) {
+            shared_scratch_segment.SetMinSize(scratch_size);
+        } else if (inst->GetOpcode() == IR::Opcode::MaskedBitCount32) {
             const IR::U32 subgroup_invocation_id = ir.BitwiseAnd(invocation_index, ir.Imm32(63));
             const IR::U64 mask = ir.ISub(
                 ir.ShiftLeftLogical(ir.Imm64(u64{1}), subgroup_invocation_id), ir.Imm64(u64{1}));
-            inst->ReplaceUsesWithAndRemove(
-                ir.CompositeExtract(ir.UnpackUint2x32(mask), inst->Arg(1).U32()));
+            const IR::U32 thread_mask{
+                ir.CompositeExtract(ir.UnpackUint2x32(mask), inst->Arg(2).U1() ? 1u : 0u)};
+            const IR::U32 masked_value{
+                ir.BitCount(ir.BitwiseAnd(IR::U32{inst->Arg(0)}, thread_mask))};
+            inst->ReplaceUsesWithAndRemove(ir.IAdd(masked_value, IR::U32{inst->Arg(1)}));
+        } else if (inst->GetOpcode() == IR::Opcode::WaveId) {
+            const u32 subgroup_size = profile.subgroup_size;
+            ASSERT(subgroup_size < 64);
+            ASSERT(std::popcount(subgroup_size) == 1);
+            const u32 shift = std::countr_zero(64 / subgroup_size);
+            inst->ReplaceUsesWithAndRemove(ir.ShiftRightLogical(subgroup_id, ir.Imm32(shift)));
         }
     }
 }

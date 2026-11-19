@@ -72,15 +72,21 @@ public:
                        std::span<const vk::BufferImageCopy> download_copies);
 
     void CopyImage(VideoCore::Image* src, VideoCore::Image* dst);
+    VideoCore::ImageView& FindSubrectView(VideoCore::Image& image, const VideoCore::ImageInfo& info,
+                                          const VideoCore::ImageViewInfo& view_info);
     /// sotb: mip 0 of an image sharing guest memory with `dst` (texture_cache aliasing).
     void CopyAliasImage(VideoCore::Image* src, VideoCore::Image* dst, const vk::Extent3D& extent);
     void CopyImageWithBuffer(VideoCore::Image* src, VideoCore::Image* dst,
                              const VideoCore::Buffer* buffer, u64 offset);
     void CopyMip(VideoCore::Image* src, VideoCore::Image* dst, u32 mip, u32 slice);
 
-    void CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst);
+    /// Returns false when the copy is not implemented for the pair and nothing was copied.
+    bool CopyColorAndDepth(VideoCore::Image* src, VideoCore::Image* dst);
 
     void CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst,
+                          const VideoCore::SubresourceRange& sub_range);
+    /// Copies only the given planes of a depth-stencil pair.
+    void CopyDepthStencil(VideoCore::Image* src, VideoCore::Image* dst, vk::ImageAspectFlags aspects,
                           const VideoCore::SubresourceRange& sub_range);
 
     void ResolveImage(VideoCore::Image* src, VideoCore::Image* dst,
@@ -88,6 +94,7 @@ public:
                       const VideoCore::SubresourceRange& dst_range);
     void ClearImage(VideoCore::Image* dst, const VideoCore::SubresourceRange& range,
                     const vk::ClearValue& clear_value);
+    void ClearDepth(VideoCore::Image* dst, const VideoCore::SubresourceRange& range, float depth);
 
     void SetBackingSamples(VideoCore::Image* image, u32 num_samples, bool copy_backing = true);
 

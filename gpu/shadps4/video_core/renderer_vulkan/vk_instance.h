@@ -35,6 +35,9 @@ public:
     /// Returns a formatted string for the driver version
     std::string GetDriverVersionName();
 
+    /// Logs heap budgets and the driver's fault report (VK_EXT_device_fault) after device loss.
+    void ReportDeviceFault() const;
+
     /// Gets a compatibility format if the format is not supported.
     [[nodiscard]] vk::Format GetSupportedFormat(vk::Format format,
                                                 vk::FormatFeatureFlags2 flags) const;
@@ -104,6 +107,11 @@ public:
         return features.depthBounds;
     }
 
+    /// Returns true if buffers can be sparsely bound and partially resident
+    bool IsSparseSupported() const {
+        return features.sparseBinding && features.sparseResidencyBuffer;
+    }
+
     /// Returns true if 16-bit floats are supported in shaders
     bool IsShaderFloat16Supported() const {
         return vk12_features.shaderFloat16;
@@ -127,6 +135,14 @@ public:
     /// Returns true if 8-bit ints are supported in shaders
     bool IsShaderInt8Supported() const {
         return vk12_features.shaderInt8;
+    }
+
+    bool IsMaintenance5Supported() const {
+        return maintenance_5;
+    }
+
+    bool IsMaintenance6Supported() const {
+        return maintenance_6;
     }
 
     /// Returns true if VK_KHR_maintenance8 is supported
@@ -233,6 +249,11 @@ public:
         return shader_atomic_float2 && shader_atomic_float2_features.shaderImageFloat32AtomicMinMax;
     }
 
+    bool IsShaderAtomicFloatShared32MinMaxSupported() const {
+        return shader_atomic_float2 &&
+               shader_atomic_float2_features.shaderSharedFloat32AtomicMinMax;
+    }
+
     /// Returns true if 64-bit integer atomic operations can be used on buffers
     bool IsBufferInt64AtomicsSupported() const {
         return vk12_features.shaderBufferInt64Atomics;
@@ -243,9 +264,22 @@ public:
         return vk12_features.shaderSharedInt64Atomics;
     }
 
-    /// Returns true if the subgroup size can be set to match guest subgroup size
+    /// Returns true when buffer device address can be used. RenderDoc hides it on drivers that
+    /// lack bufferDeviceAddressCaptureReplay.
+    bool IsBufferDeviceAddressSupported() const {
+        return vk12_features.bufferDeviceAddress;
+    }
+
+    /// Returns true if the subgroup size can be set to match guest subgroup size. Compute shaders
+    /// are pinned to 64 lanes; graphics stages only where the driver allows it.
     bool IsSubgroupSize64Supported() const {
-        return vk13_features.subgroupSizeControl && vk13_props.maxSubgroupSize >= 64;
+        return vk13_features.subgroupSizeControl && vk13_props.maxSubgroupSize >= 64 &&
+               CanRequireSubgroupSize(vk::ShaderStageFlagBits::eCompute);
+    }
+
+    /// Whether the driver lets a subgroup size be required for this stage.
+    bool CanRequireSubgroupSize(vk::ShaderStageFlagBits stage) const {
+        return bool(vk13_props.requiredSubgroupSizeStages & stage);
     }
 
     /// Returns true when VK_KHR_workgroup_memory_explicit_layout is supported.
@@ -346,13 +380,10 @@ public:
         return properties.limits.nonCoherentAtomSize;
     }
 
-    /// Returns the subgroup size of the selected physical device.
+    /// Returns the subgroup size the recompiler targets: 64 where compute shaders are pinned to
+    /// it (so it matches the pipelines whatever the driver's default), else the default.
     u32 SubgroupSize() const {
-        return vk11_props.subgroupSize;
-    }
-
-    bool IsMaintenance5Supported() const {
-        return maintenance_5;
+        return IsSubgroupSize64Supported() ? 64 : vk11_props.subgroupSize;
     }
 
     /// Returns the maximum size of compute shared memory.
@@ -360,9 +391,27 @@ public:
         return properties.limits.maxComputeSharedMemorySize;
     }
 
+    u32 MaxGeometryOutputVertices() const {
+        return properties.limits.maxGeometryOutputVertices;
+    }
+
+    u32 MaxGeometryTotalOutputComponents() const {
+        return properties.limits.maxGeometryTotalOutputComponents;
+    }
+
     /// Returns the maximum sampler LOD bias.
     float MaxSamplerLodBias() const {
         return properties.limits.maxSamplerLodBias;
+    }
+
+    /// Returns the maximum number of image array layers.
+    u32 GetMaxImageArrayLayers() const {
+        return properties.limits.maxImageArrayLayers;
+    }
+
+    /// Returns the maximum number of compute work groups along X in one dispatch.
+    u32 GetMaxComputeWorkGroupCountX() const {
+        return properties.limits.maxComputeWorkGroupCount[0];
     }
 
     /// Returns the maximum sampler anisotropy.
@@ -459,6 +508,11 @@ public:
         return image_view_min_lod;
     }
 
+    /// Returns whether shaderStorageImageMultisample is supported.
+    bool IsMultisampleStorageImageSupported() const {
+        return features.shaderStorageImageMultisample;
+    }
+
     /// Returns whether the device can report memory usage.
     bool CanReportMemoryUsage() const {
         return supports_memory_budget;
@@ -547,6 +601,7 @@ private:
     bool shader_atomic_float2{};
     bool workgroup_memory_explicit_layout{};
     bool maintenance_5{};
+    bool maintenance_6{};
     bool pipeline_binaries{};
     vk::PipelineBinaryKeyKHR pipeline_binary_global_key{};
     bool maintenance_8{};
@@ -554,6 +609,9 @@ private:
     bool image_2d_view_of_3d{};
     bool image_view_min_lod{};
     bool shader_clock{};
+    bool device_fault{};
+    bool memory_priority{};
+    bool pageable_device_memory{};
     bool supports_memory_budget{};
     bool supports_block_texel_view{};
     u64 total_memory_budget{};

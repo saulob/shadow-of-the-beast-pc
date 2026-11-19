@@ -5,10 +5,12 @@
 #include <chrono>
 #include <array>
 #include <map>
+#include <optional>
 #include <unordered_map>
 #include <algorithm>
 #include <bit>
 #include <cstdlib>
+#include <cstring>
 #include <magic_enum/magic_enum.hpp>
 #include "sotb_copy_pool.h"
 #include "sotb_toggles.h"
@@ -31,6 +33,24 @@ namespace VideoCore {
 static constexpr size_t GDS_BUFFER_SIZE = 64_KB;
 static constexpr size_t NULL_INDEX_BUFFER_SIZE = 16;
 static constexpr size_t STREAM_BUFFER_SIZE = 128_MB;
+constexpr std::optional<u32> CmaskColorExpandedValue(u32 num_samples) {
+    switch (num_samples) {
+    case 1:
+        return 0xFFFFFFFF;
+    case 2:
+        return 0xDDDDDDDD;
+    case 4:
+        return 0xEEEEEEEE;
+    case 8:
+        return 0xFFFFFFFF;
+    default:
+        return std::nullopt;
+    }
+}
+static_assert(CmaskColorExpandedValue(1) == 0xFFFFFFFF);
+static_assert(CmaskColorExpandedValue(2) == 0xDDDDDDDD);
+static_assert(CmaskColorExpandedValue(4) == 0xEEEEEEEE);
+static_assert(CmaskColorExpandedValue(8) == 0xFFFFFFFF);
 
 static constexpr auto ARENA_USAGE =
     vk::BufferUsageFlagBits::eTransferSrc | vk::BufferUsageFlagBits::eTransferDst |
@@ -94,6 +114,21 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
         FindMemoryType(instance.GetMemoryProperties(), vk::MemoryPropertyFlagBits::eDeviceLocal,
                        reqs.memoryTypeBits)
             .value();
+    {
+        // System memory for arena pages when the card's own memory is full.
+        const auto& props = instance.GetMemoryProperties();
+        constexpr auto host_flags =
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+        for (u32 i = 0; i < props.memoryTypeCount; ++i) {
+            const auto& type = props.memoryTypes[i];
+            if (((reqs.memoryTypeBits >> i) & 1) == 0 || (type.propertyFlags & host_flags) != host_flags ||
+                (props.memoryHeaps[type.heapIndex].flags & vk::MemoryHeapFlagBits::eDeviceLocal)) {
+                continue;
+            }
+            spill_memory_type_index = i;
+            break;
+        }
+    }
 
     const u64 bda_pagetable_size =
         (blocks_per_arena_page * num_arena_pages) * sizeof(vk::DeviceAddress);
@@ -105,9 +140,44 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
     null_index_buffer = std::make_unique<Buffer>(instance, 0, NULL_INDEX_BUFFER_SIZE,
                                                  MemoryType::DeviceLocal, "Null Index Buffer");
     runtime.FillBuffer(null_index_buffer.get(), 0u, NULL_INDEX_BUFFER_SIZE, 0u);
+
+    // A zeroed block for the neighbours of resident ranges. AMD faults a shader that reads an
+    // unbound sparse page, other drivers answer zero. Needs aliased binding.
+    if (sparse_aliased_enabled) {
+        const auto guard_type = FindMemoryType(
+            instance.GetMemoryProperties(),
+            vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+            reqs.memoryTypeBits);
+        if (guard_type) {
+            const vk::MemoryAllocateFlagsInfo alloc_flags = {
+                .flags = vk::MemoryAllocateFlagBits::eDeviceAddress,
+            };
+            const vk::MemoryAllocateInfo guard_info = {
+                .pNext = &alloc_flags,
+                .allocationSize = block_size,
+                .memoryTypeIndex = *guard_type,
+            };
+            const auto alloc = device.allocateMemory(guard_info);
+            if (alloc.result == vk::Result::eSuccess) {
+                guard_memory = alloc.value;
+                const auto map = device.mapMemory(guard_memory, 0, block_size);
+                if (map.result == vk::Result::eSuccess) {
+                    std::memset(map.value, 0, block_size);
+                    device.unmapMemory(guard_memory);
+                } else {
+                    device.freeMemory(guard_memory);
+                    guard_memory = VK_NULL_HANDLE;
+                }
+            }
+        }
+    }
 }
 
-BufferCache::~BufferCache() = default;
+BufferCache::~BufferCache() {
+    if (guard_memory) {
+        instance.GetDevice().freeMemory(guard_memory);
+    }
+}
 
 void BufferCache::InvalidateMemory(VAddr device_addr, u64 size, bool assume_locks) {
     memory_tracker->InvalidateRegion(device_addr, size, [this, device_addr, size, assume_locks] {
@@ -209,6 +279,16 @@ void BufferCache::DownloadMemory(const Buffer* arena, VAddr device_addr, u64 siz
         copy.dstOffset += download.offset;
     }
     runtime.CopyBuffer(arena, download.buffer, copies);
+    scheduler.Record([](vk::CommandBuffer cmdbuf) {
+        const vk::MemoryBarrier2 barrier = {
+            .srcStageMask = vk::PipelineStageFlagBits2::eCopy,
+            .srcAccessMask = vk::AccessFlagBits2::eTransferWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        cmdbuf.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+    });
     scheduler.Finish();
 
     download.buffer->Invalidate(download.offset, download.size);
@@ -384,10 +464,23 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
     };
     const vk::MemoryAllocateInfo alloc_info = {
         .pNext = &alloc_flags,
-        .allocationSize = resident_blocks << block_shift,
+        .allocationSize = u64{resident_blocks} << block_shift,
         .memoryTypeIndex = arena_memory_type_index,
     };
-    const auto device_memory = Vulkan::Check(instance.GetDevice().allocateMemory(alloc_info));
+    auto allocated = instance.GetDevice().allocateMemory(alloc_info);
+    if (allocated.result == vk::Result::eErrorOutOfDeviceMemory && spill_memory_type_index != ~0u) {
+        LOG_WARNING(Render_Vulkan, "Out of video memory: {} bytes of buffer pages in system memory",
+                    alloc_info.allocationSize);
+        vk::MemoryAllocateInfo spill_info = alloc_info;
+        spill_info.memoryTypeIndex = spill_memory_type_index;
+        allocated = instance.GetDevice().allocateMemory(spill_info);
+    }
+    if (allocated.result != vk::Result::eSuccess) {
+        LOG_ERROR(Render_Vulkan, "No memory for {} bytes of buffer pages: {}",
+                  alloc_info.allocationSize, vk::to_string(allocated.result));
+        return;
+    }
+    const auto device_memory = allocated.value;
 
     boost::container::small_vector<vk::BufferCopy, 8> copies;
     const auto staging =
@@ -415,12 +508,39 @@ void BufferCache::EnsureResident(const Buffer* arena, u64 first_block, u64 last_
         });
         memory_offset += bind.size;
 
-        for (u32 block = 0; block < bind.size; block += block_size) {
+        for (u64 block = 0; block < bind.size; block += block_size) {
             *(bda_addrs++) = arena->BufferDeviceAddress() + bind.resourceOffset + block;
         }
         const u64 copy_size = (backing.end - backing.start) * sizeof(vk::DeviceAddress);
         copies.emplace_back(offset, backing.start * sizeof(vk::DeviceAddress), copy_size);
         offset += copy_size;
+    }
+
+    // The blocks just outside the new range keep reading zero when a shader steps over the end.
+    if (guard_memory) {
+        const u64 arena_first = arena->cpu_addr >> block_shift;
+        const u64 arena_last = (arena->cpu_addr + arena->size_bytes - 1) >> block_shift;
+        const auto guard = [&](u64 block) {
+            if (block < arena_first || block > arena_last) {
+                return;
+            }
+            bool resident = false;
+            resident_ranges.ForEachInRange(block, block + 1,
+                                           [&](const Backing&) { resident = true; });
+            if (resident) {
+                return;
+            }
+            binds->binds.push_back(vk::SparseMemoryBind{
+                .resourceOffset = (block << block_shift) - arena->cpu_addr,
+                .size = block_size,
+                .memory = guard_memory,
+                .memoryOffset = 0,
+            });
+        };
+        if (first_block > 0) {
+            guard(first_block - 1);
+        }
+        guard(last_block + 1);
     }
 
     staging.Flush();
@@ -432,16 +552,21 @@ bool BufferCache::SynchronizeMemory(const Buffer* arena, VAddr device_addr, u32 
     boost::container::small_vector<vk::BufferCopy, 4> copies;
     size_t total_size_bytes{};
     const Buffer* src_buffer{};
+    boost::container::small_vector<std::pair<VAddr, u64>, 4> cpu_uploads;
     memory_tracker->ForEachUploadRange(
         device_addr, size, is_written,
         [&](u64 addr, u64 size) {
             copies.emplace_back(total_size_bytes, addr, size);
+            cpu_uploads.emplace_back(addr, size);
             total_size_bytes += size;
         },
         [&] { src_buffer = UploadCopies(arena, copies, total_size_bytes); });
 
     if (src_buffer) {
         runtime.CopyBuffer(src_buffer, arena, copies);
+    }
+    for (const auto& [upload_address, upload_size] : cpu_uploads) {
+        texture_cache.RevokeCmaskForCpuUpload(upload_address, upload_size);
     }
     if (is_texel_buffer && !is_written) {
         return SynchronizeMemoryFromImage(arena, device_addr, size);
@@ -532,24 +657,32 @@ const Buffer* BufferCache::UploadCopies(const Buffer* arena, std::span<vk::Buffe
 }
 
 bool BufferCache::SynchronizeMemoryFromImage(const Buffer* arena, VAddr device_addr, u32 size) {
-    if (auto type = texture_cache.IsMeta(device_addr)) {
-        if (*type == TextureCache::MetaType::HTile) {
+    if (const auto meta = texture_cache.GetMetaInfo(device_addr)) {
+        if (meta->type == TextureCache::MetaType::HTile) {
             static constexpr u32 ZmaskUncompressed = 0xf;
             runtime.FillBuffer(arena, arena->Offset(device_addr), size, ZmaskUncompressed);
             return true;
-        } else if (*type == TextureCache::MetaType::CMask) {
-            // sotb: color images are always fully expanded on the host, so every 4-bit CMask
-            // tile code reads as 0xF (uncompressed: the color in memory is valid). A game reading
-            // CMask through buffers would otherwise treat stale tiles as fast-cleared.
-            runtime.FillBuffer(arena, arena->Offset(device_addr), size, 0xFFFFFFFFu);
+        } else if (meta->type == TextureCache::MetaType::CMask) {
+            // Color images are always fully expanded on the host: every 4-bit CMask tile code
+            // reads as the uncompressed value of the target's sample count.
+            const auto expanded_value = CmaskColorExpandedValue(meta->num_samples);
+            if (!expanded_value) {
+                LOG_WARNING(Render_Vulkan,
+                            "Unsupported CMask sample count: address={:#x}, size={:#x}, "
+                            "samples={}, owner={}:{}",
+                            device_addr, size, meta->num_samples, meta->owner_id.index,
+                            meta->owner_uid);
+                return false;
+            }
+            runtime.FillBuffer(arena, arena->Offset(device_addr), size, *expanded_value);
             return true;
         } else {
             // Once per type: a game can read metadata through buffers every frame.
             static std::atomic<u32> warned{0};
-            const u32 bit = 1u << static_cast<u32>(*type);
+            const u32 bit = 1u << static_cast<u32>(meta->type);
             if (!(warned.fetch_or(bit) & bit)) {
                 LOG_WARNING(Render_Vulkan, "Unhandled metadata type {} (reported once)",
-                            magic_enum::enum_name(*type));
+                            magic_enum::enum_name(meta->type));
             }
         }
     }

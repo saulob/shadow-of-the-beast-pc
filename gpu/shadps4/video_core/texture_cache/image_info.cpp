@@ -100,17 +100,33 @@ ImageInfo::ImageInfo(const AmdGpu::DepthBuffer& buffer, u32 num_slices, VAddr ht
     meta_info.htile_addr = buffer.z_info.tile_surface_enable ? htile_address : 0;
 
     stencil_addr = write_buffer ? buffer.StencilWriteAddress() : buffer.StencilAddress();
-    stencil_size = pitch * size.height * sizeof(u8);
+    if (props.has_stencil) {
+        if (props.is_tiled) {
+            stencil_size = buffer.GetStencilSliceSize() * resources.layers;
+        } else {
+            std::tie(std::ignore, std::ignore, stencil_size) =
+                ImageSizeLinearAligned(pitch, size.height, 8, num_samples);
+            stencil_size *= resources.layers;
+        }
+    }
 
-    guest_address = write_buffer ? buffer.DepthWriteAddress() : buffer.DepthAddress();
-    if (props.is_tiled) {
-        guest_size = buffer.GetDepthSliceSize() * resources.layers;
-        mips_layout[0] = MipInfo(guest_size, pitch, buffer.Height(), 0);
+    if (buffer.z_info.format != AmdGpu::DepthBuffer::ZFormat::Invalid) {
+        guest_address = write_buffer ? buffer.DepthWriteAddress() : buffer.DepthAddress();
+        if (props.is_tiled) {
+            guest_size = buffer.GetDepthSliceSize() * resources.layers;
+            mips_layout[0] = MipInfo(guest_size, pitch, buffer.Height(), 0);
+        } else {
+            std::tie(std::ignore, std::ignore, guest_size) =
+                ImageSizeLinearAligned(pitch, size.height, num_bits, num_samples);
+            guest_size *= resources.layers;
+            mips_layout[0] = MipInfo(guest_size, pitch, size.height, 0);
+        }
     } else {
-        std::tie(std::ignore, std::ignore, guest_size) =
-            ImageSizeLinearAligned(pitch, size.height, num_bits, num_samples);
-        guest_size *= resources.layers;
-        mips_layout[0] = MipInfo(guest_size, pitch, size.height, 0);
+        guest_address = stencil_addr;
+        guest_size = stencil_size;
+        mips_layout[0] =
+            MipInfo(guest_size, pitch, props.is_tiled ? buffer.Height() : size.height, 0);
+        num_bits = 8;
     }
 }
 
@@ -128,7 +144,8 @@ ImageInfo::ImageInfo(const AmdGpu::Image& image, const Shader::ImageResource& de
     props.is_pow2 = image.pow2pad;
     props.is_block = AmdGpu::IsBlockCoded(image.GetDataFmt());
     size.width = image.width + 1;
-    size.height = image.height + 1;
+    // 1D images are lowered to 2D, and the height field of a 1D descriptor is ignored.
+    size.height = type == AmdGpu::ImageType::Color1D ? 1 : image.height + 1;
     size.depth = props.is_volume ? image.depth + 1 : 1;
     pitch = image.Pitch();
     resources.levels = image.NumLevels();
@@ -143,6 +160,20 @@ ImageInfo::ImageInfo(const AmdGpu::Image& image, const Shader::ImageResource& de
     UpdateSize();
 }
 
+bool ImageInfo::IsSubrectOf(const ImageInfo& info) const {
+    return (size.width < info.size.width || size.height < info.size.height) &&
+           size.width <= info.size.width && size.height <= info.size.height && size.depth == 1 &&
+           info.size.depth == 1 && guest_address == info.guest_address &&
+           guest_size <= info.guest_size && type == AmdGpu::ImageType::Color2D &&
+           type == info.type && resources.levels == 1 && resources.layers == 1 &&
+           info.resources.levels == 1 && info.resources.layers == 1 && !props.is_depth &&
+           !info.props.is_depth && !props.is_block && !info.props.is_block &&
+           pixel_format == info.pixel_format && num_bits == info.num_bits &&
+           num_samples == info.num_samples && pitch == info.pitch && tile_mode == info.tile_mode &&
+           bank_swizzle == info.bank_swizzle && alt_tile == info.alt_tile &&
+           mips_layout[0].pitch == info.mips_layout[0].pitch;
+}
+
 bool ImageInfo::IsCompatible(const ImageInfo& info) const {
     return (IsVulkanFormatCompatible(pixel_format, info.pixel_format) ||
             IsVulkanFormatCompatible(info.pixel_format, pixel_format)) &&
@@ -150,7 +181,10 @@ bool ImageInfo::IsCompatible(const ImageInfo& info) const {
 }
 
 void ImageInfo::UpdateSize() {
+    const u32 thickness = AmdGpu::GetMicroTileThickness(array_mode);
+    const bool macro = AmdGpu::IsMacroTiled(array_mode);
     guest_size = 0;
+    micro_tiled_mips = 0;
     for (s32 mip = 0; mip < resources.levels; ++mip) {
         u32 mip_w = pitch >> mip;
         u32 mip_h = size.height >> mip;
@@ -169,31 +203,32 @@ void ImageInfo::UpdateSize() {
         }
 
         auto& mip_info = mips_layout[mip];
+        u32 mip_thickness = 1;
         if (array_mode == AmdGpu::ArrayMode::ArrayLinearAligned) {
             std::tie(mip_info.pitch, mip_info.height, mip_info.size) =
                 ImageSizeLinearAligned(mip_w, mip_h, num_bits, num_samples);
         } else if (array_mode == AmdGpu::ArrayMode::ArrayLinearGeneral) {
             UNREACHABLE_MSG("Unhandled array mode: ArrayLinearGeneral");
+        } else if (macro &&
+                   IsMacroTiledMip(mip_w, mip_h, num_bits, num_samples, tile_mode, mip, alt_tile)) {
+            mip_thickness = thickness;
+            std::tie(mip_info.pitch, mip_info.height, mip_info.size) =
+                ImageSizeMacroTiled(mip_w, mip_h, num_bits, num_samples, tile_mode, alt_tile);
         } else {
-            // Every tiled array mode (1D/2D/3D, thin/thick/xthick, PRT or not) groups
-            // GetMicroTileThickness() consecutive depth slices per tile; round mip_d up
-            // to a full group so it's counted correctly in mip_info.size below.
-            const u32 thickness = AmdGpu::GetMicroTileThickness(array_mode);
-            mip_d += (-mip_d) & (thickness - 1);
-            if (AmdGpu::IsMacroTiled(array_mode)) {
-                ASSERT(!props.is_block);
-                std::tie(mip_info.pitch, mip_info.height, mip_info.size) = ImageSizeMacroTiled(
-                    mip_w, mip_h, thickness, num_bits, num_samples, tile_mode, mip, alt_tile);
-            } else {
-                std::tie(mip_info.pitch, mip_info.height, mip_info.size) =
-                    ImageSizeMicroTiled(mip_w, mip_h, thickness, num_bits, num_samples);
+            mip_thickness = std::min(thickness, 4u);
+            std::tie(mip_info.pitch, mip_info.height, mip_info.size) =
+                ImageSizeMicroTiled(mip_w, mip_h, mip_thickness, num_bits, num_samples);
+            if (macro) {
+                micro_tiled_mips |= 1u << mip;
             }
         }
         if (props.is_block) {
             mip_info.pitch = std::max(mip_info.pitch * 4, 32u);
             mip_info.height = std::max(mip_info.height * 4, 32u);
         }
-        mip_info.size *= mip_d * resources.layers;
+        u32 num_slices = mip_d * resources.layers;
+        num_slices += (-num_slices) & (mip_thickness - 1);
+        mip_info.size *= num_slices;
         mip_info.offset = guest_size;
         guest_size += mip_info.size;
     }

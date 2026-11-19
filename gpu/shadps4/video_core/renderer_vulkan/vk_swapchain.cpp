@@ -57,7 +57,7 @@ Swapchain::~Swapchain() {
 void Swapchain::Create(u32 width_, u32 height_) {
     width = width_;
     height = height_;
-    needs_recreation = false;
+    health.Recreated();
 
     Destroy();
 
@@ -140,23 +140,26 @@ bool Swapchain::AcquireNextImage() {
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
                                    image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
 
+    SwapchainHealth::Result kind = SwapchainHealth::Result::Failure;
     switch (result) {
     case vk::Result::eSuccess:
+        kind = SwapchainHealth::Result::Success;
         break;
     case vk::Result::eSuboptimalKHR:
+        kind = SwapchainHealth::Result::Suboptimal;
+        break;
     case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
     case vk::Result::eErrorUnknown:
-        needs_recreation = true;
+        kind = SwapchainHealth::Result::OutOfDate;
         break;
     default:
         LOG_CRITICAL(Render_Vulkan, "Swapchain acquire returned unknown result {}",
                      vk::to_string(result));
         UNREACHABLE();
-        break;
     }
 
-    return !needs_recreation;
+    return health.Acquire(kind);
 }
 
 bool Swapchain::Present() {
@@ -169,16 +172,19 @@ bool Swapchain::Present() {
     };
 
     auto result = instance.GetPresentQueue().presentKHR(present_info);
-    if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR) {
-        needs_recreation = true;
+    if (result == vk::Result::eErrorOutOfDateKHR) {
+        health.Present(SwapchainHealth::Result::OutOfDate);
+    } else if (result == vk::Result::eSuboptimalKHR) {
+        health.Present(SwapchainHealth::Result::Suboptimal);
     } else {
         ASSERT_MSG(result == vk::Result::eSuccess, "Swapchain presentation failed: {}",
                    vk::to_string(result));
+        health.Present(SwapchainHealth::Result::Success);
     }
 
     frame_index = (frame_index + 1) % image_count;
 
-    return !needs_recreation;
+    return !health.NeedsRecreation();
 }
 
 void Swapchain::FindPresentFormat() {

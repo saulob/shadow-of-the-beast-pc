@@ -7,7 +7,7 @@
 namespace Shader::Backend::SPIRV {
 
 Id EmitUndefU1(EmitContext& ctx) {
-    return ctx.OpUndef(ctx.U1[1]);
+    return ctx.false_value;
 }
 
 Id EmitUndefU8(EmitContext&) {
@@ -19,7 +19,7 @@ Id EmitUndefU16(EmitContext&) {
 }
 
 Id EmitUndefU32(EmitContext& ctx) {
-    return ctx.OpUndef(ctx.U32[1]);
+    return ctx.u32_zero_value;
 }
 
 Id EmitUndefU32x2(EmitContext& ctx) {
@@ -38,8 +38,12 @@ Id EmitUndefF32(EmitContext& ctx) {
     return ctx.OpUndef(ctx.F32[1]);
 }
 
-Id EmitUndefU64(EmitContext&) {
-    UNREACHABLE_MSG("SPIR-V Instruction");
+Id EmitUndefF32x2(EmitContext& ctx) {
+    return ctx.OpUndef(ctx.F32[2]);
+}
+
+Id EmitUndefU64(EmitContext& ctx) {
+    return ctx.OpUndef(ctx.U64);
 }
 
 } // namespace Shader::Backend::SPIRV

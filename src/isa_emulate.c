@@ -176,6 +176,10 @@ IsaHostFeatures isa_host_features(void) {
     return host;
 }
 
+unsigned isa_emulation_needed(IsaHostFeatures host) {
+    return (host.leaf1_ecx & bit_MOVBE ? 0u : ISA_EMULATE_MOVBE) | (host.leaf7_ebx & bit_BMI ? 0u : ISA_EMULATE_BMI1);
+}
+
 int isa_missing_sets(IsaHostFeatures host, int emulated, char *out, size_t size) {
     /* LZCNT runs as BSR on hosts without it instead of trapping, so it cannot be emulated. TZCNT runs as BSF without
      * BMI1, which differs only for a zero input. */

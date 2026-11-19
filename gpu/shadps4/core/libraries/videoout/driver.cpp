@@ -712,8 +712,12 @@ bool VideoOutDriver::SubmitFlip(VideoOutPort* port, s32 index, s64 flip_arg,
     }
 
     if (!is_eop) {
-        // Non EOP flips can arrive from any thread so ask GPU thread to perform them
-        liverpool->SendCommand([=, this]() { SubmitFlipInternal(port, index, flip_arg, is_eop); });
+        // Non EOP flips can arrive from any thread so ask GPU thread to perform them. The fences
+        // deferred to the recording threads are written before the guest can see the flip.
+        liverpool->SendCommand([=, this]() {
+            liverpool->WaitDeferredWrites();
+            SubmitFlipInternal(port, index, flip_arg, is_eop);
+        });
     } else {
         SubmitFlipInternal(port, index, flip_arg, is_eop);
     }

@@ -170,6 +170,7 @@ private:
         u32 depth_control = 0;
         bool depth_valid = false;
         bool stencil_valid = false;
+        std::array<s32, 2> scissor_extent{};
         bool operator==(const BeginSignature&) const = default;
     };
     BeginSignature MakeBeginSignature(const GraphicsPipeline* pipeline) const;
@@ -189,7 +190,6 @@ private:
     void UpdateViewportScissorState() const;
     void UpdateDepthStencilState() const;
     /// sotb: the squaring pipeline of a scaled MIN/MAX blend when this draw can use it.
-    vk::Pipeline SquarePass(const GraphicsPipeline& pipeline) const;
     void UpdatePrimitiveState(bool is_indexed) const;
     void UpdateRasterizationState() const;
     void UpdateColorBlendingState(const GraphicsPipeline* pipeline) const;
@@ -224,8 +224,12 @@ private:
     const AmdGpu::ComputeProgram& CsRegs() const;
     static void RunDrawPacket(void* rasterizer, const u8* packet, u32 size);
     struct RingBinding;
-    void CollectRingBindings(const Shader::Info& stage, const PreparedDraw* prepared,
+    void CollectRingBindings(const Shader::Info& stage, const PreparedStage* prepared_stage,
                              boost::container::static_vector<RingBinding, Shader::NUM_BUFFERS>& out);
+    const PreparedStage* FindPreparedDrawStage(const Shader::Info& stage,
+                                               const PreparedDraw* prepared) const;
+    void NoteStageWrites(const Shader::Info& stage, const PreparedStage* prepared_stage);
+    void ResolvePendingWrites();
     void PrintPipeStats();
     /// The registers of the draw being recorded: stage B's copy there, else Liverpool's.
     const AmdGpu::Regs& Regs() const;
@@ -475,6 +479,9 @@ private:
     std::vector<PendingWrite> pending_writes;
     VAddr pending_min = ~VAddr{0}, pending_max = 0; ///< bounds of pending_writes
     u32 pending_checks = 0;
+    /// Position of writes noted while their packet is built: not reached until it is committed.
+    static constexpr u64 UnresolvedWrite = ~u64{0};
+    bool noting_packet = false;
     u64 proxy_samples = 0; ///< texture bindings that read a scene proxy (statistics)
     bool PendingWriteOverlaps(VAddr address, u64 size);
     /// Stage B: the ring bindings of the stages of the packet being recorded.

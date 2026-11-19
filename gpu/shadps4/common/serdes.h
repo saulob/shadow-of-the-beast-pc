@@ -6,10 +6,20 @@
 #include "common/assert.h"
 #include "common/types.h"
 
+#include <concepts>
 #include <cstddef>
+#include <cstring>
+#include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace Serialization {
+
+/// A blob ends before what it describes, or counts more elements than it holds. Cache loaders
+/// catch it and drop the entry.
+struct CorruptData : std::runtime_error {
+    CorruptData() : std::runtime_error{"Invalid or corrupted deserialization container"} {}
+};
 
 template <typename T>
 concept Container = requires(T t) {
@@ -41,9 +51,19 @@ struct Archive {
         return container.data() + offset;
     }
 
+    [[nodiscard]] size_t Remaining() const {
+        return offset <= container.size() ? container.size() - offset : 0;
+    }
+
+    /// Checks that `size` bytes are left, without adding to the offset (which could wrap).
+    void Require(size_t size) const {
+        if (size > Remaining()) {
+            throw CorruptData{};
+        }
+    }
+
     void Advance(size_t size) {
-        ASSERT_MSG(offset + size <= container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        Require(size);
         offset += size;
     }
 
@@ -57,10 +77,10 @@ struct Archive {
     }
 
     Archive() = default;
-    explicit Archive(std::vector<u8>&& v) : container{v} {}
+    explicit Archive(std::vector<u8>&& v) : container{std::move(v)} {}
 
 private:
-    u32 offset{};
+    size_t offset{};
     std::vector<u8> container{};
 
     friend struct Writer;
@@ -105,8 +125,7 @@ struct Writer {
 struct Reader {
     template <typename T>
     void Read(T* ptr, size_t size) {
-        ASSERT_MSG(ar.offset + size <= ar.container.size(),
-                   "Invalid or corrupted deserialization container/shader cache");
+        ar.Require(size);
         std::memcpy(reinterpret_cast<void*>(ptr), ar.CurrPtr(), size);
         ar.Advance(size);
     }
@@ -121,7 +140,15 @@ struct Reader {
     void Read(auto& v) {
         size_t num_elements{};
         Read(num_elements);
-        for (int i = 0; i < num_elements; ++i) {
+        // Every element takes at least one byte, and a fixed-capacity container cannot hold more
+        // than it has.
+        ar.Require(num_elements);
+        if constexpr (requires { v.max_size(); }) {
+            if (num_elements > v.max_size() - v.size()) {
+                throw CorruptData{};
+            }
+        }
+        for (size_t i = 0; i < num_elements; ++i) {
             v.emplace_back();
             Read(v.back());
         }
@@ -130,6 +157,7 @@ struct Reader {
     void Read(std::string& s) {
         size_t length{};
         Read(length);
+        ar.Require(length);
         s.resize(length);
         Read(s.data(), length);
     }

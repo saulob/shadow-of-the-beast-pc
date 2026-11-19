@@ -22,6 +22,8 @@ static bool IsSharedAccess(const IR::Inst& inst) {
     case IR::Opcode::SharedAtomicUMin32:
     case IR::Opcode::SharedAtomicSMax32:
     case IR::Opcode::SharedAtomicUMax32:
+    case IR::Opcode::SharedAtomicFMin32:
+    case IR::Opcode::SharedAtomicFMax32:
     case IR::Opcode::SharedAtomicInc32:
     case IR::Opcode::SharedAtomicDec32:
     case IR::Opcode::SharedAtomicAnd32:
@@ -66,6 +68,8 @@ IR::Type CalculateSharedMemoryTypes(IR::Program& program) {
             case IR::Opcode::SharedAtomicUMin32:
             case IR::Opcode::SharedAtomicSMax32:
             case IR::Opcode::SharedAtomicUMax32:
+            case IR::Opcode::SharedAtomicFMin32:
+            case IR::Opcode::SharedAtomicFMax32:
             case IR::Opcode::SharedAtomicInc32:
             case IR::Opcode::SharedAtomicDec32:
             case IR::Opcode::SharedAtomicAnd32:
@@ -166,6 +170,12 @@ void SharedMemoryToStoragePass(IR::Program& program, const RuntimeInfo& runtime_
                     ir.BufferAtomicIMax(handle, address, inst.Arg(1), is_signed, {}));
                 continue;
             }
+            case IR::Opcode::SharedAtomicFMin32:
+                inst.ReplaceUsesWithAndRemove(ir.BufferAtomicFMin(handle, address, inst.Arg(1), {}));
+                continue;
+            case IR::Opcode::SharedAtomicFMax32:
+                inst.ReplaceUsesWithAndRemove(ir.BufferAtomicFMax(handle, address, inst.Arg(1), {}));
+                continue;
             case IR::Opcode::SharedAtomicInc32:
                 inst.ReplaceUsesWithAndRemove(ir.BufferAtomicInc(handle, address, {}));
                 continue;

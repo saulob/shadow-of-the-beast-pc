@@ -21,6 +21,7 @@ OPCODE(ReadConstBuffer,                                     U32,            Opaq
 OPCODE(Barrier,                                             Void,                                                                                           )
 OPCODE(WorkgroupMemoryBarrier,                              Void,                                                                                           )
 OPCODE(DeviceMemoryBarrier,                                 Void,                                                                                           )
+OPCODE(SubgroupBarrier,                                     Void,                                                                                           )
 
 // Geometry shader specific
 OPCODE(EmitVertex,                                          Void,                                                                                           )
@@ -46,6 +47,8 @@ OPCODE(SharedAtomicUMin64,                                  U64,            U32,
 OPCODE(SharedAtomicSMax32,                                  U32,            U32,            U32,                                                            )
 OPCODE(SharedAtomicSMax64,                                  U64,            U32,            U64,                                                            )
 OPCODE(SharedAtomicUMax32,                                  U32,            U32,            U32,                                                            )
+OPCODE(SharedAtomicFMax32,                                  F32,            U32,            F32,                                                            )
+OPCODE(SharedAtomicFMin32,                                  F32,            U32,            F32,                                                            )
 OPCODE(SharedAtomicUMax64,                                  U64,            U32,            U64,                                                            )
 OPCODE(SharedAtomicInc32,                                   U32,            U32,                                                                            )
 OPCODE(SharedAtomicInc64,                                   U64,            U32,                                                                            )
@@ -66,6 +69,8 @@ OPCODE(GetScalarRegister,                                   U32,            Scal
 OPCODE(SetScalarRegister,                                   Void,           ScalarReg,      U32,                                                            )
 OPCODE(GetVectorRegister,                                   U32,            VectorReg,                                                                      )
 OPCODE(SetVectorRegister,                                   Void,           VectorReg,      U32,                                                            )
+OPCODE(VMovRelS,                                            U32,            VectorReg,      U32,                                                            )
+OPCODE(VMovRelD,                                            Void,           VectorReg,      U32,            U32,                                            )
 OPCODE(GetVirtualRegister,                                  Opaque,         VirtualReg,                                                                     )
 OPCODE(SetVirtualRegister,                                  Void,           VirtualReg,     Opaque,                                                         )
 OPCODE(GetGotoVariable,                                     U1,             U32,                                                                            )
@@ -104,6 +109,7 @@ OPCODE(UndefU32x2,                                          U32x2,              
 OPCODE(UndefU32x3,                                          U32x3,                                                                                            )
 OPCODE(UndefU32x4,                                          U32x4,                                                                                            )
 OPCODE(UndefF32,                                            F32,                                                                                            )
+OPCODE(UndefF32x2,                                          F32x2,                                                                                          )
 OPCODE(UndefU64,                                            U64,                                                                                            )
 
 // Buffer operations
@@ -316,7 +322,6 @@ OPCODE(FPCmpClass32,                                        U1,             F32,
 // Integer operations
 OPCODE(IAdd32,                                              U32,            U32,            U32,                                                            )
 OPCODE(IAdd64,                                              U64,            U64,            U64,                                                            )
-OPCODE(IAddCarry32,                                         U32x2,          U32,            U32,                                                            )
 OPCODE(ISub32,                                              U32,            U32,            U32,                                                            )
 OPCODE(ISub64,                                              U64,            U64,            U64,                                                            )
 OPCODE(IMul32,                                              U32,            U32,            U32,                                                            )
@@ -449,12 +454,16 @@ OPCODE(ImageAtomicXor32,                                    U32,            Opaq
 OPCODE(ImageAtomicExchange32,                               U32,            Opaque,         Opaque,         U32,                                            )
 OPCODE(ImageAtomicCmpSwap32,                                U32,            Opaque,         Opaque,         U32,            U32,                            )
 
-// Cube operations - optional, usable if profile.supports_native_cube_calc
-OPCODE(CubeFaceIndex,                                       F32,            F32x3,                                                                          )
+// Cube operations
+OPCODE(CubeFaceIndex,                                       F32,            F32,            F32,            F32,                                            )
+OPCODE(CubeFaceCoordS,                                      F32,            F32,            F32,            F32,                                            )
+OPCODE(CubeFaceCoordT,                                      F32,            F32,            F32,            F32,                                            )
+OPCODE(CubeFaceMajorAxis,                                   F32,            F32,            F32,            F32,                                            )
 
 // Warp operations
 OPCODE(LaneId,                                              U32,                                                                                            )
-OPCODE(WarpId,                                              U32,                                                                                            )
+OPCODE(WaveId,                                              U32,                                                                                            )
+OPCODE(SubgroupId,                                          U32,                                                                                            )
 OPCODE(QuadBroadcast,                                       U32,            U32,            U32                                                             )
 OPCODE(Shuffle,                                             U32,            U32,            U32                                                             )
 OPCODE(ShuffleXor,                                          U32,            U32,            U32,                                                            )

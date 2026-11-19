@@ -3,6 +3,9 @@
 
 #pragma once
 
+#include <algorithm>
+#include <cstddef>
+
 template <size_t N, typename C = char>
 struct StringLiteral {
     static constexpr size_t len = N;

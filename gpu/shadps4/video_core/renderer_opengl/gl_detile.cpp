@@ -44,13 +44,14 @@ constexpr bool HasTileSplitRotation(AmdGpu::ArrayMode mode) {
 
 } // namespace
 
-SurfaceTiler::SurfaceTiler(const TilingParams& params, u32 pitch_, u32 height_)
+SurfaceTiler::SurfaceTiler(const TilingParams& params, u32 pitch_, u32 height_, bool micro_tiled)
     : array_mode{params.array_mode}, num_bits{params.num_bits}, num_samples{params.num_samples},
       bank_swizzle{params.bank_swizzle}, pitch{pitch_}, height{height_},
       micro_mode{AmdGpu::GetMicroTileMode(params.tile_mode)},
-      thickness{AmdGpu::GetMicroTileThickness(params.array_mode)},
+      thickness{micro_tiled ? std::min(AmdGpu::GetMicroTileThickness(params.array_mode), 4u)
+                            : AmdGpu::GetMicroTileThickness(params.array_mode)},
       micro_tile_bytes{MicroTileWidth * MicroTileHeight * thickness * num_bits * num_samples / 8},
-      macro_tiled{AmdGpu::IsMacroTiled(params.array_mode)} {
+      macro_tiled{AmdGpu::IsMacroTiled(params.array_mode) && !micro_tiled} {
     if (!macro_tiled) {
         return;
     }

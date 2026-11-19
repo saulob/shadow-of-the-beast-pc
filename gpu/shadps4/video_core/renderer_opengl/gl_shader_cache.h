@@ -31,10 +31,8 @@ struct StageModule {
 };
 
 struct StageLocations {
-    GLint user_data = -1;
     GLint buffers = -1;
     std::vector<GLuint> sampler_units;
-    std::optional<std::array<u32, Shader::NUM_USER_DATA_REGS>> sent_user_data;
     std::optional<std::array<std::array<u32, 2>, Shader::NUM_BUFFERS>> sent_buffers;
 };
 

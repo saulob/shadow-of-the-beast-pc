@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <span>
 #include <type_traits>
 #include <utility>
@@ -11,6 +12,7 @@
 #include "common/func_traits.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
 #include "shader_recompiler/backend/spirv/emit_spirv_instructions.h"
+#include "shader_recompiler/backend/spirv/geometry_output.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
 #include "shader_recompiler/frontend/translate/translate.h"
 #include "shader_recompiler/ir/basic_block.h"
@@ -43,7 +45,7 @@ static constexpr spv::ExecutionMode GetInputPrimitiveType(AmdGpu::PrimitiveType 
 static constexpr spv::ExecutionMode GetOutputPrimitiveType(AmdGpu::GsOutputPrimitiveType type) {
     switch (type) {
     case AmdGpu::GsOutputPrimitiveType::PointList:
-        return spv::ExecutionMode::OutputVertices;
+        return spv::ExecutionMode::OutputPoints;
     case AmdGpu::GsOutputPrimitiveType::LineStrip:
         return spv::ExecutionMode::OutputLineStrip;
     case AmdGpu::GsOutputPrimitiveType::TriangleStrip:
@@ -144,6 +146,8 @@ Id TypeId(const EmitContext& ctx, IR::Type type) {
         return ctx.U32[4];
     case IR::Type::F32:
         return ctx.F32[1];
+    case IR::Type::F32x2:
+        return ctx.F32[2];
     case IR::Type::U64:
         return ctx.U64;
     default:
@@ -286,6 +290,12 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     if (info.has_image_gather) {
         ctx.AddCapability(spv::Capability::ImageGatherExtended);
     }
+    if (std::ranges::any_of(info.images, [&](const ImageResource& image) {
+            return image.GetSharp(info).GetViewType(image.is_array) ==
+                   AmdGpu::ImageType::Color2DMsaaArray;
+        })) {
+        ctx.AddCapability(spv::Capability::ImageMSArray);
+    }
     if (info.has_image_query) {
         ctx.AddCapability(spv::Capability::ImageQuery);
     }
@@ -294,7 +304,7 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
         ctx.AddExtension("SPV_EXT_shader_atomic_float_min_max");
         ctx.AddCapability(spv::Capability::AtomicFloat32MinMaxEXT);
     }
-    if (info.uses_lane_id) {
+    if (info.uses_lane_id || info.uses_subgroup_id) {
         ctx.AddCapability(spv::Capability::GroupNonUniform);
     }
     if (info.uses_group_quad) {
@@ -366,8 +376,7 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
         ctx.AddCapability(spv::Capability::PhysicalStorageBufferAddresses);
         ctx.AddExtension("SPV_KHR_physical_storage_buffer");
     }
-    const auto shared_type_count = std::popcount(static_cast<u32>(info.shared_types));
-    if (shared_type_count > 1 && profile.supports_workgroup_explicit_memory_layout) {
+    if (info.uses_aliased_shared_memory && profile.supports_workgroup_explicit_memory_layout) {
         ctx.AddExtension("SPV_KHR_workgroup_memory_explicit_layout");
         ctx.AddCapability(spv::Capability::WorkgroupMemoryExplicitLayoutKHR);
         ctx.AddCapability(spv::Capability::WorkgroupMemoryExplicitLayout16BitAccessKHR);
@@ -387,7 +396,8 @@ void SetupCapabilities(const Info& info, const Profile& profile, const RuntimeIn
     }
 }
 
-void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
+void DefineEntryPoint(const Info& info, const RuntimeInfo& runtime_info, EmitContext& ctx,
+                      Id main) {
     const std::span interfaces(ctx.interfaces.data(), ctx.interfaces.size());
     spv::ExecutionModel execution_model{};
     switch (info.sw_stage) {
@@ -417,7 +427,7 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
                                        : spv::ExecutionMode::VertexOrderCw);
         break;
     }
-    case SwStage::Fragment:
+    case SwStage::Fragment: {
         execution_model = spv::ExecutionModel::Fragment;
         if (ctx.profile.lower_left_origin_mode) {
             ctx.AddExecutionMode(main, spv::ExecutionMode::OriginLowerLeft);
@@ -427,16 +437,27 @@ void DefineEntryPoint(const Info& info, EmitContext& ctx, Id main) {
         if (info.has_discard) {
             ctx.AddCapability(spv::Capability::DemoteToHelperInvocation);
         }
-        if (info.stores.GetAny(IR::Attribute::Depth)) {
+        const bool stores_depth = info.stores.GetAny(IR::Attribute::Depth);
+        if (stores_depth) {
             ctx.AddExecutionMode(main, spv::ExecutionMode::DepthReplacing);
         }
+        if (runtime_info.hw.fs.depth_before_shader) {
+            // Early tests would ignore exported depth/stencil and the discards that emulate clip
+            // distances, so those shaders keep late tests.
+            const bool stores_stencil = info.stores.Get(IR::Attribute::StencilRef) &&
+                                        ctx.profile.supports_shader_stencil_export;
+            if (!stores_depth && !stores_stencil && !runtime_info.hw.fs.clip_distance_emulation) {
+                ctx.AddExecutionMode(main, spv::ExecutionMode::EarlyFragmentTests);
+            }
+        }
         break;
+    }
     case SwStage::Geometry:
         execution_model = spv::ExecutionModel::Geometry;
         ctx.AddExecutionMode(main, GetInputPrimitiveType(ctx.runtime_info.hw.gs.in_primitive));
         ctx.AddExecutionMode(main, GetOutputPrimitiveType(ctx.runtime_info.hw.gs.out_primitive[0]));
         ctx.AddExecutionMode(main, spv::ExecutionMode::OutputVertices,
-                             ctx.runtime_info.hw.gs.output_vertices);
+                             GeometryOutputVertices(info, ctx.runtime_info, ctx.profile));
         ctx.AddExecutionMode(main, spv::ExecutionMode::Invocations,
                              ctx.runtime_info.hw.gs.num_invocations);
         break;
@@ -658,12 +679,12 @@ std::vector<u32> EmitSPIRV(const Profile& profile, const RuntimeInfo& runtime_in
                            const IR::Program& program, Bindings& binding) {
     EmitContext ctx{profile, runtime_info, program.info, binding};
     const Id main{DefineMain(ctx, program)};
-    DefineEntryPoint(program.info, ctx, main);
+    DefineEntryPoint(program.info, runtime_info, ctx, main);
     SetupCapabilities(program.info, profile, runtime_info, ctx);
     SetupFloatMode(ctx, profile, runtime_info, main);
     PatchPhiNodes(program, ctx);
-    binding.user_data += program.info.ud_mask.NumRegs();
-    return ctx.Assemble();
+    std::vector<u32> code = ctx.Assemble();
+    return code;
 }
 
 Id EmitPhi(EmitContext& ctx, IR::Inst* inst) {

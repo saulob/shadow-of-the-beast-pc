@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include "common/alignment.h"
 #include "common/assert.h"
 #include "common/div_ceil.h"
 #include "shader_recompiler/backend/spirv/spirv_emit_context.h"
@@ -13,8 +14,10 @@
 #include <fmt/format.h>
 #include <spirv/unified1/spirv.hpp11>
 
+#include <algorithm>
 #include <numbers>
 #include <string_view>
+#include <tuple>
 
 namespace Shader::Backend::SPIRV {
 namespace {
@@ -152,7 +155,8 @@ void EmitContext::DefineArithmeticTypes() {
     u16_zero_value = Constant(U16, 0U);
     u32_one_value = ConstU32(1U);
     u32_zero_value = ConstU32(0U);
-    f32_zero_value = ConstF32(0.0f);
+    f32_one_value = ConstF32(1.f);
+    f32_zero_value = ConstF32(0.f);
     u64_one_value = Constant(U64, 1ULL);
     u64_zero_value = Constant(U64, 0ULL);
 
@@ -312,7 +316,13 @@ void EmitContext::DefineInputs() {
     if (info.uses_lane_id) {
         subgroup_local_invocation_id = DefineVariable(
             U32[1], spv::BuiltIn::SubgroupLocalInvocationId, spv::StorageClass::Input);
-        Decorate(subgroup_local_invocation_id, spv::Decoration::Flat);
+        // Vertex shader inputs must not be decorated Flat.
+        if (sw_stage != SwStage::Vertex) {
+            Decorate(subgroup_local_invocation_id, spv::Decoration::Flat);
+        }
+    }
+    if (info.uses_subgroup_id) {
+        subgroup_id = DefineVariable(U32[1], spv::BuiltIn::SubgroupId, spv::StorageClass::Input);
     }
     if (info.loads.GetAny(IR::Attribute::SubgroupLtMask)) {
         subgroup_lt_mask =
@@ -380,9 +390,11 @@ void EmitContext::DefineInputs() {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth = DefineVariable(F32[2], spv::BuiltIn::BaryCoordSmoothAMD,
                                                    spv::StorageClass::Input);
-            } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
-                bary_coord =
-                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+            } else if (profile.supports_fragment_shader_barycentric) {
+                if (!ValidId(bary_coord)) {
+                    bary_coord = DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR,
+                                                spv::StorageClass::Input);
+                }
             }
         }
         if (info.loads.GetAny(IR::Attribute::BaryCoordPullModel)) {
@@ -407,9 +419,11 @@ void EmitContext::DefineInputs() {
             if (profile.supports_amd_shader_explicit_vertex_parameter) {
                 bary_coord_smooth_sample = DefineVariable(
                     F32[2], spv::BuiltIn::BaryCoordSmoothSampleAMD, spv::StorageClass::Input);
-            } else if (profile.supports_fragment_shader_barycentric && !ValidId(bary_coord)) {
-                bary_coord =
-                    DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR, spv::StorageClass::Input);
+            } else if (profile.supports_fragment_shader_barycentric) {
+                if (!ValidId(bary_coord)) {
+                    bary_coord = DefineVariable(F32[3], spv::BuiltIn::BaryCoordKHR,
+                                                spv::StorageClass::Input);
+                }
                 // we would need sample_index to interpolate the bary_coord later
                 if (!ValidId(sample_index)) {
                     sample_index =
@@ -775,35 +789,29 @@ void EmitContext::DefineOutputs() {
 void EmitContext::DefinePushDataBlock() {
     // Create push constants block for instance steps rates
     const Id struct_type{Name(TypeStruct(F32[1], F32[1], F32[1], F32[1], U32[4], U32[4], U32[4],
-                                         U32[4], U32[4], U32[4], U32[2], U32[1], U32[1]),
+                                         U32[2], U32[1], U32[1]),
                               "AuxData")};
     Decorate(struct_type, spv::Decoration::Block);
     MemberName(struct_type, PushData::XOffsetIndex, "xoffset");
     MemberName(struct_type, PushData::YOffsetIndex, "yoffset");
     MemberName(struct_type, PushData::XScaleIndex, "xscale");
     MemberName(struct_type, PushData::YScaleIndex, "yscale");
-    MemberName(struct_type, PushData::UdRegsIndex + 0, "ud_regs0");
-    MemberName(struct_type, PushData::UdRegsIndex + 1, "ud_regs1");
-    MemberName(struct_type, PushData::UdRegsIndex + 2, "ud_regs2");
-    MemberName(struct_type, PushData::UdRegsIndex + 3, "ud_regs3");
     MemberName(struct_type, PushData::BufOffsetIndex + 0, "buf_offsets0");
     MemberName(struct_type, PushData::BufOffsetIndex + 1, "buf_offsets1");
     MemberName(struct_type, PushData::BufOffsetIndex + 2, "buf_offsets2");
+    MemberName(struct_type, PushData::BufOffsetIndex + 3, "buf_offsets3");
     MemberDecorate(struct_type, PushData::XOffsetIndex, spv::Decoration::Offset, 0U);
     MemberDecorate(struct_type, PushData::YOffsetIndex, spv::Decoration::Offset, 4U);
     MemberDecorate(struct_type, PushData::XScaleIndex, spv::Decoration::Offset, 8U);
     MemberDecorate(struct_type, PushData::YScaleIndex, spv::Decoration::Offset, 12U);
-    MemberDecorate(struct_type, PushData::UdRegsIndex + 0, spv::Decoration::Offset, 16U);
-    MemberDecorate(struct_type, PushData::UdRegsIndex + 1, spv::Decoration::Offset, 32U);
-    MemberDecorate(struct_type, PushData::UdRegsIndex + 2, spv::Decoration::Offset, 48U);
-    MemberDecorate(struct_type, PushData::UdRegsIndex + 3, spv::Decoration::Offset, 64U);
-    MemberDecorate(struct_type, PushData::BufOffsetIndex + 0, spv::Decoration::Offset, 80U);
-    MemberDecorate(struct_type, PushData::BufOffsetIndex + 1, spv::Decoration::Offset, 96U);
-    MemberDecorate(struct_type, PushData::BufOffsetIndex + 2, spv::Decoration::Offset, 112U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 0, spv::Decoration::Offset, 16U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 1, spv::Decoration::Offset, 32U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 2, spv::Decoration::Offset, 48U);
+    MemberDecorate(struct_type, PushData::BufOffsetIndex + 3, spv::Decoration::Offset, 64U);
     MemberName(struct_type, PushData::MotionParamIndex, "motion_param");
-    MemberDecorate(struct_type, PushData::MotionParamIndex, spv::Decoration::Offset, 120U);
+    MemberDecorate(struct_type, PushData::MotionParamIndex, spv::Decoration::Offset, 72U);
     MemberName(struct_type, PushData::SceneSizeIndex, "scene_size");
-    MemberDecorate(struct_type, PushData::SceneSizeIndex, spv::Decoration::Offset, 124U);
+    MemberDecorate(struct_type, PushData::SceneSizeIndex, spv::Decoration::Offset, 76U);
     push_data_block = DefineVar(struct_type, spv::StorageClass::PushConstant);
     Name(push_data_block, "push_data");
     interfaces.push_back(push_data_block);
@@ -980,8 +988,17 @@ spv::ImageFormat GetFormat(const AmdGpu::Image& image) {
         image.GetNumberFmt() == AmdGpu::NumberFormat::Float) {
         return spv::ImageFormat::Rgba32f;
     }
-    UNREACHABLE_MSG("Unknown storage format data_format={}, num_format={}", image.GetDataFmt(),
-                    image.GetNumberFmt());
+    // Only reached by descriptors that hold other data: use a 32-bit format of the sampled class.
+    LOG_WARNING(Render_Recompiler, "Unknown storage format data_format={}, num_format={}",
+                image.GetDataFmt(), image.GetNumberFmt());
+    switch (AmdGpu::GetNumberClass(image.GetNumberFmt())) {
+    case AmdGpu::NumberClass::Sint:
+        return spv::ImageFormat::R32i;
+    case AmdGpu::NumberClass::Uint:
+        return spv::ImageFormat::R32ui;
+    default:
+        return spv::ImageFormat::R32f;
+    }
 }
 
 Id ImageType(EmitContext& ctx, const ImageResource& desc, Id sampled_type) {
@@ -991,15 +1008,16 @@ Id ImageType(EmitContext& ctx, const ImageResource& desc, Id sampled_type) {
     const u32 sampled = desc.is_written ? 2 : 1;
     switch (type) {
     case AmdGpu::ImageType::Color1D:
-        return ctx.TypeImage(sampled_type, spv::Dim::Dim1D, false, false, false, sampled, format);
-    case AmdGpu::ImageType::Color1DArray:
-        return ctx.TypeImage(sampled_type, spv::Dim::Dim1D, false, true, false, sampled, format);
     case AmdGpu::ImageType::Color2D:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, false, false, sampled, format);
+    case AmdGpu::ImageType::Color1DArray:
     case AmdGpu::ImageType::Color2DArray:
+    case AmdGpu::ImageType::Cube:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, true, false, sampled, format);
     case AmdGpu::ImageType::Color2DMsaa:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, false, true, sampled, format);
+    case AmdGpu::ImageType::Color2DMsaaArray:
+        return ctx.TypeImage(sampled_type, spv::Dim::Dim2D, false, true, true, sampled, format);
     case AmdGpu::ImageType::Color3D:
         return ctx.TypeImage(sampled_type, spv::Dim::Dim3D, false, false, false, sampled, format);
     default:
@@ -1064,29 +1082,25 @@ void EmitContext::DefineImagesAndSamplers() {
 }
 
 void EmitContext::DefineSharedMemory() {
-    const auto num_types = std::popcount(static_cast<u32>(info.shared_types));
-    if (num_types == 0) {
+    if (info.hw_stage != HwStage::Compute) {
         return;
     }
-    ASSERT(info.hw_stage == HwStage::Compute);
-    const u32 shared_memory_size =
-        runtime_info.hw.cs.shared_memory_size + info.shared_memory_scratch_size;
 
-    const auto make_type = [&](IR::Type type, Id element_type, u32 element_size,
-                               std::string_view name) {
-        if (False(info.shared_types & type)) {
-            // Skip unused shared memory types.
-            return std::make_tuple(Id{}, Id{}, Id{});
-        }
+    // Guest accesses are bounded by the LDS size the dispatch declared; the host scratch
+    // segment lives behind it and is never reachable from guest offsets.
+    shared_memory_size = runtime_info.hw.cs.shared_memory_size;
+    info.shared_guest_segment.size = std::max(shared_memory_size, 8U);
 
-        const u32 num_elements{Common::DivCeil(shared_memory_size, element_size)};
+    const auto make_type = [&](Id element_type, u32 element_size, std::string_view name, u32 offset,
+                               u32 segment_size) -> SharedSpv {
+        const u32 num_elements{Common::DivCeil(segment_size, element_size)};
         const Id array_type{TypeArray(element_type, ConstU32(num_elements))};
 
         const auto mem_type = [&] {
-            if (num_types > 1) {
+            if (info.uses_aliased_shared_memory) {
                 const Id struct_type{TypeStruct(array_type)};
                 Decorate(struct_type, spv::Decoration::Block);
-                MemberDecorate(struct_type, 0u, spv::Decoration::Offset, 0u);
+                MemberDecorate(struct_type, 0u, spv::Decoration::Offset, offset);
                 return struct_type;
             } else {
                 return array_type;
@@ -1099,19 +1113,53 @@ void EmitContext::DefineSharedMemory() {
         Name(variable, name);
         interfaces.push_back(variable);
 
-        if (num_types > 1) {
+        if (info.uses_aliased_shared_memory) {
             Decorate(array_type, spv::Decoration::ArrayStride, element_size);
             Decorate(variable, spv::Decoration::Aliased);
         }
 
-        return std::make_tuple(variable, element_pointer, pointer);
+        return SharedSpv{variable, element_pointer};
     };
-    std::tie(shared_memory_u16, shared_u16, shared_memory_u16_type) =
-        make_type(IR::Type::U16, U16, 2u, "shared_mem_u16");
-    std::tie(shared_memory_u32, shared_u32, shared_memory_u32_type) =
-        make_type(IR::Type::U32, U32[1], 4u, "shared_mem_u32");
-    std::tie(shared_memory_u64, shared_u64, shared_memory_u64_type) =
-        make_type(IR::Type::U64, U64, 8u, "shared_mem_u64");
+
+    const std::array<std::tuple<IR::Type, PointerType, Id, u32, const char*>,
+                     static_cast<size_t>(PointerType::NumAlias)>
+        type_table{{
+            {IR::Type::U8, PointerType::U8, U8, 1u, "u8"},
+            {IR::Type::U16, PointerType::U16, U16, 2u, "u16"},
+            {IR::Type::U32, PointerType::U32, U32[1], 4u, "u32"},
+            {IR::Type::F32, PointerType::F32, F32[1], 4u, "f32"},
+            {IR::Type::U64, PointerType::U64, U64, 8u, "u64"},
+            {IR::Type::F64, PointerType::F64, F64[1], 8u, "f64"},
+        }};
+
+    u32 offset = 0;
+
+    const auto define_segment = [&](const Info::SharedMemorySegment& segment_info,
+                                    SharedDefinition& def, std::string_view segment_name) {
+        if (segment_info.size == 0 || segment_info.used_types == IR::Type::Void) {
+            return;
+        }
+        ASSERT(segment_info.alignment != 0);
+
+        offset = Common::AlignUp(offset, segment_info.alignment);
+        const u32 segment_size = Common::AlignUp(segment_info.size, segment_info.alignment);
+        IR::Type remaining_types = segment_info.used_types;
+        for (const auto& [ir_type, pointer_type, element_type, element_size, element_name] :
+             type_table) {
+            if (False(remaining_types & ir_type)) {
+                continue;
+            }
+            def.Alias(pointer_type) = make_type(element_type, element_size,
+                                                std::string(segment_name) + element_name, offset,
+                                                segment_size);
+            remaining_types &= ~ir_type;
+        }
+        ASSERT(remaining_types == IR::Type::Void);
+        offset += segment_size;
+    };
+
+    define_segment(info.shared_guest_segment, shared_guest_def, "shared_guest_");
+    define_segment(info.shared_scratch_segment, shared_scratch_def, "shared_scratch_");
 }
 
 Id EmitContext::DefineFloat32ToUfloatM5(u32 mantissa_bits, const std::string_view name) {

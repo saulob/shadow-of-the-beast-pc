@@ -12,6 +12,9 @@ size_t isa_emulate(const uint8_t *code, uint64_t rip, uint64_t gpr[16], uint64_t
 /* CPUID leaf 1 ECX, leaf 7 EBX and leaf 0x80000001 ECX. */
 typedef struct { uint32_t leaf1_ecx, leaf7_ebx, ext1_ecx; } IsaHostFeatures;
 IsaHostFeatures isa_host_features(void);
+enum { ISA_EMULATE_MOVBE = 1, ISA_EMULATE_BMI1 = 2 };
+/* The instruction sets of the above that the host lacks. */
+unsigned isa_emulation_needed(IsaHostFeatures host);
 /* The Jaguar instruction sets the host lacks, comma separated in out: the ones isa_emulate works around when emulated
  * is nonzero, otherwise the ones the game cannot run without. Returns how many. */
 int isa_missing_sets(IsaHostFeatures host, int emulated, char *out, size_t size);

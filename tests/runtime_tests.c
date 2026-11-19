@@ -168,6 +168,32 @@ static ABI void *wait_on_cond(void *argument) {
     return (void *)7;
 }
 
+static void *cancel_mutex, *cancel_cond;
+static ABI void *wait_until_cancelled(void *argument) {
+    (void)argument;
+    mutex_acquire(&cancel_mutex);
+    atomic_store(&stage, 1);
+    for (;;) cond_block(&cancel_cond, &cancel_mutex);
+    return NULL;
+}
+
+/* A cancelled thread leaves its condition wait and joins with the canceled result; a finished one reports ESRCH. */
+static void test_cancellation(void) {
+    GuestThread *t = NULL;
+    void *result = NULL;
+    HandleFn cancel_thread = thread_export("qBDmpCyGssE#libkernel");
+    CHECK(mutex_create(&cancel_mutex, NULL, "cancel") == 0);
+    CHECK(cond_create(&cancel_cond, NULL, "cancel") == 0);
+    atomic_store(&stage, 0);
+    CHECK(create_thread(&t, NULL, wait_until_cancelled, NULL, "cancelled") == 0);
+    wait_until(&stage, 1);
+    CHECK(wait_state_after(t, "condition variable") != NULL);
+    CHECK(cancel_thread(t) == 0);
+    CHECK(join_thread(t, &result) == 0);
+    CHECK((uintptr_t)result == 1);
+    CHECK(cancel_thread(runtime_thread_current()) == KERR(1));
+}
+
 static void test_mutexes_and_wait_states(void) {
     void *attr = NULL, *recursive = NULL;
     CHECK(mutex_create(&shared_mutex, NULL, "shared") == 0);
@@ -210,6 +236,7 @@ static void test_mutexes_and_wait_states(void) {
     CHECK(cond_wake_all(&shared_cond) == 0);
     mutex_release(&shared_mutex);
     CHECK(join_thread(waiter, &result) == 0 && (uintptr_t)result == 7);
+    test_cancellation();
 
     mutex_acquire(&shared_mutex);
     CHECK(cond_block_timed(&shared_cond, &shared_mutex, 2000) == KERR(60));

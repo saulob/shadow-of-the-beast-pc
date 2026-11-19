@@ -8,6 +8,7 @@
 #include "shader_recompiler/ir/ir_emitter.h"
 #include "shader_recompiler/ir/opcodes.h"
 #include "shader_recompiler/ir/operand_helper.h"
+#include "shader_recompiler/ir/passes/gds_lane_offset.h"
 #include "shader_recompiler/ir/passes/ir_passes.h"
 #include "shader_recompiler/ir/passes/resource_pass.h"
 #include "shader_recompiler/ir/program.h"
@@ -103,6 +104,7 @@ public:
         const u32 index{Add(buffer_resources, desc, [&desc](const auto& existing) {
             return desc.sharp_fetch == existing.sharp_fetch && desc.post_op == existing.post_op &&
                    desc.post_op_dw1_mask == existing.post_op_dw1_mask &&
+                   desc.post_op_dw2_shift == existing.post_op_dw2_shift &&
                    desc.buffer_type == existing.buffer_type;
         })};
         auto& buffer = buffer_resources[index];
@@ -130,7 +132,7 @@ public:
         const u32 index{Add(sampler_resources, desc, [this, &desc](const auto& existing) {
             return desc.sharp_fetch == existing.sharp_fetch && desc.post_op == existing.post_op &&
                    desc.post_op_tsharp_dw3_off == existing.post_op_tsharp_dw3_off &&
-                   desc.is_depth == existing.is_depth;
+                   desc.is_depth == existing.is_depth && desc.is_cube == existing.is_cube;
         })};
         return index;
     }
@@ -208,6 +210,7 @@ void PatchBufferSharp(const ResourceDiscovery& resource, Info& info, Descriptors
                         inst.GetOpcode() == IR::Opcode::StoreBufferFormatF32,
         .post_op = resource.sharps[0].post_op,
         .post_op_dw1_mask = resource.sharps[0].post_op_data.dw1_mask,
+        .post_op_dw2_shift = resource.sharps[0].post_op_data.dw2_shift,
     });
 
     // Replace handle with binding index in buffer resource list.
@@ -265,12 +268,14 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
             case AmdGpu::ImageType::Color2D:      // x, y, [lod]
                 return body->Arg(2);
             case AmdGpu::ImageType::Color2DArray: // x, y, slice, [lod]
+            case AmdGpu::ImageType::Cube:         // x, y, face, [lod]
             case AmdGpu::ImageType::Color3D:      // x, y, z, [lod]
                 return body->Arg(3);
-            case AmdGpu::ImageType::Color2DMsaa:
-            case AmdGpu::ImageType::Color2DMsaaArray:
             default:
-                UNREACHABLE_MSG("Invalid image type {}", view_type);
+                // An MSAA view with a mip argument only comes from a descriptor holding other
+                // data.
+                LOG_WARNING(Render_Recompiler, "Mip storage on image type {}", view_type);
+                return body->Arg(2);
             }
         }();
 
@@ -284,9 +289,23 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
 
     // Patch image instruction if image is FMask.
     if (AmdGpu::IsFmask(image.GetDataFmt())) {
-        ASSERT_MSG(!is_written, "FMask storage instructions are not supported");
-
         IR::IREmitter ir{*inst.GetParent(), IR::Block::InstructionList::s_iterator_to(inst)};
+        if (is_written) {
+            // FMask is never written: such a store comes from a descriptor holding other data.
+            LOG_WARNING(Render_Recompiler, "Dropped a store to an FMask image (shader {:#x})",
+                        info.pgm_hash);
+            if (is_atomic) {
+                const IR::Opcode opcode = inst.GetOpcode();
+                const bool is_float = opcode == IR::Opcode::ImageAtomicFMax32 ||
+                                      opcode == IR::Opcode::ImageAtomicFMin32;
+                inst.ReplaceUsesWithAndRemove(is_float ? IR::Value{ir.Imm32(0.0f)}
+                                                       : IR::Value{ir.Imm32(0u)});
+            } else {
+                inst.Invalidate();
+            }
+            return;
+        }
+
         switch (inst.GetOpcode()) {
         case IR::Opcode::ImageRead:
         case IR::Opcode::ImageSampleRaw: {
@@ -327,114 +346,11 @@ void PatchImageSharp(const ResourceDiscovery& resource, Info& info, Descriptors&
             .post_op_tsharp_dw3_off =
                 lod_prod.IsEmpty() ? UNKNOWN_LOCATION : SharpLocationFromSource(lod_prod.Inst()),
             .is_depth = bool(inst_info.is_depth), // true for the _C (compare) opcodes
+            .is_cube = image.GetViewType(image_res.is_array) == AmdGpu::ImageType::Cube,
         });
         inst.SetArg(0, ir.Imm32(image_binding | sampler_binding << 16));
     } else {
         inst.SetArg(0, ir.Imm32(image_binding));
-    }
-}
-
-static IR::Value IsMbcntWithExec(IR::Value value, bool is_hi, IR::U1 exec) {
-    if (value.IsImmediate()) {
-        return {};
-    }
-    const IR::Inst* inst = value.Inst();
-    if (inst->GetOpcode() != IR::Opcode::MaskedBitCount32 || inst->Arg(0).IsImmediate() ||
-        inst->Arg(2).U1() != is_hi) {
-        return {};
-    }
-    IR::Inst* prod = inst->Arg(0).Inst();
-    if (prod->GetOpcode() != IR::Opcode::CompositeExtractU32x2 || prod->Arg(0).IsImmediate() ||
-        prod->Arg(1).U32() != is_hi) {
-        return {};
-    }
-    prod = prod->Arg(0).Inst();
-    if (prod->GetOpcode() != IR::Opcode::UnpackUint2x32 || prod->Arg(0).IsImmediate()) {
-        return {};
-    }
-    prod = prod->Arg(0).Inst();
-    if (prod->GetOpcode() != IR::Opcode::Ballot || (prod->Arg(0) != exec && !is_hi)) {
-        return {};
-    }
-    return inst->Arg(1);
-}
-
-static IR::Use FindUniqueUser(IR::Inst* inst, auto&& pred) {
-    IR::Use picked{};
-    for (auto& use : inst->Uses()) {
-        if (pred(use.user)) {
-            ASSERT(!picked.user);
-            picked = use;
-        }
-    }
-    ASSERT(picked.user);
-    return picked;
-}
-
-static void RemoveAppendBufferLaneOffset(IR::Inst& vx) {
-    // Attempt to detect either of the following patterns and
-    // remove the lane id addition/subtraction to ds instruction.
-    //
-    // ds_append       vX gds
-    // v_mbcnt_hi_u32_b32 vY, exec_hi, vX
-    // v_mbcnt_lo_u32_b32 idx, exec_lo, vY
-    //
-    // v_mbcnt_hi_u32_b32 vY, exec_hi, 0
-    // v_mbcnt_lo_u32_b32 vZ, exec_lo, vY
-    // ds_append       vX gds
-    // v_add_i32       idx, vcc, vX, vZ
-    //
-    // ds_consume      vX gds
-    // v_mbcnt_hi_u32_b32 vY, exec_hi, 0
-    // v_mbcnt_lo_u32_b32 vZ, exec_lo, vY
-    // v_sub_i32       vK, vcc, vX, vZ
-    // v_subrev_i32    idx, vcc, 1, vK / v_add_i32    idx, vcc, -1, vK
-    //
-    // ds_consume      vX gds
-    // v_mbcnt_hi_u32_b32 vY, exec_hi, 0
-    // v_mbcnt_lo_u32_b32 vZ, exec_lo, vY
-    // v_add_i32       vK, vcc, -1, vX
-    // v_sub_i32       idx, vcc, vK, vZ
-
-    IR::U1 exec{vx.Arg(1)};
-    const auto uses = vx.Uses();
-    for (auto use : uses) {
-        const auto& [user, operand] = use;
-        if (user->GetOpcode() == IR::Opcode::MaskedBitCount32) {
-            // First pattern
-            ASSERT(vx.GetOpcode() == IR::Opcode::DataAppend);
-            IR::Inst* vy = user;
-            auto vx_2 = IsMbcntWithExec(IR::Value{vy}, true, exec);
-            ASSERT(!vx_2.IsEmpty() && vx_2 == IR::Value{&vx});
-            const auto [idx, operand] = FindUniqueUser(vy, [](const IR::Inst* inst) {
-                return inst->GetOpcode() == IR::Opcode::MaskedBitCount32;
-            });
-            auto vy_2 = IsMbcntWithExec(IR::Value{idx}, false, exec);
-            ASSERT(!vy_2.IsEmpty() && vy_2 == IR::Value{vy});
-            idx->ReplaceUsesWithAndRemove(IR::Value{&vx});
-            continue;
-        }
-        if (user->GetOpcode() != IR::Opcode::IAdd32 && user->GetOpcode() != IR::Opcode::ISub32) {
-            continue;
-        }
-        const auto other = user->Arg(1 - operand);
-        if (other.IsImmediate()) {
-            ASSERT_MSG(other.U32() == 1u || other.U32() == std::numeric_limits<u32>::max() &&
-                                                vx.GetOpcode() == IR::Opcode::DataConsume,
-                       "Unexpected constant offset {} to DataConsume result", other.U32());
-            use = FindUniqueUser(user, [](const IR::Inst* inst) {
-                return inst->GetOpcode() == IR::Opcode::IAdd32 ||
-                       inst->GetOpcode() == IR::Opcode::ISub32;
-            });
-        }
-
-        // Other patterns
-        auto vz = user->Arg(1 - operand);
-        auto vy = IsMbcntWithExec(vz, false, exec);
-        ASSERT(!vy.IsEmpty() && !vy.IsImmediate());
-        auto zero_const = IsMbcntWithExec(vy, true, exec);
-        ASSERT(!zero_const.IsEmpty() && zero_const.IsImmediate() && zero_const.U32() == 0u);
-        vz.Inst()->ReplaceUsesWithAndRemove(IR::Value{u32{0u}});
     }
 }
 
@@ -489,6 +405,12 @@ void PatchGlobalDataShareAccess(IR::Inst& inst, Info& info, Descriptors& descrip
             ir.BufferAtomicIMax(handle, address_dwords, inst.Arg(1), is_signed, {}));
         break;
     }
+    case IR::Opcode::SharedAtomicFMin32:
+        inst.ReplaceUsesWith(ir.BufferAtomicFMin(handle, address_dwords, inst.Arg(1), {}));
+        break;
+    case IR::Opcode::SharedAtomicFMax32:
+        inst.ReplaceUsesWith(ir.BufferAtomicFMax(handle, address_dwords, inst.Arg(1), {}));
+        break;
     case IR::Opcode::SharedAtomicInc32:
         inst.ReplaceUsesWith(ir.BufferAtomicInc(handle, address_dwords, {}));
         break;
@@ -574,9 +496,12 @@ IR::U32 CalculateBufferAddress(IR::IREmitter& ir, const IR::Inst& inst, const In
         const IR::U32 vgpr_index = IR::GetBufferIndexArg(&inst);
         index = ir.IAdd(index, vgpr_index);
     }
-    if (buffer.add_tid_enable) {
-        ASSERT_MSG(info.sw_stage == SwStage::Compute,
-                   "Thread ID buffer addressing is not supported outside of compute.");
+    if (buffer.add_tid_enable && info.sw_stage != SwStage::Compute) {
+        // Thread ID addressing is only used in compute; elsewhere the V# holds other data.
+        LOG_WARNING(Render_Recompiler,
+                    "Thread ID buffer addressing outside of compute ignored (shader {:#x})",
+                    info.pgm_hash);
+    } else if (buffer.add_tid_enable) {
         const IR::U32 thread_id{ir.LaneId()};
         index = ir.IAdd(index, thread_id);
     }
@@ -632,20 +557,6 @@ void PatchBufferArgs(IR::Inst& inst, Info& info) {
     IR::IREmitter ir{*inst.GetParent(), IR::Block::InstructionList::s_iterator_to(inst)};
     inst.SetArg(IR::LoadBufferArgs::Address,
                 CalculateBufferAddress(ir, inst, info, buffer, buffer.stride));
-}
-
-IR::Value FixCubeCoords(IR::IREmitter& ir, const AmdGpu::Image& image, const IR::Value& x,
-                        const IR::Value& y, const IR::Value& face) {
-    if (!image.IsCube()) {
-        return ir.CompositeConstruct(x, y, face);
-    }
-    // AMD cube math results in coordinates in the range [1.0, 2.0]. We need
-    // to convert this to the range [0.0, 1.0] to get correct results.
-    const auto fixed_x = ir.FPSub(IR::F32{x}, ir.Imm32(1.f));
-    const auto fixed_y = ir.FPSub(IR::F32{y}, ir.Imm32(1.f));
-    const auto fixed_face =
-        ir.FPFma(ir.FPFloor(ir.FPDiv(IR::F32{face}, ir.Imm32(8.f))), ir.Imm32(-2.f), IR::F32{face});
-    return ir.CompositeConstruct(fixed_x, fixed_y, fixed_face);
 }
 
 void PatchImageSampleArgs(IR::Inst& inst, Info& info, const ImageResource& image_res,
@@ -710,6 +621,8 @@ void PatchImageSampleArgs(IR::Inst& inst, Info& info, const ImageResource& image
         case AmdGpu::ImageType::Color2D:
         case AmdGpu::ImageType::Color2DMsaa:
         case AmdGpu::ImageType::Color2DArray:
+        case AmdGpu::ImageType::Color2DMsaaArray:
+        case AmdGpu::ImageType::Cube:
             return ir.CompositeConstruct(read(0), read(8));
         case AmdGpu::ImageType::Color3D:
             return ir.CompositeConstruct(read(0), read(8), read(16));
@@ -732,6 +645,7 @@ void PatchImageSampleArgs(IR::Inst& inst, Info& info, const ImageResource& image
         case AmdGpu::ImageType::Color2D:
         case AmdGpu::ImageType::Color2DMsaa:
         case AmdGpu::ImageType::Color2DArray:
+        case AmdGpu::ImageType::Cube:
             // (du/dx, dv/dx), (du/dy, dv/dy)
             addr_reg = addr_reg + 4;
             return {ir.CompositeConstruct(get_addr_reg(addr_reg - 4), get_addr_reg(addr_reg - 3)),
@@ -783,15 +697,23 @@ void PatchImageSampleArgs(IR::Inst& inst, Info& info, const ImageResource& image
             addr_reg = addr_reg + 1;
             return get_coord(addr_reg - 1, 0);
         case AmdGpu::ImageType::Color1DArray: // x, slice
-        case AmdGpu::ImageType::Color2D:      // x, y
-        case AmdGpu::ImageType::Color2DMsaa:  // x, y
+            // The slice index is never normalized.
+            addr_reg = addr_reg + 2;
+            return ir.CompositeConstruct(get_coord(addr_reg - 2, 0), get_addr_reg(addr_reg - 1));
+        case AmdGpu::ImageType::Color2D:     // x, y
+        case AmdGpu::ImageType::Color2DMsaa: // x, y
             addr_reg = addr_reg + 2;
             return ir.CompositeConstruct(get_coord(addr_reg - 2, 0), get_coord(addr_reg - 1, 1));
         case AmdGpu::ImageType::Color2DArray: // x, y, slice
+        case AmdGpu::ImageType::Cube:         // x, y, face
+            // The slice and face indices are never normalized.
             addr_reg = addr_reg + 3;
-            // Note we can use FixCubeCoords with fallthrough cases since it checks for image type.
-            return FixCubeCoords(ir, image, get_coord(addr_reg - 3, 0), get_coord(addr_reg - 2, 1),
-                                 get_addr_reg(addr_reg - 1));
+            return ir.CompositeConstruct(get_coord(addr_reg - 3, 0), get_coord(addr_reg - 2, 1),
+                                         get_addr_reg(addr_reg - 1));
+        case AmdGpu::ImageType::Color2DMsaaArray: // x, y, slice
+            addr_reg = addr_reg + 3;
+            return ir.CompositeConstruct(get_coord(addr_reg - 3, 0), get_coord(addr_reg - 2, 1),
+                                         ir.ConvertFToU(32, get_addr_reg(addr_reg - 1)));
         case AmdGpu::ImageType::Color3D: // x, y, z
             addr_reg = addr_reg + 3;
             return ir.CompositeConstruct(get_coord(addr_reg - 3, 0), get_coord(addr_reg - 2, 1),
@@ -883,8 +805,11 @@ void PatchImageArgs(IR::Inst& inst, Info& info) {
                     inst_info.has_lod.Assign(false);
                     skip_lod = true;
                 } else {
-                    UNREACHABLE_MSG(
-                        "Encountered a _mip instruction with MSAA image, and mipid is non-zero");
+                    // Only a descriptor holding other data gets here.
+                    LOG_WARNING(Render_Recompiler,
+                                "_mip instruction on an MSAA image with a non-zero mip, ignored");
+                    inst_info.has_lod.Assign(false);
+                    skip_lod = true;
                 }
             }
             return {ir.CompositeConstruct(body->Arg(0), body->Arg(1)), body->Arg(skip_lod ? 3 : 2)};
@@ -892,6 +817,7 @@ void PatchImageArgs(IR::Inst& inst, Info& info) {
         case AmdGpu::ImageType::Color2DArray:     // x, y, slice, [lod]
         case AmdGpu::ImageType::Color2DMsaaArray: // x, y, slice. (sample is passed on different
                                                   // argument)
+        case AmdGpu::ImageType::Cube:             // x, y, face, [lod]
         case AmdGpu::ImageType::Color3D:          // x, y, z, [lod]
             return {ir.CompositeConstruct(body->Arg(0), body->Arg(1), body->Arg(2)), body->Arg(3)};
         default:

@@ -75,6 +75,10 @@ public:
         ImageViewInfo view_info;
         BindingType type{BindingType::Texture};
 
+        bool IsSubrectTexture(const ImageInfo& source) const {
+            return type == BindingType::Texture && info.IsSubrectOf(source);
+        }
+
         ImageDesc() = default;
         ImageDesc(const AmdGpu::Image& image, const Shader::ImageResource& desc)
             : info{image, desc}, view_info{image, desc},
@@ -151,6 +155,9 @@ public:
     /// Retrieves the depth target with specified properties
     [[nodiscard]] ImageView& FindDepthTarget(ImageId image_id, const ImageDesc& desc);
 
+    /// Links the stencil plane of a depth surface to its depth image.
+    void AssociateStencil(ImageId depth_id, const ImageInfo& depth_info);
+
     /// sotb: whether UpdateImage has nothing to do for this image (its fast path).
     [[nodiscard]] bool IsUpToDate(ImageId image_id) const {
         const Image& image = slot_images[image_id];
@@ -220,7 +227,7 @@ public:
 
     /// Retrieves the image with the specified id.
     Image* TryGetImage(ImageId id, u64 uid) {
-        if (!id || !slot_images.is_allocated(id)) return nullptr;
+        if (!id || !slot_images.IsAllocated(id)) return nullptr;
         auto& image = slot_images[id];
         return !uid || image.image_uid == uid ? &image : nullptr;
     }
@@ -240,7 +247,7 @@ public:
         if (!image.depth_id) {
             return {};
         }
-        if (slot_images.is_allocated(image.depth_id)) {
+        if (slot_images.IsAllocated(image.depth_id)) {
             auto& depth_image = slot_images[image.depth_id];
             if (depth_image.image_uid == image.depth_uid &&
                 depth_image.flags & ImageFlagBits::Registered) {
@@ -256,12 +263,40 @@ public:
         CMask,
         FMask,
         HTile,
+        CpuRevokedCMask,
     };
+
+    struct MetaDataInfo {
+        MetaType type;
+        ImageId owner_id{};
+        u64 owner_uid{};
+        u32 num_samples = 1;
+        s32 clear_mask = -1;
+    };
+
+    /// Returns metadata information if the specified address belongs to a live image.
+    std::optional<MetaDataInfo> GetMetaInfo(VAddr address) const {
+        std::scoped_lock lock{meta_mutex};
+        const auto it = surface_metas.find(address);
+        if (it == surface_metas.end() || it->second.type == MetaType::CpuRevokedCMask) {
+            return std::nullopt;
+        }
+        const auto& meta = it->second;
+        if (!meta.owner_id || !slot_images.IsAllocated(meta.owner_id)) {
+            return std::nullopt;
+        }
+        const auto& owner = slot_images[meta.owner_id];
+        if (owner.image_uid != meta.owner_uid || False(owner.flags & ImageFlagBits::Registered)) {
+            return std::nullopt;
+        }
+        return meta;
+    }
 
     /// Returns meta type if the specified address is a metadata surface.
     std::optional<MetaType> IsMeta(VAddr address) const {
+        std::scoped_lock lock{meta_mutex};
         auto it = surface_metas.find(address);
-        if (it != surface_metas.end()) {
+        if (it != surface_metas.end() && it->second.type != MetaType::CpuRevokedCMask) {
             return it->second.type;
         }
         return std::nullopt;
@@ -269,8 +304,9 @@ public:
 
     /// Returns true if a slice of the specified metadata surface has been cleared.
     bool IsMetaCleared(VAddr address, u32 slice) const {
+        std::scoped_lock lock{meta_mutex};
         const auto& it = surface_metas.find(address);
-        if (it != surface_metas.end()) {
+        if (it != surface_metas.end() && it->second.type != MetaType::CpuRevokedCMask) {
             return it.value().clear_mask & (1u << slice);
         }
         return false;
@@ -278,8 +314,9 @@ public:
 
     /// Clears all slices of the specified metadata surface.
     bool ClearMeta(VAddr address) {
+        std::scoped_lock lock{meta_mutex};
         auto it = surface_metas.find(address);
-        if (it != surface_metas.end()) {
+        if (it != surface_metas.end() && it->second.type != MetaType::CpuRevokedCMask) {
             it.value().clear_mask = u32(-1);
             return true;
         }
@@ -288,8 +325,9 @@ public:
 
     /// Updates the state of a slice of the specified metadata surface.
     bool TouchMeta(VAddr address, u32 slice, bool is_clear) {
+        std::scoped_lock lock{meta_mutex};
         auto it = surface_metas.find(address);
-        if (it != surface_metas.end()) {
+        if (it != surface_metas.end() && it->second.type != MetaType::CpuRevokedCMask) {
             if (is_clear) {
                 it.value().clear_mask |= 1u << slice;
             } else {
@@ -299,6 +337,9 @@ public:
         }
         return false;
     }
+
+    /// Revokes CMask metadata whose base lies inside a span just overwritten from the CPU.
+    void RevokeCmaskForCpuUpload(VAddr address, u64 size);
 
     /// Runs the garbage collector.
     void RunGarbageCollector();
@@ -341,6 +382,21 @@ public:
         });
         for (const ImageId image_id : images) {
             slot_images[image_id].flags &= ~ImageFlagBits::Picked;
+        }
+    }
+
+    /// Visits the images starting exactly at cpu_addr; an image is registered on its first page.
+    template <typename Func>
+    void ForEachImageWithAddress(VAddr cpu_addr, Func&& func) {
+        const auto it = page_table.find(cpu_addr >> Traits::PageBits);
+        if (it == nullptr) {
+            return;
+        }
+        for (const ImageId image_id : *it) {
+            Image& image = slot_images[image_id];
+            if (image.info.guest_address == cpu_addr) {
+                func(image_id, image);
+            }
         }
     }
 
@@ -397,6 +453,12 @@ private:
 
     void MarkAsMaybeDirty(ImageId image_id, Image& image);
 
+    /// Marks the image CPU dirty if the guest wrote to its untracked head or tail page.
+    void MarkDirtyIfEdgesModified(Image& image);
+
+    void RegisterMeta(VAddr address, MetaDataInfo info);
+    void UnregisterMeta(VAddr address, u64 owner_uid);
+
     /// Removes the image and any views/surface metas that reference it.
     void DeleteImage(ImageId image_id);
 
@@ -422,10 +484,10 @@ private:
     AmdGpu::Liverpool* liverpool;
     BufferCache& buffer_cache;
     PageManager& tracker;
-    BlitHelper blit_helper;
-    TileManager tile_manager;
     Common::SlotVector<Image> slot_images;
     Common::SlotVector<ImageView> slot_image_views;
+    BlitHelper blit_helper;
+    TileManager tile_manager;
     tsl::robin_map<u64, Sampler> samplers;
     std::unordered_set<ImageId> download_images;
     u64 total_used_memory = 0;
@@ -481,7 +543,7 @@ private:
     tsl::robin_map<VAddr, AliasState> alias_states;
     std::atomic<u64> alias_generation{};
     [[nodiscard]] bool IsLiveImage(ImageId image_id, u64 image_uid) const {
-        return image_id && slot_images.is_allocated(image_id) &&
+        return image_id && slot_images.IsAllocated(image_id) &&
                slot_images[image_id].image_uid == image_uid;
     }
     template <typename Func>
@@ -510,10 +572,7 @@ private:
     std::atomic<u64> registry_generation{0};
     std::mutex samplers_mutex;
     std::mutex download_images_mutex;
-    struct MetaDataInfo {
-        MetaType type;
-        s32 clear_mask = -1;
-    };
+    mutable std::mutex meta_mutex;
     tsl::robin_map<VAddr, MetaDataInfo> surface_metas;
 };
 

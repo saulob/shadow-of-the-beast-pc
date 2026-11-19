@@ -54,12 +54,65 @@ Scheduler::~Scheduler() {
 #endif
 }
 
+static bool SameAttachment(const RenderAttachment& a, const RenderAttachment& b) {
+    return a.image ? a.image == b.image : a.image_view && a.image_view == b.image_view;
+}
+
+// Stages through which two rendering instances share an attachment (an image, or a view whose
+// image is unknown).
+static vk::PipelineStageFlags2 SharedAttachmentStages(const RenderState& a, const RenderState& b) {
+    vk::PipelineStageFlags2 stages{};
+    for (u32 i = 0; i < a.num_color_attachments; ++i) {
+        for (u32 j = 0; j < b.num_color_attachments; ++j) {
+            if (SameAttachment(a.color_attachments[i], b.color_attachments[j])) {
+                stages |= vk::PipelineStageFlagBits2::eColorAttachmentOutput;
+            }
+        }
+    }
+    const auto& da = a.depth_stencil_attachment;
+    const auto& db = b.depth_stencil_attachment;
+    if ((da.has_depth || da.has_stencil) && (db.has_depth || db.has_stencil) &&
+        SameAttachment(da, db)) {
+        stages |= vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                  vk::PipelineStageFlagBits2::eLateFragmentTests;
+    }
+    return stages;
+}
+
 void Scheduler::BeginRendering(const RenderState& new_state) {
     if (is_rendering && render_state == new_state) {
         return;
     }
+    // Rasterization order holds only inside one rendering instance, and image barriers do not
+    // count attachment writes: the next instance on the same attachment waits for them here.
+    const vk::PipelineStageFlags2 shared =
+        has_render_state ? SharedAttachmentStages(render_state, new_state)
+                         : vk::PipelineStageFlags2{};
     EndRendering();
+    if (shared) {
+        const bool color = bool(shared & vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+        const bool depth = bool(shared & vk::PipelineStageFlagBits2::eLateFragmentTests);
+        const vk::MemoryBarrier2 barrier = {
+            .srcStageMask = shared,
+            .srcAccessMask =
+                (color ? vk::AccessFlagBits2::eColorAttachmentWrite : vk::AccessFlagBits2{}) |
+                (depth ? vk::AccessFlagBits2::eDepthStencilAttachmentWrite : vk::AccessFlagBits2{}),
+            .dstStageMask = shared,
+            .dstAccessMask =
+                (color ? vk::AccessFlagBits2::eColorAttachmentRead |
+                             vk::AccessFlagBits2::eColorAttachmentWrite
+                       : vk::AccessFlagBits2{}) |
+                (depth ? vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                             vk::AccessFlagBits2::eDepthStencilAttachmentWrite
+                       : vk::AccessFlagBits2{}),
+        };
+        Record([barrier](vk::CommandBuffer cmdbuf) {
+            cmdbuf.pipelineBarrier2(
+                vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+        });
+    }
     is_rendering = true;
+    has_render_state = true;
     render_state = new_state;
 
     std::array<vk::RenderingAttachmentInfo, 8> color_attachments;
@@ -75,11 +128,20 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     }
 
     const auto& db = render_state.depth_stencil_attachment;
+    // An aspect a read-only layout cannot write is not stored either: STORE writes even when no
+    // draw did.
+    const bool depth_read_only =
+        !db.depth_clear && (db.image_layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
+                            db.image_layout == vk::ImageLayout::eDepthReadOnlyOptimal ||
+                            db.image_layout == vk::ImageLayout::eDepthReadOnlyStencilAttachmentOptimal);
+    const bool stencil_read_only =
+        !db.stencil_clear && (db.image_layout == vk::ImageLayout::eDepthStencilReadOnlyOptimal ||
+                              db.image_layout == vk::ImageLayout::eStencilReadOnlyOptimal);
     const vk::RenderingAttachmentInfo depth_attachment = {
         .imageView = db.image_view,
         .imageLayout = db.image_layout,
         .loadOp = db.depth_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
+        .storeOp = depth_read_only ? vk::AttachmentStoreOp::eNone : vk::AttachmentStoreOp::eStore,
         .clearValue =
             vk::ClearValue{.depthStencil = vk::ClearDepthStencilValue{.depth = std::bit_cast<float>(
                                                                           db.clear_value[0])}},
@@ -88,7 +150,7 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         .imageView = db.image_view,
         .imageLayout = db.image_layout,
         .loadOp = db.stencil_clear ? vk::AttachmentLoadOp::eClear : vk::AttachmentLoadOp::eLoad,
-        .storeOp = vk::AttachmentStoreOp::eStore,
+        .storeOp = stencil_read_only ? vk::AttachmentStoreOp::eNone : vk::AttachmentStoreOp::eStore,
         .clearValue = vk::ClearValue{.depthStencil =
                                          vk::ClearDepthStencilValue{.stencil = db.clear_value[1]}},
     };
@@ -107,11 +169,11 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
     };
 
     if (!recording_threaded) {
-        current_cmdbuf.beginRendering(rendering_info);
+        ReplayBeginRendering(current_cmdbuf, rendering_info);
         return;
     }
     // The attachment infos live on this stack frame: the recorded closure keeps copies.
-    Record([info = rendering_info, color_attachments, depth_attachment,
+    Record([this, info = rendering_info, color_attachments, depth_attachment,
             stencil_attachment](vk::CommandBuffer cmdbuf) mutable {
         info.pColorAttachments = color_attachments.data();
         if (info.pDepthAttachment) {
@@ -120,8 +182,27 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
         if (info.pStencilAttachment) {
             info.pStencilAttachment = &stencil_attachment;
         }
-        cmdbuf.beginRendering(info);
+        ReplayBeginRendering(cmdbuf, info);
     });
+}
+
+// vkCmdBeginRendering inside an open instance and vkCmdEndRendering outside one are invalid.
+void Scheduler::ReplayBeginRendering(vk::CommandBuffer cmdbuf, const vk::RenderingInfo& info) {
+    if (replay_rendering_open) {
+        LOG_WARNING(Render_Vulkan, "Dynamic rendering begun while an instance is open");
+        cmdbuf.endRendering();
+    }
+    replay_rendering_open = true;
+    cmdbuf.beginRendering(info);
+}
+
+void Scheduler::ReplayEndRendering(vk::CommandBuffer cmdbuf) {
+    if (!replay_rendering_open) {
+        LOG_WARNING(Render_Vulkan, "Dynamic rendering ended without an open instance");
+        return;
+    }
+    replay_rendering_open = false;
+    cmdbuf.endRendering();
 }
 
 void Scheduler::EndRendering() {
@@ -129,7 +210,7 @@ void Scheduler::EndRendering() {
         return;
     }
     is_rendering = false;
-    Record([](vk::CommandBuffer cmdbuf) { cmdbuf.endRendering(); });
+    Record([this](vk::CommandBuffer cmdbuf) { ReplayEndRendering(cmdbuf); });
 }
 
 void Scheduler::TraceDirectRecording(void* caller) {
@@ -238,14 +319,19 @@ void Scheduler::KickRecording(bool force) {
     if (full_chunks.empty() && record_chunk->Empty()) {
         return;
     }
+    // Fault handling records inline on this thread, so the current chunk is never left null.
+    std::unique_ptr<RecordChunk> filled;
+    if (!record_chunk->Empty()) {
+        filled = std::exchange(record_chunk, AcquireChunk());
+    }
     bool wake;
     {
         std::scoped_lock lk{recorder_mutex};
         for (auto& chunk : full_chunks) {
             recorder_queue.push_back(std::move(chunk));
         }
-        if (!record_chunk->Empty()) {
-            recorder_queue.push_back(std::move(record_chunk));
+        if (filled) {
+            recorder_queue.push_back(std::move(filled));
         }
         wake = recorder_sleeping;
         queued_chunks.store(recorder_queue.size(), std::memory_order_release);
@@ -254,9 +340,6 @@ void Scheduler::KickRecording(bool force) {
     // A busy recorder picks the new chunks up by itself: waking it is a syscall per draw.
     if (wake) {
         recorder_cv.notify_one();
-    }
-    if (!record_chunk) {
-        record_chunk = AcquireChunk();
     }
 }
 
@@ -392,6 +475,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     };
 
     current_cmdbuf = command_pool.Commit();
+    replay_rendering_open = false;
     Check(current_cmdbuf.begin(begin_info));
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
@@ -431,15 +515,28 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
+    if (replay_rendering_open) {
+        LOG_WARNING(Render_Vulkan, "Dynamic rendering still open at submission");
+        ReplayEndRendering(current_cmdbuf);
+    }
+    if (host_read_barrier.exchange(false, std::memory_order_relaxed)) {
+        const vk::MemoryBarrier2 barrier = {
+            .srcStageMask = vk::PipelineStageFlagBits2::eAllCommands,
+            .srcAccessMask = vk::AccessFlagBits2::eMemoryWrite,
+            .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+            .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        };
+        current_cmdbuf.pipelineBarrier2(
+            vk::DependencyInfo{.memoryBarrierCount = 1, .pMemoryBarriers = &barrier});
+    }
     Check(current_cmdbuf.end());
 
     const vk::Semaphore timeline = work_semaphore.Handle();
     info.AddSignal(timeline, signal_value);
 
-    static constexpr std::array<vk::PipelineStageFlags, 2> wait_stage_masks = {
-        vk::PipelineStageFlagBits::eAllCommands,
-        vk::PipelineStageFlagBits::eColorAttachmentOutput,
-    };
+    std::array<vk::PipelineStageFlags, std::tuple_size_v<decltype(info.wait_semas)>>
+        wait_stage_masks;
+    wait_stage_masks.fill(vk::PipelineStageFlagBits::eAllCommands);
 
     const vk::TimelineSemaphoreSubmitInfo timeline_si = {
         .waitSemaphoreValueCount = info.num_wait_semas,
@@ -461,6 +558,9 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
 
     ImGui::Core::TextureManager::Submit();
     auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
+    if (submit_result == vk::Result::eErrorDeviceLost) {
+        instance.ReportDeviceFault();
+    }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
 
     work_semaphore.Refresh();

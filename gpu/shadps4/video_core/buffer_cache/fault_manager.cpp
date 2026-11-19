@@ -112,6 +112,16 @@ void FaultManager::ProcessFaultBuffer() {
         .offset = 0,
         .size = fault_buffer_size,
     };
+    const vk::BufferMemoryBarrier2 host_barrier = {
+        .srcStageMask = vk::PipelineStageFlagBits2::eComputeShader,
+        .srcAccessMask = vk::AccessFlagBits2::eShaderWrite,
+        .dstStageMask = vk::PipelineStageFlagBits2::eHost,
+        .dstAccessMask = vk::AccessFlagBits2::eHostRead,
+        .buffer = download_buffer.Handle(),
+        .offset = offset,
+        .size = PageFaultAreaSize,
+    };
+    const std::array<vk::BufferMemoryBarrier2, 2> post_barriers = {post_barrier, host_barrier};
     const vk::DescriptorBufferInfo fault_buffer_info = {
         .buffer = fault_buffer.Handle(),
         .offset = 0,
@@ -157,8 +167,8 @@ void FaultManager::ProcessFaultBuffer() {
 
     cmdbuf.pipelineBarrier2(vk::DependencyInfo{
         .dependencyFlags = vk::DependencyFlagBits::eByRegion,
-        .bufferMemoryBarrierCount = 1,
-        .pBufferMemoryBarriers = &post_barrier,
+        .bufferMemoryBarrierCount = static_cast<u32>(post_barriers.size()),
+        .pBufferMemoryBarriers = post_barriers.data(),
     });
 
     scheduler.DeferOperation([this, mapped, area = current_area] {

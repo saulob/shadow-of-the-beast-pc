@@ -23,7 +23,7 @@ static int32_t orbis_error(int e) {
     case EINVAL: code=22; break;
     case EAGAIN: code=35; break;
     case EDEADLK: code=11; break;
-    default: fprintf(stderr, "STOP: unmapped host pthread error %d\n", e); exit(21);
+    default: fprintf(stderr, "STOP: unmapped host pthread error %d\n", e); runtime_exit(21);
     }
     return (int32_t)(UINT32_C(0x80020000) | code);
 }
@@ -194,25 +194,30 @@ static ABI int32_t cond_destroy(GuestCond **cond) {
     }
     return 0;
 }
+/* A cancelled waiter leaves pthread_cond_wait through runtime_thread_wake_condition; retired conditions and
+ * mutexes stay valid for the call. */
+static int cond_block(GuestCond *c, GuestMutex *m, const struct timespec *end, const char *what) {
+    runtime_thread_wait_begin(what);
+    int r = 0;
+    if (!runtime_thread_wait_enter(runtime_thread_wake_condition, &c->native, &m->native))
+        r = end ? pthread_cond_timedwait(&c->native, &m->native, end) : pthread_cond_wait(&c->native, &m->native);
+    runtime_thread_wait_end();
+    runtime_thread_test_cancel(what);
+    return r;
+}
 static ABI int32_t cond_wait(GuestCond **cond, GuestMutex **mutex) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
     if (!mutex || (uintptr_t)*mutex < 3) return orbis_error(EINVAL);
     ++waits;
-    runtime_thread_wait_begin("condition variable");
-    int r = pthread_cond_wait(&(*cond)->native, &(*mutex)->native);
-    runtime_thread_wait_end();
-    return orbis_error(r);
+    return orbis_error(cond_block(*cond, *mutex, NULL, "condition variable"));
 }
 static int32_t cond_wait_until(GuestCond **cond, GuestMutex **mutex, const struct timespec *end) {
     int32_t e = ensure_cond(cond);
     if (e) return e;
     if (!mutex || (uintptr_t)*mutex < 3 || !end) return orbis_error(EINVAL);
     ++waits;
-    runtime_thread_wait_begin("condition variable (timed)");
-    int r = pthread_cond_timedwait(&(*cond)->native, &(*mutex)->native, end);
-    runtime_thread_wait_end();
-    return timed_error(r);
+    return timed_error(cond_block(*cond, *mutex, end, "condition variable (timed)"));
 }
 static ABI int32_t cond_timedwait(GuestCond **cond, GuestMutex **mutex, uint32_t usec) {
     struct timespec end;

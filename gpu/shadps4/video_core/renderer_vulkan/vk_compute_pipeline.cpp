@@ -25,7 +25,10 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         .requiredSubgroupSize = 64,
     };
     const vk::PipelineShaderStageCreateInfo shader_ci = {
-        .pNext = instance.IsSubgroupSize64Supported() ? &subgroup_size_ci : nullptr,
+        .pNext = instance.IsSubgroupSize64Supported() &&
+                         instance.CanRequireSubgroupSize(vk::ShaderStageFlagBits::eCompute)
+                     ? &subgroup_size_ci
+                     : nullptr,
         .stage = vk::ShaderStageFlagBits::eCompute,
         .module = module,
         .pName = "main",
@@ -47,7 +50,8 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
         });
     }
     for (const auto& image : info->images) {
-        const u32 num_bindings = image.NumBindings(*info);
+        // A preloaded stage has no per-mip bindings (IsPreloadable) and its user data is live.
+        const u32 num_bindings = preloading ? 1 : image.NumBindings(*info);
         bindings.push_back({
             .binding = binding,
             .descriptorType = image.is_written ? vk::DescriptorType::eStorageImage
@@ -108,9 +112,15 @@ ComputePipeline::ComputePipeline(const Instance& instance, Scheduler& scheduler,
     };
     auto [pipeline_result, pipe] =
         instance.GetDevice().createComputePipelineUnique(pipeline_cache, compute_pipeline_ci);
-    ASSERT_MSG(pipeline_result == vk::Result::eSuccess, "Failed to create compute pipeline: {}",
-               vk::to_string(pipeline_result));
+    if (pipeline_result != vk::Result::eSuccess) {
+        pipe = CreateRefusedPipelineAgain(
+            [&] { return device.createComputePipelineUnique(nullptr, compute_pipeline_ci); },
+            pipeline_result, "compute pipeline", debug_str);
+    }
     pipeline = std::move(pipe);
+    if (!pipeline) {
+        return;
+    }
     SetObjectName(device, *pipeline, "Compute Pipeline {}", debug_str);
 }
 

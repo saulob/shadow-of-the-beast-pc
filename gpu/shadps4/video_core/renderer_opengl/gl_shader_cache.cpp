@@ -141,6 +141,7 @@ Shader::RuntimeInfo ShaderCache::BuildRuntimeInfo(const AmdGpu::Regs& regs, HwSt
         info.props.fp_denorm_mode16_64 = program.settings.fp_denorm_mode64;
         info.props.fp_round_mode32 = program.settings.fp_round_mode32;
         info.props.fp_round_mode16_64 = program.settings.fp_round_mode64;
+        info.props.dx10_clamp = program.settings.dx10_clamp;
     };
     if (hw_stage == HwStage::Vertex) {
         common(regs.vs_program);
@@ -161,6 +162,7 @@ Shader::RuntimeInfo ShaderCache::BuildRuntimeInfo(const AmdGpu::Regs& regs, HwSt
     info.hw.fs.addr_flags = regs.ps_input_addr;
     info.hw.fs.num_inputs = regs.num_interp;
     info.hw.fs.front_face_all_bits = regs.barycentric_control.front_face_all_bits;
+    info.hw.fs.depth_before_shader = regs.depth_shader_control.depth_before_shader;
     info.hw.fs.num_samples =
         regs.ps_input_addr.sample_coverage_ena && regs.ps_input_ena.sample_coverage_ena
             ? regs.aa_config.NumSamples()
@@ -279,9 +281,7 @@ GraphicsProgram* ShaderCache::Link(StageModule* vertex, StageModule* fragment,
     out.handle = program;
     out.vertex = vertex;
     out.fragment = fragment;
-    out.vs.user_data = gl::GetUniformLocation(program, "vs_ud");
     out.vs.buffers = gl::GetUniformLocation(program, "vs_buffers");
-    out.fs.user_data = gl::GetUniformLocation(program, "fs_ud");
     out.fs.buffers = gl::GetUniformLocation(program, "fs_buffers");
     out.transform = gl::GetUniformLocation(program, "vs_transform");
     out.flip_y = gl::GetUniformLocation(program, "vs_flip_y");
@@ -345,11 +345,12 @@ Shader::Info* ShaderCache::GetCompute(const AmdGpu::ComputeProgram& program) {
     Shader::RuntimeInfo runtime_info{};
     runtime_info.Initialize(HwStage::Compute, SwStage::Compute);
     runtime_info.props.num_user_data = program.settings.num_user_regs;
-    runtime_info.props.num_allocated_vgprs = program.settings.num_vgprs * 4;
+    runtime_info.props.num_allocated_vgprs = (program.settings.num_vgprs + 1) * 4;
     runtime_info.props.fp_denorm_mode32 = program.settings.fp_denorm_mode32;
     runtime_info.props.fp_denorm_mode16_64 = program.settings.fp_denorm_mode64;
     runtime_info.props.fp_round_mode32 = program.settings.fp_round_mode32;
     runtime_info.props.fp_round_mode16_64 = program.settings.fp_round_mode64;
+    runtime_info.props.dx10_clamp = program.settings.dx10_clamp;
     runtime_info.hw.cs.workgroup_size = {program.num_thread_x.full, program.num_thread_y.full,
                                          program.num_thread_z.full};
     runtime_info.hw.cs.tgid_enable = {program.IsTgidEnabled(0), program.IsTgidEnabled(1),

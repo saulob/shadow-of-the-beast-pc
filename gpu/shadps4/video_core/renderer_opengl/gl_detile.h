@@ -21,8 +21,9 @@ struct TilingParams {
 
 class SurfaceTiler {
 public:
-    /// `pitch` and `height` are in elements (blocks for compressed formats).
-    SurfaceTiler(const TilingParams& params, u32 pitch, u32 height);
+    /// `pitch` and `height` are in elements (blocks for compressed formats). `micro_tiled`: a mip of a
+    /// macro-tiled image too small for a macro tile, stored micro tiled.
+    SurfaceTiler(const TilingParams& params, u32 pitch, u32 height, bool micro_tiled = false);
 
     [[nodiscard]] u32 Address(u32 x, u32 y, u32 slice) const;
 

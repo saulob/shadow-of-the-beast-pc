@@ -336,9 +336,21 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
     const EXCEPTION_RECORD *record = info->ExceptionRecord;
     const DWORD code = record->ExceptionCode;
     if (code == EXCEPTION_ACCESS_VIOLATION && record->NumberParameters >= 2) {
-        if (gpu_enabled && sotbgpu_handle_fault(info, (void *)record->ExceptionInformation[1])) {
-            runtime_redzone_after_fault(info->ContextRecord);
-            return EXCEPTION_CONTINUE_EXECUTION;
+        /* GPU page tracking is resolved first, except during a speculative read: resolving a GPU page can
+         * wait for the GPU thread, which may wait for a lock the reading worker holds. That fault takes the
+         * recovery path below. */
+        if (gpu_enabled && !runtime_fault_recover) {
+            /* The GPU handlers may fault on another tracked page a level or two deep; a bug there would
+             * recurse until the stack runs out (a silent freeze). */
+            static __thread int handler_depth;
+            if (handler_depth >= 8) return fatal_exception(info);
+            ++handler_depth;
+            const int handled = sotbgpu_handle_fault(info, (void *)record->ExceptionInformation[1]);
+            --handler_depth;
+            if (handled) {
+                runtime_redzone_after_fault(info->ContextRecord);
+                return EXCEPTION_CONTINUE_EXECUTION;
+            }
         }
         if (runtime_fault_recover) {
             unsigned long long *buffer = *runtime_fault_recover;
@@ -351,8 +363,10 @@ static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
             return EXCEPTION_CONTINUE_EXECUTION;
         }
     }
+    /* A red-zone stub holds the instruction too when it was moved there. */
     if (code == EXCEPTION_ILLEGAL_INSTRUCTION && image &&
-        (uintptr_t)info->ContextRecord->Rip - (uintptr_t)image < 0x20000000) {
+        ((uintptr_t)info->ContextRecord->Rip - (uintptr_t)image < 0x20000000 ||
+         runtime_redzone_site((uintptr_t)info->ContextRecord->Rip, NULL))) {
         CONTEXT *c = info->ContextRecord;
         _Static_assert(offsetof(CONTEXT, R15) - offsetof(CONTEXT, Rax) == 15 * sizeof(DWORD64),
                        "CONTEXT register order");

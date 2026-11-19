@@ -4,6 +4,7 @@
 #pragma once
 
 #include <atomic>
+#include <bit>
 #include <cstring>
 #include "common/assert.h"
 #include "common/bit_field.h"
@@ -259,6 +260,7 @@ struct PM4CmdStrmoutBufferUpdate {
     union {
         BitField<0, 1, u32> update_memory;
         BitField<1, 2, SourceSelect> source_select;
+        BitField<7, 1, u32> data_type;
         BitField<8, 2, u32> buffer_select;
         u32 control;
     };
@@ -277,13 +279,13 @@ struct PM4CmdStrmoutBufferUpdate {
     template <typename T = u64>
     T DstAddress() const {
         ASSERT(update_memory.Value() == 1);
-        return reinterpret_cast<T>(dst_address_lo.Value() | u64(dst_address_hi & 0xFFFF) << 32);
+        return std::bit_cast<T>((u64(dst_address_lo.Value()) << 2) | (u64(dst_address_hi) << 32));
     }
 
     template <typename T = u64>
     T SrcAddress() const {
         ASSERT(source_select.Value() == SourceSelect::SrcAddress);
-        return reinterpret_cast<T>(src_address_lo.Value() | u64(src_address_hi & 0xFFFF) << 32);
+        return std::bit_cast<T>((u64(src_address_lo.Value()) << 2) | (u64(src_address_hi) << 32));
     }
 };
 
@@ -955,21 +957,27 @@ struct PM4CmdReleaseMem {
     }
 
     void SignalFence(auto&& signal_irq, auto&& gds_to_mem) const {
+        SignalFence(
+            [](void* address, u64 data, u32 num_bytes) { std::memcpy(address, &data, num_bytes); },
+            signal_irq, gds_to_mem);
+    }
+
+    void SignalFence(auto&& write_mem, auto&& signal_irq, auto&& gds_to_mem) const {
         switch (data_sel.Value()) {
         case DataSelect::Data32Low: {
-            *Address<u32*>() = DataDWord();
+            write_mem(Address<void*>(), DataDWord(), sizeof(u32));
             break;
         }
         case DataSelect::Data64: {
-            *Address<u64*>() = DataQWord();
+            write_mem(Address<void*>(), DataQWord(), sizeof(u64));
             break;
         }
         case DataSelect::GpuClock64: {
-            *Address<u64*>() = GetGpuClock64();
+            write_mem(Address<void*>(), GetGpuClock64(), sizeof(u64));
             break;
         }
         case DataSelect::PerfCounter: {
-            *Address<u64*>() = GetGpuPerfCounter();
+            write_mem(Address<void*>(), GetGpuPerfCounter(), sizeof(u64));
             break;
         }
         case DataSelect::GdsMemStore: {
@@ -1068,6 +1076,33 @@ struct PM4CmdDrawIndirect {
         BitField<0, 16, u32> start_inst_loc; ///< Offset where the CP will write the
                                              ///< StartInstanceLocation it fetched from memory
     };
+    u32 draw_initiator; ///< Draw Initiator Register
+};
+
+struct PM4CmdDrawIndirectCountMulti {
+    PM4Type3Header header; ///< header
+    u32 data_offset;       ///< Byte aligned offset where the required data structure starts
+    union {
+        u32 dw2;
+        BitField<0, 16, u32> base_vtx_loc; ///< Offset where the CP will write the
+                                           ///< BaseVertexLocation it fetched from memory
+    };
+    union {
+        u32 dw3;
+        BitField<0, 16, u32> start_inst_loc; ///< Offset where the CP will write the
+                                             ///< StartInstanceLocation it fetched from memory
+    };
+    union {
+        u32 dw4;
+        BitField<0, 16, u32> draw_index_loc; ///< register offset to write the Draw Index count
+        BitField<30, 1, u32>
+            count_indirect_enable; ///< Indicates the data structure count is in memory
+        BitField<31, 1, u32>
+            draw_index_enable; ///< Enables writing of Draw Index count to DRAW_INDEX_LOC
+    };
+    u32 count;          ///< Count of data structures to loop through before going to next packet
+    u64 count_addr;     ///< DWord aligned Address[31:2]; Valid if countIndirectEnable is set
+    u32 stride;         ///< Stride in memory from one data structure to the next
     u32 draw_initiator; ///< Draw Initiator Register
 };
 
@@ -1240,5 +1275,25 @@ struct PM4CmdCondExec {
                                                                           << 2);
     }
 };
+
+struct PM4CmdGetLodStats {
+    PM4Type3Header header;
+    union {
+        BitField<0, 16, u32> data_offset;
+        BitField<16, 16, u32> control_flags;
+        u32 control;
+    };
+    u32 addr_lo;
+    u32 addr_hi;
+
+    [[nodiscard]] VAddr Address() const {
+        return (static_cast<u64>(addr_hi) << 32) | static_cast<u64>(addr_lo);
+    }
+
+    [[nodiscard]] u32 DataOffset() const {
+        return data_offset.Value();
+    }
+};
+static_assert(sizeof(PM4CmdGetLodStats) == 0x10);
 
 } // namespace AmdGpu

@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <array>
+#include <atomic>
 #include <boost/container/small_vector.hpp>
 #include "sotb_toggles.h"
 #include "common/assert.h"
@@ -45,6 +48,49 @@ namespace VideoCore {
 constexpr size_t PM_PAGE_SIZE = 4_KB;
 constexpr size_t PM_PAGE_BITS = 12;
 
+/// Page states of the 40-bit address space, allocated per 16 MiB of addresses on first use (a
+/// dense table is 512 MiB). Chunks are published with a compare-exchange: callers hold only the
+/// lock of their own page range, and neighbouring ranges share a chunk.
+class PageStateTable {
+public:
+    static constexpr size_t NUM_PAGES = 1ULL << (40 - PM_PAGE_BITS);
+
+    PageStateTable() = default;
+    PageStateTable(const PageStateTable&) = delete;
+    PageStateTable& operator=(const PageStateTable&) = delete;
+    ~PageStateTable() {
+        for (auto& chunk : chunks) {
+            delete[] chunk.load(std::memory_order_relaxed);
+        }
+    }
+
+    VideoCore::PageState& operator[](size_t page) {
+        auto& slot = chunks[page >> CHUNK_BITS];
+        VideoCore::PageState* chunk = slot.load(std::memory_order_acquire);
+        if (!chunk) [[unlikely]] {
+            chunk = Allocate(slot);
+        }
+        return chunk[page & (CHUNK_PAGES - 1)];
+    }
+
+private:
+    static constexpr size_t CHUNK_BITS = 12;
+    static constexpr size_t CHUNK_PAGES = 1ULL << CHUNK_BITS;
+
+    static VideoCore::PageState* Allocate(std::atomic<VideoCore::PageState*>& slot) {
+        auto* fresh = new VideoCore::PageState[CHUNK_PAGES]{};
+        VideoCore::PageState* current = nullptr;
+        if (!slot.compare_exchange_strong(current, fresh, std::memory_order_acq_rel,
+                                          std::memory_order_acquire)) {
+            delete[] fresh;
+            return current;
+        }
+        return fresh;
+    }
+
+    std::array<std::atomic<VideoCore::PageState*>, (NUM_PAGES >> CHUNK_BITS)> chunks{};
+};
+
 struct PageManager::Impl {
     using PageState = VideoCore::PageState;
 
@@ -79,7 +125,8 @@ struct PageManager::Impl {
         } else {
             SotbStats::read_faults.fetch_add(1, std::memory_order_relaxed);
             SotbStats::Timer timer{SotbStats::t_read_faults};
-            return rasterizer->ReadMemory(addr, 8, is_gpu_thread);
+            return rasterizer->ReadMemory(
+                addr, std::min<u64>(8, PageManager::GetNextPageAddr(addr) - addr), is_gpu_thread);
         }
         return false;
     }
@@ -89,7 +136,11 @@ struct PageManager::Impl {
         RENDERER_TRACE;
 
         size_t page = addr >> PM_PAGE_BITS;
-        const u64 page_end = Common::DivCeil(addr + size, PM_PAGE_SIZE);
+        const u64 page_end = std::min<u64>(Common::DivCeil(addr + size, PM_PAGE_SIZE),
+                                           NUM_ADDRESS_PAGES);
+        if (page >= page_end) {
+            return;
+        }
 
         // Acquire locks for the range of pages
         const auto lock_start = locks.begin() + (page / PAGES_PER_LOCK);
@@ -221,7 +272,7 @@ struct PageManager::Impl {
         release_pending();
     }
 
-    std::array<PageState, NUM_ADDRESS_PAGES> cached_pages{};
+    PageStateTable cached_pages;
 #ifdef PTHREAD_ADAPTIVE_MUTEX_INITIALIZER_NP
     using LockType = Common::AdaptiveMutex;
 #else

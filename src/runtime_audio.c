@@ -222,6 +222,13 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
                is a sawtooth: its minimum over ~32 buffers is what gets controlled. */
             int low=2*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
+            /* A queue more than 100 ms above the target means the device stopped pulling (sleep, endpoint reset). */
+            if (p->frames>0 && (int64_t)queued>(int64_t)low+(int64_t)((uint64_t)bytes*4800u/(uint64_t)p->frames)) {
+                printf("Runtime: audio port %d dropped %.0f ms of backlog (device stalled)\n",(int)(p-ports),
+                       (double)(queued-low)*(double)period/(double)bytes/1e6);
+                SDL_ClearAudioStream(p->stream);
+                queued=0; p->window_count=0; p->adjust_ns=0;
+            }
             if (queued<(int)bytes) {
                 static const unsigned char silence[2048*8*4];
                 SDL_PutAudioStreamData(p->stream,silence,low-queued<(int)bytes ? low-queued : (int)bytes);

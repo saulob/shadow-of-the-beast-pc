@@ -5,6 +5,7 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -133,6 +134,11 @@ private:
     bool WriteRectInputs(const GraphicsProgram& program, u32 first_instance, u32 guest_instances);
     bool VerticesReachable(u64 highest_vertex);
     GuestIndices GuestIndexRange(u32 index_offset);
+    struct SequentialRects {
+        u32 first_vertex;
+        u32 vertices;
+    };
+    std::optional<SequentialRects> SequentialIndexedRects(u32 index_offset);
     void BeginStreams();
     void CommitStreams();
     void ForgetStreamCopies();

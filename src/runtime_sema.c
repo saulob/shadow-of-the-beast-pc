@@ -32,7 +32,7 @@ static Sema *find(uint32_t id) {
     return NULL;
 }
 static void host_check(int e) {
-    if (e) { fprintf(stderr,"STOP: semaphore host error %d\n",e); exit(21); }
+    if (e) { fprintf(stderr,"STOP: semaphore host error %d\n",e); runtime_exit(21); }
 }
 /* Waits use this clock for their deadlines. winpthreads condition variables accept only
  * CLOCK_REALTIME (pthread_condattr_setclock(CLOCK_MONOTONIC) fails with EINVAL). */
@@ -49,7 +49,7 @@ static uint64_t now_ns(void) {
 static ABI int32_t sem_create(uint32_t *out,const char *name,uint32_t attr,
                               int32_t initial,int32_t maximum,const void *options) {
     if (!out || !name || attr>2 || initial<0 || maximum<=0 || initial>maximum) return ERR(22);
-    if (options) { fputs("STOP: semaphore options are not implemented\n",stderr); exit(21); }
+    if (options) { fputs("STOP: semaphore options are not implemented\n",stderr); runtime_exit(21); }
     Sema *s=calloc(1,sizeof(*s));
     if (!s) return ERR(12);
     pthread_mutex_lock(&lock);
@@ -64,6 +64,7 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
     pthread_mutex_lock(&lock);
     Sema *s=find(id);
     int32_t result=0;
+    int cancelled=0;
     if (!s) result=ERR(3);
     else if (need<=0 || need>s->maximum) result=ERR(22);
     else if (s->count>=need) { s->count-=need; ++acquired; }
@@ -88,7 +89,14 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
         struct timespec end={.tv_sec=(time_t)(deadline/1000000000),.tv_nsec=(long)(deadline%1000000000)};
         runtime_thread_wait_begin("semaphore");
         while (!w.done) {
+            if (runtime_thread_wait_enter(runtime_thread_wake_condition,&w.event,&lock)) {
+                Waiter **p=&s->first;
+                while (*p!=&w) p=&(*p)->next;
+                *p=w.next; w.result=ERR(60); w.done=1; cancelled=1;
+                break;
+            }
             int e=timeout ? pthread_cond_timedwait(&w.event,&lock,&end) : pthread_cond_wait(&w.event,&lock);
+            runtime_thread_wait_end();
             if (e==ETIMEDOUT && !w.done) {
                 Waiter **p=&s->first;
                 while (*p!=&w) p=&(*p)->next;
@@ -106,6 +114,7 @@ static int32_t wait_count(uint32_t id,int32_t need,uint32_t *timeout,int block) 
         if (!--s->active && s->deleted) free(s);
     }
     pthread_mutex_unlock(&lock);
+    if (cancelled) runtime_thread_test_cancel("semaphore");
     return result;
 }
 static ABI int32_t sem_wait(uint32_t id,int32_t need,uint32_t *timeout) { return wait_count(id,need,timeout,1); }

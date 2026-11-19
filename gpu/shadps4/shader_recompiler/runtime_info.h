@@ -73,6 +73,7 @@ struct SwVertexRuntimeInfo {
     u32 step_rate_1;
     u16 vertex_sgpr_offset{};
     u16 instance_sgpr_offset{};
+    bool is_indirect{};
     bool tess_emulated_primitive{};
 
     bool operator==(const SwVertexRuntimeInfo& other) const noexcept = default;
@@ -169,9 +170,8 @@ struct HwGeometryRuntimeInfo {
     u64 vs_copy_hash;
 
     bool operator==(const HwGeometryRuntimeInfo& other) const {
-        return num_outputs == other.num_outputs && outputs == other.outputs && num_invocations &&
-               other.num_invocations && output_vertices == other.output_vertices &&
-               in_primitive == other.in_primitive &&
+        return num_outputs == other.num_outputs && outputs == other.outputs && num_invocations == other.num_invocations &&
+               output_vertices == other.output_vertices && in_primitive == other.in_primitive &&
                std::ranges::equal(out_primitive, other.out_primitive) &&
                vs_copy_hash == other.vs_copy_hash;
     }
@@ -193,7 +193,9 @@ struct PsColorBuffer {
     // GCN applies blend factors to min/max ops while Vulkan ignores them. For the self-scaled
     // pattern min/max(src*src, dst*dst) the shader squares its color output instead, keeping
     // the attachment in the squared domain end to end.
-    u32 blend_self_scale : 1; ///< sotb: unused, kept so cached shader keys stay valid
+    // GCN applies blend factors to min/max ops while Vulkan ignores them. For the self-scaled pattern
+    // min/max(src*src, dst*dst) the shader squares its color output instead.
+    u32 blend_self_scale : 1;
     AmdGpu::CompMapping swizzle;
 
     bool operator==(const PsColorBuffer& other) const = default;
@@ -227,6 +229,17 @@ struct HwFragmentRuntimeInfo {
     bool front_face_all_bits{false};
     bool dual_source_blending{false};
     bool clip_distance_emulation{false};
+    bool depth_before_shader{false};
+    bool alpha_to_mask_enable{false};
+    bool coverage_to_mask_enable{false};
+    bool alpha_to_mask_eqaa_disable{false};
+    bool aa_mask_per_pixel{false};
+    u8 alpha_to_mask_num_samples{};
+    u8 msaa_num_samples{};
+    u8 mask_export_num_samples{};
+    u16 alpha_to_mask_offsets{};
+    AmdGpu::ShaderExportFormat mrt0_export_format{};
+    std::array<u16, 4> aa_mask{};
     /// sotb: writes the object motion vector to MotionVectors::Output.
     bool motion_vectors{false};
 
@@ -238,6 +251,16 @@ struct HwFragmentRuntimeInfo {
                front_face_all_bits == other.front_face_all_bits &&
                dual_source_blending == other.dual_source_blending &&
                clip_distance_emulation == other.clip_distance_emulation &&
+               depth_before_shader == other.depth_before_shader &&
+               alpha_to_mask_enable == other.alpha_to_mask_enable &&
+               coverage_to_mask_enable == other.coverage_to_mask_enable &&
+               alpha_to_mask_eqaa_disable == other.alpha_to_mask_eqaa_disable &&
+               alpha_to_mask_num_samples == other.alpha_to_mask_num_samples &&
+               msaa_num_samples == other.msaa_num_samples &&
+               alpha_to_mask_offsets == other.alpha_to_mask_offsets &&
+               mrt0_export_format == other.mrt0_export_format &&
+               aa_mask_per_pixel == other.aa_mask_per_pixel && aa_mask == other.aa_mask &&
+               mask_export_num_samples == other.mask_export_num_samples &&
                motion_vectors == other.motion_vectors &&
                std::ranges::equal(inputs.begin(), inputs.begin() + num_inputs, other.inputs.begin(),
                                   other.inputs.begin() + num_inputs);
@@ -250,7 +273,8 @@ struct HwComputeRuntimeInfo {
     std::array<bool, 3> tgid_enable;
 
     bool operator==(const HwComputeRuntimeInfo& other) const noexcept {
-        return workgroup_size == other.workgroup_size && tgid_enable == other.tgid_enable;
+        return workgroup_size == other.workgroup_size && tgid_enable == other.tgid_enable &&
+               shared_memory_size == other.shared_memory_size;
     }
 };
 
@@ -263,15 +287,18 @@ struct RuntimeInfo {
     SwStage sw_stage;
     HwStage hw_stage;
     struct Properties {
-        AmdGpu::FpDenormMode fp_denorm_mode32;
-        AmdGpu::FpDenormMode fp_denorm_mode16_64;
-        AmdGpu::FpRoundMode fp_round_mode32;
-        AmdGpu::FpRoundMode fp_round_mode16_64;
-        u32 num_user_data;
-        u32 num_input_vgprs;
-        u32 num_allocated_vgprs;
+        AmdGpu::FpDenormMode fp_denorm_mode32 : 2;
+        AmdGpu::FpDenormMode fp_denorm_mode16_64 : 2;
+        AmdGpu::FpRoundMode fp_round_mode32 : 2;
+        AmdGpu::FpRoundMode fp_round_mode16_64 : 2;
+        u32 num_allocated_vgprs : 9; // Up to 256
+        u32 num_user_data : 5;
+        u32 num_input_vgprs : 2;
+        u32 dx10_clamp : 1;
+        u32 reserved : 7;
         bool operator==(const Properties&) const noexcept = default;
     } props;
+    static_assert(sizeof(Properties) == sizeof(u32));
     union SwInfo {
         SwVertexRuntimeInfo vs;
         SwTessControlRuntimeInfo tcs;

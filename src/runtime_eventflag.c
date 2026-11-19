@@ -138,6 +138,7 @@ static ABI int32_t ef_wait(EventFlag *ef,uint64_t pattern,uint32_t mode,uint64_t
         deadline.tv_sec=start.tv_sec+(time_t)(ns/1000000000); deadline.tv_nsec=(long)(ns%1000000000);
     }
     int32_t r=0;
+    int thread_cancelled=0;
     EfWaiter self={.pattern=pattern,.mode=mode};
     ++ef->waiters;
     if (ef_match(ef->bits,pattern,mode)) { ef_consume(ef,pattern,mode,&self.result); self.released=1; }
@@ -147,7 +148,12 @@ static ABI int32_t ef_wait(EventFlag *ef,uint64_t pattern,uint32_t mode,uint64_t
         *tail=&self;
         runtime_thread_wait_begin("event flag");
         while (!self.released && !self.canceled && !ef->deleted) {
+            if (runtime_thread_wait_enter(runtime_thread_wake_condition,&ef->cond,&ef->lock)) {
+                thread_cancelled=1;
+                break;
+            }
             int e=timeout_us ? pthread_cond_timedwait(&ef->cond,&ef->lock,&deadline) : pthread_cond_wait(&ef->cond,&ef->lock);
+            runtime_thread_wait_end();
             if (e==ETIMEDOUT && !self.released && !self.canceled) { r=KERR_ETIMEDOUT; break; }
         }
         runtime_thread_wait_end();
@@ -159,6 +165,7 @@ static ABI int32_t ef_wait(EventFlag *ef,uint64_t pattern,uint32_t mode,uint64_t
     else if (self.canceled) { r=KERR_ECANCELED; if (result) *result=self.result; }
     else if (result) *result=ef->bits;
     pthread_mutex_unlock(&ef->lock);
+    if (thread_cancelled && !self.released) runtime_thread_test_cancel("event flag");
     if (timeout_us) {
         if (r==KERR_ETIMEDOUT) *timeout_us=0;
         else {

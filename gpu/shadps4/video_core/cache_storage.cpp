@@ -13,16 +13,20 @@
 
 #include <miniz.h>
 
+#include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <functional>
 #include <future>
 #include <mutex>
 #include <queue>
+#include <thread>
 
 namespace {
 
 std::mutex submit_mutex{};
-u32 num_requests{};
+// Raised by submitters and lowered by the IO thread, which also polls it outside submit_mutex.
+std::atomic<u32> num_requests{};
 std::condition_variable_any request_cv{};
 std::queue<std::packaged_task<void()>> req_queue{};
 std::mutex m_request{};
@@ -40,14 +44,14 @@ void ProcessIO(const std::stop_token& stoken) {
     while (!stoken.stop_requested()) {
         {
             std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests; });
+            Common::CondvarWait(request_cv, lk, stoken, [&] { return num_requests.load() != 0; });
         }
 
         if (stoken.stop_requested()) {
             break;
         }
 
-        while (num_requests) {
+        while (num_requests.load() != 0) {
             std::packaged_task<void()> request{};
             {
                 std::scoped_lock lock{m_request};
@@ -87,6 +91,28 @@ constexpr std::string GetBlobFileExtension(BlobType type) {
     }
 }
 
+static void Submit(std::packaged_task<void()>&& request) {
+    {
+        std::scoped_lock lock{m_request};
+        req_queue.emplace(std::move(request));
+    }
+    std::scoped_lock lk{submit_mutex};
+    ++num_requests;
+    request_cv.notify_one();
+}
+
+/// Calls `func` for each entry of `dir` while it returns true; a listing error ends the walk.
+template <typename Func>
+void ForEachEntry(const std::filesystem::path& dir, Func&& func) {
+    std::error_code error;
+    for (std::filesystem::directory_iterator it{dir, error}, end; !error && it != end;
+         it.increment(error)) {
+        if (!func(*it)) {
+            return;
+        }
+    }
+}
+
 void DataBase::Open() {
     if (opened) {
         return;
@@ -114,6 +140,14 @@ void DataBase::Open() {
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
+        // Writes a previous run ended in the middle of.
+        ForEachEntry(cache_path, [](const std::filesystem::directory_entry& entry) {
+            if (entry.path().extension() == ".tmp") {
+                std::error_code error;
+                std::filesystem::remove(entry.path(), error);
+            }
+            return true;
+        });
     }
 
     io_worker = std::jthread{ProcessIO};
@@ -157,23 +191,30 @@ bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector
                 using namespace Common::FS;
                 auto temp{path};
                 temp += ".tmp";
+                bool written{};
                 {
                     const auto file = IOFile{temp, FileAccessMode::Create};
-                    if (!file.IsOpen() || file.Write(v) != v.size()) {
-                        return;
-                    }
+                    written = file.IsOpen() && file.Write(v) == v.size();
                 }
                 std::error_code error;
-                std::filesystem::rename(temp, path, error);
+                if (!written) {
+                    std::filesystem::remove(temp, error);
+                    return;
+                }
+                // Windows refuses the rename while another thread reads the old blob (the
+                // background warm-up). Retried; when it keeps failing this write is dropped.
+                for (int attempt = 0; attempt < 20; ++attempt) {
+                    std::filesystem::rename(temp, path, error);
+                    if (!error) {
+                        return;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                std::filesystem::remove(temp, error);
             }
         }};
-        std::scoped_lock lock{m_request};
-        req_queue.emplace(std::move(request));
+        Submit(std::move(request));
     }
-
-    std::scoped_lock lk{submit_mutex};
-    ++num_requests;
-    request_cv.notify_one();
     return true;
 }
 
@@ -251,10 +292,10 @@ size_t DataBase::CountBlobs(BlobType type) {
         }
         return count;
     }
-    std::error_code error;
-    for (const auto& entry : std::filesystem::directory_iterator{cache_path, error}) {
+    ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
         count += entry.path().extension().string().ends_with(ext);
-    }
+        return true;
+    });
     return count;
 }
 
@@ -280,20 +321,21 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
             }
         }
     } else {
-        for (const auto& file_name : std::filesystem::directory_iterator{cache_path}) {
+        ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
             if (stop && stop()) {
-                return;
+                return false;
             }
-            if (file_name.path().extension().string().ends_with(ext)) {
+            if (entry.path().extension().string().ends_with(ext)) {
                 using namespace Common::FS;
-                const auto& file = IOFile{file_name, FileAccessMode::Read};
+                const auto& file = IOFile{entry.path(), FileAccessMode::Read};
                 if (file.IsOpen()) {
                     std::vector<u8> data(file.GetSize());
                     file.Read(data);
                     func(std::move(data));
                 }
             }
-        }
+            return true;
+        });
     }
 }
 
@@ -301,13 +343,12 @@ void DataBase::Clear() {
     if (!opened || EmulatorSettings.IsPipelineCacheArchived()) {
         return;
     }
-    std::error_code ec;
     u64 removed = 0;
-    for (const auto& entry : std::filesystem::directory_iterator(cache_path, ec)) {
-        if (entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec)) {
-            ++removed;
-        }
-    }
+    ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
+        std::error_code ec;
+        removed += entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec);
+        return true;
+    });
     LOG_WARNING(Render, "Pipeline cache cleared ({} files): it is rebuilt for this build", removed);
 }
 

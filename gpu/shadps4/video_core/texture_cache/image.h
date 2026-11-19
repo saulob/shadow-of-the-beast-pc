@@ -113,7 +113,7 @@ struct Image {
         return track_addr != 0 && track_addr_end != 0;
     }
 
-    bool SafeToDownload() const {
+    bool HasGpuValidData() const {
         return True(flags & ImageFlagBits::GpuModified) && False(flags & (ImageFlagBits::Dirty));
     }
 
@@ -128,9 +128,15 @@ struct Image {
     }
 
     ImageView& FindView(const ImageViewInfo& view_info, bool ensure_guest_samples = true);
+    struct BackingImage;
+    ImageView& FindView(const ImageViewInfo& view_info, BackingImage& view_backing);
 
     using Barriers = boost::container::small_vector<vk::ImageMemoryBarrier2, 32>;
     void GetBarriers(Barriers& out_barriers, vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
+                     vk::PipelineStageFlags2 dst_stage,
+                     std::optional<SubresourceRange> subres_range = {});
+    void GetBarriers(Barriers& out_barriers, BackingImage& image_backing,
+                     vk::ImageLayout dst_layout, vk::AccessFlags2 dst_mask,
                      vk::PipelineStageFlags2 dst_stage,
                      std::optional<SubresourceRange> subres_range = {});
 
@@ -142,6 +148,7 @@ public:
     struct {
         u32 is_bound : 1;
         u32 is_target : 1;
+        u32 is_storage : 1;
         u32 needs_rebind : 1;
         u32 force_general : 1;
     } binding{};
@@ -202,11 +209,20 @@ public:
         boost::container::small_vector<ImageViewId, 4> image_view_ids;
         u32 last_view = 0; ///< sotb: index of the view FindView returned last
         u32 num_samples;
+        bool subrect_valid{};
     };
     std::deque<BackingImage> backing_images;
+    BackingImage& AddBacking(const vk::ImageCreateInfo& create_info, u32 num_samples);
+    void InvalidateSubrects() {
+        for (auto& image_backing : backing_images) {
+            image_backing.subrect_valid = false;
+        }
+    }
     boost::container::static_vector<u64, 16> mip_hashes{};
     u64 lru_id{};
     u64 hash{};
+    u64 head_hash{}; ///< guest bytes of the untracked head page
+    u64 tail_hash{}; ///< guest bytes of the untracked tail page
 
 private:
     static Common::IncrementalIdProvider<u64> global_image_uid;

@@ -12,6 +12,8 @@
 #include "common/debug.h"
 #include "common/types.h"
 #include "imgui/renderer/imgui_core.h"
+#include "video_core/renderdoc.h"
+#include "video_core/buffer_cache/buffer.h"
 #include "sotb_graphics.h"
 #include "sotb_settings.h"
 #include "sdl_window.h"
@@ -216,6 +218,15 @@ Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_d
     properties = physical_device.getProperties();
     memory_properties = physical_device.getMemoryProperties();
     CollectDeviceParameters();
+    if (properties.apiVersion >= VK_API_VERSION_1_2 &&
+        properties.apiVersion < TargetVulkanApiVersion && VideoCore::IsRenderDocLoaded()) {
+        // RenderDoc reports Vulkan 1.2 on drivers without bufferDeviceAddressCaptureReplay, but
+        // still forwards the device setup to the driver, so Vulkan 1.3 features keep working.
+        LOG_WARNING(Render_Vulkan, "RenderDoc limited this device to Vulkan {}.{}",
+                    VK_VERSION_MAJOR(properties.apiVersion),
+                    VK_VERSION_MINOR(properties.apiVersion));
+        properties.apiVersion = TargetVulkanApiVersion;
+    }
     ASSERT_MSG(properties.apiVersion >= TargetVulkanApiVersion,
                "Vulkan {}.{} is required, but only {}.{} is supported by device!",
                VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
@@ -230,6 +241,50 @@ Instance::Instance(const Frontend::WindowSystemInfo& window_info, s32 physical_d
 Instance::~Instance() {
     ImGui::Core::Shutdown(GetDevice());
     vmaDestroyAllocator(allocator);
+}
+
+void Instance::ReportDeviceFault() const {
+    if (supports_memory_budget) {
+        vk::PhysicalDeviceMemoryBudgetPropertiesEXT budget{};
+        vk::PhysicalDeviceMemoryProperties2 props{.pNext = &budget};
+        physical_device.getMemoryProperties2(&props);
+        for (u32 heap = 0; heap < props.memoryProperties.memoryHeapCount; ++heap) {
+            LOG_CRITICAL(Render_Vulkan, "Heap {}: {} MiB used of {} MiB budget, size {} MiB", heap,
+                         budget.heapUsage[heap] >> 20, budget.heapBudget[heap] >> 20,
+                         props.memoryProperties.memoryHeaps[heap].size >> 20);
+        }
+    }
+    if (!device_fault) {
+        LOG_CRITICAL(Render_Vulkan, "Device fault report unavailable (no VK_EXT_device_fault)");
+        return;
+    }
+    vk::DeviceFaultCountsEXT counts{};
+    if (device->getFaultInfoEXT(&counts, nullptr) != vk::Result::eSuccess) {
+        return;
+    }
+    std::vector<vk::DeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
+    std::vector<vk::DeviceFaultVendorInfoEXT> vendor_infos(counts.vendorInfoCount);
+    counts.vendorBinarySize = 0;
+    vk::DeviceFaultInfoEXT info{
+        .pAddressInfos = addresses.data(),
+        .pVendorInfos = vendor_infos.data(),
+    };
+    const vk::Result result = device->getFaultInfoEXT(&counts, &info);
+    if (result != vk::Result::eSuccess && result != vk::Result::eIncomplete) {
+        return;
+    }
+    LOG_CRITICAL(Render_Vulkan, "Device fault: {}", info.description.data());
+    for (u32 i = 0; i < counts.addressInfoCount; ++i) {
+        const auto& address = addresses[i];
+        LOG_CRITICAL(Render_Vulkan, "{} at {:#x} (precision {:#x})",
+                     vk::to_string(address.addressType), address.reportedAddress,
+                     address.addressPrecision);
+    }
+    for (u32 i = 0; i < counts.vendorInfoCount; ++i) {
+        const auto& vendor = vendor_infos[i];
+        LOG_CRITICAL(Render_Vulkan, "Vendor fault {:#x} data {:#x}: {}", vendor.vendorFaultCode,
+                     vendor.vendorFaultData, vendor.description.data());
+    }
 }
 
 std::string Instance::GetDriverVersionName() {
@@ -290,7 +345,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceWorkgroupMemoryExplicitLayoutFeaturesKHR,
         vk::PhysicalDeviceImage2DViewOf3DFeaturesEXT, vk::PhysicalDeviceShaderClockFeaturesKHR,
         vk::PhysicalDevicePipelineBinaryFeaturesKHR,
-        vk::PhysicalDeviceMaintenance5FeaturesKHR>();
+        vk::PhysicalDeviceMaintenance5FeaturesKHR, vk::PhysicalDeviceFaultFeaturesEXT,
+        vk::PhysicalDeviceMemoryPriorityFeaturesEXT,
+        vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT>();
     features = feature_chain.get().features;
 
     const vk::StructureChain properties_chain = physical_device.getProperties2<
@@ -349,6 +406,7 @@ bool Instance::CreateDevice() {
         feature_chain.get<vk::PhysicalDeviceMaintenance5FeaturesKHR>().maintenance5 &&
         feature_chain.get<vk::PhysicalDevicePipelineBinaryFeaturesKHR>().pipelineBinaries &&
         add_extension(VK_KHR_PIPELINE_BINARY_EXTENSION_NAME);
+    maintenance_6 = add_extension(VK_KHR_MAINTENANCE_6_EXTENSION_NAME);
     maintenance_8 = add_extension(VK_KHR_MAINTENANCE_8_EXTENSION_NAME);
     attachment_feedback_loop = add_extension(VK_EXT_ATTACHMENT_FEEDBACK_LOOP_LAYOUT_EXTENSION_NAME);
     if (attachment_feedback_loop) {
@@ -370,8 +428,17 @@ bool Instance::CreateDevice() {
     custom_border_color = add_extension(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     depth_clip_control = add_extension(VK_EXT_DEPTH_CLIP_CONTROL_EXTENSION_NAME);
     depth_clip_enable = add_extension(VK_EXT_DEPTH_CLIP_ENABLE_EXTENSION_NAME);
-    vertex_input_dynamic_state = add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
-    list_restart = add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
+    // Intel's Windows driver draws wrong vertex data with dynamic vertex input (Arc, HD 630).
+    if (driver_id == vk::DriverId::eIntelProprietaryWindows) {
+        LOG_WARNING(Render_Vulkan, "Vertex input dynamic state left off on this Intel driver");
+    } else {
+        vertex_input_dynamic_state =
+            add_extension(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+    }
+    // Games excessively leave restart enabled with lists when it isn't actually needed, and it
+    // slows down KosmicKrisp due to unrolling. Revisit if KosmicKrisp moves this to mesh shaders.
+    list_restart = driver_id != vk::DriverId::eMesaKosmickrisp &&
+                   add_extension(VK_EXT_PRIMITIVE_TOPOLOGY_LIST_RESTART_EXTENSION_NAME);
     if (list_restart) {
         list_restart_features =
             feature_chain.get<vk::PhysicalDevicePrimitiveTopologyListRestartFeaturesEXT>();
@@ -402,6 +469,8 @@ bool Instance::CreateDevice() {
                  shader_atomic_float2_features.shaderBufferFloat32AtomicMinMax);
         LOG_INFO(Render_Vulkan, "- shaderImageFloat32AtomicMinMax: {}",
                  shader_atomic_float2_features.shaderImageFloat32AtomicMinMax);
+        LOG_INFO(Render_Vulkan, "- shaderSharedFloat32AtomicMinMax: {}",
+                 shader_atomic_float2_features.shaderSharedFloat32AtomicMinMax);
     }
     workgroup_memory_explicit_layout =
         add_extension(VK_KHR_WORKGROUP_MEMORY_EXPLICIT_LAYOUT_EXTENSION_NAME);
@@ -433,6 +502,16 @@ bool Instance::CreateDevice() {
         shader_clock_features = feature_chain.get<vk::PhysicalDeviceShaderClockFeaturesKHR>();
         LOG_INFO(Render_Vulkan, "- shaderSubgroupClock: {}",
                  shader_clock_features.shaderSubgroupClock);
+    }
+    device_fault = feature_chain.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault &&
+                   add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME);
+    // A full card then moves memory to system RAM (slower) instead of failing allocations.
+    if (feature_chain.get<vk::PhysicalDeviceMemoryPriorityFeaturesEXT>().memoryPriority &&
+        feature_chain.get<vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT>()
+            .pageableDeviceLocalMemory) {
+        memory_priority = add_extension(VK_EXT_MEMORY_PRIORITY_EXTENSION_NAME);
+        pageable_device_memory =
+            memory_priority && add_extension(VK_EXT_PAGEABLE_DEVICE_LOCAL_MEMORY_EXTENSION_NAME);
     }
     const bool calibrated_timestamps =
         TRACY_GPU_ENABLED ? add_extension(VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME) : false;
@@ -467,6 +546,15 @@ bool Instance::CreateDevice() {
     const auto vk11_features = feature_chain.get<vk::PhysicalDeviceVulkan11Features>();
     vk12_features = feature_chain.get<vk::PhysicalDeviceVulkan12Features>();
     vk13_features = feature_chain.get<vk::PhysicalDeviceVulkan13Features>();
+    if (!vk12_features.bufferDeviceAddress) {
+        LOG_WARNING(Render_Vulkan,
+                    "bufferDeviceAddress is unavailable, direct memory access cannot be used");
+    }
+    // A migrated buffer-cache arena binds the memory of the arena it replaces; AMD's driver drops
+    // the old mapping unless the sparse buffers are aliased.
+    const bool sparse_aliased =
+        features.sparseResidencyAliased && properties.vendorID == 0x1002;
+    VideoCore::sparse_aliased_enabled = sparse_aliased;
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = 1u,
@@ -505,6 +593,7 @@ bool Instance::CreateDevice() {
                 .shaderInt16 = features.shaderInt16,
                 .sparseBinding = features.sparseBinding,
                 .sparseResidencyBuffer = features.sparseResidencyBuffer,
+                .sparseResidencyAliased = sparse_aliased,
             },
         },
         vk::PhysicalDeviceVulkan11Features{
@@ -579,6 +668,9 @@ bool Instance::CreateDevice() {
         vk::PhysicalDevicePipelineBinaryFeaturesKHR{
             .pipelineBinaries = true,
         },
+        vk::PhysicalDeviceMaintenance6FeaturesKHR{
+            .maintenance6 = true,
+        },
         vk::PhysicalDeviceMaintenance8FeaturesKHR{
             .maintenance8 = true,
         },
@@ -591,6 +683,8 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceShaderAtomicFloat2FeaturesEXT{
             .shaderBufferFloat32AtomicMinMax =
                 shader_atomic_float2_features.shaderBufferFloat32AtomicMinMax,
+            .shaderSharedFloat32AtomicMinMax =
+                shader_atomic_float2_features.shaderSharedFloat32AtomicMinMax,
             .shaderImageFloat32AtomicMinMax =
                 shader_atomic_float2_features.shaderImageFloat32AtomicMinMax,
         },
@@ -612,6 +706,15 @@ bool Instance::CreateDevice() {
         },
         vk::PhysicalDeviceShaderClockFeaturesKHR{
             .shaderSubgroupClock = shader_clock_features.shaderSubgroupClock,
+        },
+        vk::PhysicalDeviceFaultFeaturesEXT{
+            .deviceFault = true,
+        },
+        vk::PhysicalDeviceMemoryPriorityFeaturesEXT{
+            .memoryPriority = true,
+        },
+        vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT{
+            .pageableDeviceLocalMemory = true,
         },
     };
 
@@ -645,6 +748,9 @@ bool Instance::CreateDevice() {
     if (!pipeline_binaries) {
         device_chain.unlink<vk::PhysicalDevicePipelineBinaryFeaturesKHR>();
     }
+    if (!maintenance_6) {
+        device_chain.unlink<vk::PhysicalDeviceMaintenance6FeaturesKHR>();
+    }
     if (!maintenance_8) {
         device_chain.unlink<vk::PhysicalDeviceMaintenance8FeaturesKHR>();
     }
@@ -666,6 +772,15 @@ bool Instance::CreateDevice() {
     }
     if (!shader_clock) {
         device_chain.unlink<vk::PhysicalDeviceShaderClockFeaturesKHR>();
+    }
+    if (!device_fault) {
+        device_chain.unlink<vk::PhysicalDeviceFaultFeaturesEXT>();
+    }
+    if (!memory_priority) {
+        device_chain.unlink<vk::PhysicalDeviceMemoryPriorityFeaturesEXT>();
+    }
+    if (!pageable_device_memory) {
+        device_chain.unlink<vk::PhysicalDevicePageableDeviceLocalMemoryFeaturesEXT>();
     }
 
     auto [device_result, dev] = physical_device.createDeviceUnique(device_chain.get());
@@ -725,7 +840,8 @@ void Instance::CreateAllocator() {
     };
 
     const VmaAllocatorCreateInfo allocator_info = {
-        .flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT,
+        .flags = IsBufferDeviceAddressSupported() ? VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT
+                                                  : VmaAllocatorCreateFlags{},
         .physicalDevice = physical_device,
         .device = *device,
         .pVulkanFunctions = &functions,
@@ -776,7 +892,6 @@ void Instance::CollectPhysicalMemoryInfo() {
     const size_t num_props = memory_props.memoryHeapCount;
     total_memory_budget = 0;
     u64 device_initial_usage = 0;
-    u64 local_memory = 0;
     for (size_t i = 0; i < num_props; ++i) {
         const bool is_device_local =
             (memory_props.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal) !=
@@ -786,9 +901,6 @@ void Instance::CollectPhysicalMemoryInfo() {
             continue;
         }
         valid_heaps.push_back(i);
-        if (is_device_local) {
-            local_memory += memory_props.memoryHeaps[i].size;
-        }
         if (supports_memory_budget) {
             device_initial_usage += budget.heapUsage[i];
             total_memory_budget += budget.heapBudget[i];
@@ -801,12 +913,13 @@ void Instance::CollectPhysicalMemoryInfo() {
         // We reserve some memory for the system.
         const u64 system_memory = std::min<u64>(total_memory_budget / 8, 1_GB);
         total_memory_budget -= system_memory;
-        return;
+    } else {
+        // Leave at least 8 GB for the system on integrated GPUs.
+        const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
+        total_memory_budget =
+            static_cast<u64>(std::max<s64>(available_memory - 8_GB, static_cast<s64>(2_GB)));
     }
-    // Leave at least 8 GB for the system on integrated GPUs.
-    const s64 available_memory = static_cast<s64>(total_memory_budget - device_initial_usage);
-    total_memory_budget =
-        static_cast<u64>(std::max<s64>(available_memory - 8_GB, static_cast<s64>(local_memory)));
+    LOG_INFO(Render_Vulkan, "GPU memory budget is {} MiB", total_memory_budget / 1_MB);
 }
 
 void Instance::CollectImageFormatInfo() {

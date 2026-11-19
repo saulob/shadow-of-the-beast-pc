@@ -1,12 +1,48 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <bit>
 #include "core/emulator_settings.h"
 #include "shader_recompiler/ir/program.h"
+#include "shader_recompiler/ir/shared_memory.h"
 #include "shader_recompiler/profile.h"
-#include "video_core/buffer_cache/buffer_cache.h"
 
 namespace Shader::Optimization {
+
+static void AddFlatbuf(Info& info) {
+    if (!info.has_flatbuf) {
+        info.buffers.push_back({
+            .used_types = IR::Type::U32,
+            .buffer_type = BufferType::Flatbuf,
+        });
+        info.has_flatbuf = true;
+    }
+}
+
+static void RecordSharedMemInfo(Info& info, const IR::Inst& inst, IR::Type type) {
+    u32 alignment{};
+    switch (type) {
+    case IR::Type::U16:
+        alignment = 2;
+        break;
+    case IR::Type::U32:
+    case IR::Type::F32:
+        alignment = 4;
+        break;
+    case IR::Type::U64:
+    case IR::Type::F64:
+        alignment = 8;
+        break;
+    default:
+        UNREACHABLE();
+    }
+
+    const auto flags = inst.Flags<SharedMemory::Flags>();
+    Info::SharedMemorySegment& segment =
+        flags.is_scratch.Value() ? info.shared_scratch_segment : info.shared_guest_segment;
+    segment.UseType(type);
+    segment.SetMinAlignment(alignment);
+}
 
 void Visit(Info& info, const IR::Inst& inst) {
     switch (inst.GetOpcode()) {
@@ -19,7 +55,7 @@ void Visit(Info& info, const IR::Inst& inst) {
         info.stores.Set(inst.Arg(0).Attribute(), inst.Arg(2).U32());
         break;
     case IR::Opcode::GetUserData:
-        info.ud_mask.Set(inst.Arg(0).ScalarReg());
+        AddFlatbuf(info);
         break;
     case IR::Opcode::SetPatch: {
         const auto patch = inst.Arg(0).Patch();
@@ -39,7 +75,7 @@ void Visit(Info& info, const IR::Inst& inst) {
     }
     case IR::Opcode::LoadSharedU16:
     case IR::Opcode::WriteSharedU16:
-        info.shared_types |= IR::Type::U16;
+        RecordSharedMemInfo(info, inst, IR::Type::U16);
         break;
     case IR::Opcode::LoadSharedU32:
     case IR::Opcode::WriteSharedU32:
@@ -49,13 +85,15 @@ void Visit(Info& info, const IR::Inst& inst) {
     case IR::Opcode::SharedAtomicUMin32:
     case IR::Opcode::SharedAtomicSMax32:
     case IR::Opcode::SharedAtomicUMax32:
+    case IR::Opcode::SharedAtomicFMin32:
+    case IR::Opcode::SharedAtomicFMax32:
     case IR::Opcode::SharedAtomicInc32:
     case IR::Opcode::SharedAtomicDec32:
     case IR::Opcode::SharedAtomicAnd32:
     case IR::Opcode::SharedAtomicOr32:
     case IR::Opcode::SharedAtomicXor32:
     case IR::Opcode::SharedAtomicCmpSwap32:
-        info.shared_types |= IR::Type::U32;
+        RecordSharedMemInfo(info, inst, IR::Type::U32);
         break;
     case IR::Opcode::SharedAtomicIAdd64:
     case IR::Opcode::SharedAtomicISub64:
@@ -73,7 +111,7 @@ void Visit(Info& info, const IR::Inst& inst) {
         [[fallthrough]];
     case IR::Opcode::LoadSharedU64:
     case IR::Opcode::WriteSharedU64:
-        info.shared_types |= IR::Type::U64;
+        RecordSharedMemInfo(info, inst, IR::Type::U64);
         break;
     case IR::Opcode::ConvertF16F32:
     case IR::Opcode::ConvertF32F16:
@@ -83,6 +121,44 @@ void Visit(Info& info, const IR::Inst& inst) {
         break;
     case IR::Opcode::PackDouble2x32:
     case IR::Opcode::UnpackDouble2x32:
+    case IR::Opcode::FPAbs64:
+    case IR::Opcode::FPAdd64:
+    case IR::Opcode::FPFma64:
+    case IR::Opcode::FPMax64:
+    case IR::Opcode::FPMin64:
+    case IR::Opcode::FPMul64:
+    case IR::Opcode::FPDiv64:
+    case IR::Opcode::FPNeg64:
+    case IR::Opcode::FPRecip64:
+    case IR::Opcode::FPRecipSqrt64:
+    case IR::Opcode::FPSaturate64:
+    case IR::Opcode::FPClamp64:
+    case IR::Opcode::FPRoundEven64:
+    case IR::Opcode::FPFloor64:
+    case IR::Opcode::FPCeil64:
+    case IR::Opcode::FPTrunc64:
+    case IR::Opcode::FPFract64:
+    case IR::Opcode::FPFrexpSig64:
+    case IR::Opcode::FPFrexpExp64:
+    case IR::Opcode::FPOrdEqual64:
+    case IR::Opcode::FPUnordEqual64:
+    case IR::Opcode::FPOrdNotEqual64:
+    case IR::Opcode::FPUnordNotEqual64:
+    case IR::Opcode::FPOrdLessThan64:
+    case IR::Opcode::FPUnordLessThan64:
+    case IR::Opcode::FPOrdGreaterThan64:
+    case IR::Opcode::FPUnordGreaterThan64:
+    case IR::Opcode::FPOrdLessThanEqual64:
+    case IR::Opcode::FPUnordLessThanEqual64:
+    case IR::Opcode::FPOrdGreaterThanEqual64:
+    case IR::Opcode::FPUnordGreaterThanEqual64:
+    case IR::Opcode::FPIsNan64:
+    case IR::Opcode::FPIsInf64:
+    case IR::Opcode::ConvertS32F64:
+    case IR::Opcode::ConvertF32F64:
+    case IR::Opcode::ConvertF64F32:
+    case IR::Opcode::ConvertF64S32:
+    case IR::Opcode::ConvertF64U32:
         info.uses_fp64 = true;
         break;
     case IR::Opcode::ImageWrite:
@@ -140,17 +216,15 @@ void Visit(Info& info, const IR::Inst& inst) {
     case IR::Opcode::LaneId:
         info.uses_lane_id = true;
         break;
+    case IR::Opcode::WaveId:
+    case IR::Opcode::SubgroupId:
+        info.uses_subgroup_id = true;
+        break;
     case IR::Opcode::Memtime:
         info.uses_shader_clock = true;
         break;
     case IR::Opcode::ReadConst:
-        if (!info.has_readconst) {
-            info.buffers.push_back({
-                .used_types = IR::Type::U32,
-                .buffer_type = BufferType::Flatbuf,
-            });
-            info.has_readconst = true;
-        }
+        AddFlatbuf(info);
         if (inst.Flags<u32>() == 0) {
             info.readconst_types |= Info::ReadConstType::Immediate;
             info.readconst_types |= Info::ReadConstType::Dynamic;
@@ -193,6 +267,12 @@ void CollectShaderInfoPass(IR::Program& program, const Profile& profile) {
             .is_written = true,
         });
         LOG_ERROR(Render, "Enabling DMA for shader {:#x}", info.pgm_hash);
+    }
+
+    for (const auto* segment : {&info.shared_guest_segment, &info.shared_scratch_segment}) {
+        if (std::popcount(static_cast<u32>(segment->used_types)) > 1) {
+            info.uses_aliased_shared_memory = true;
+        }
     }
 }
 

@@ -97,12 +97,41 @@ static int free_slot(void) {
     for (int i=0;i<MAX_PADS;++i) if (!slots[i].gamepad) return i;
     return -1;
 }
+static char keys_file[4200];
+/* The player's own mappings. SDL_GAMECONTROLLERCONFIG, which SDL reads itself, keeps priority over them. */
+static void load_user_gamepad_mappings(void) {
+    char path[4300];
+    if (!sotb_gamepad_db_path(keys_file,path,sizeof(path)) || !SDL_GetPathInfo(path,NULL)) return;
+    const int added=SDL_AddGamepadMappingsFromFile(path);
+    if (added<0) printf("Runtime: gamepad mappings not read from %s: %s\n",path,SDL_GetError());
+    else printf("Runtime: %d gamepad mappings read from %s\n",added,path);
+}
+/* SDL lists a joystick as a gamepad only when it has a mapping: says once per connection which ones have none. */
+static void log_unmapped_joysticks(void) {
+    static SDL_JoystickID logged[16];
+    static size_t next;
+    int count=0;
+    SDL_JoystickID *ids=SDL_GetJoysticks(&count);
+    for (int j=0;ids && j<count;++j) {
+        bool seen=SDL_IsGamepad(ids[j]);
+        for (size_t i=0;i<sizeof(logged)/sizeof(*logged);++i) if (logged[i]==ids[j]) seen=true;
+        if (seen) continue;
+        logged[next++%(sizeof(logged)/sizeof(*logged))]=ids[j];
+        char guid[33];
+        SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[j]),guid,sizeof(guid));
+        const char *name=SDL_GetJoystickNameForID(ids[j]);
+        printf("Runtime: joystick without a gamepad mapping: %s (guid %s, %04x:%04x); add a line for this GUID to gamecontrollerdb.txt in the user folder\n",
+               name?name:"unknown",guid,SDL_GetJoystickVendorForID(ids[j]),SDL_GetJoystickProductForID(ids[j]));
+    }
+    SDL_free(ids);
+}
 /* Gives new gamepads, in SDL's order, the lowest slots without one; called under lock. A disconnected
  * gamepad frees its slot, but the player stays logged in, as on the PS4. */
 static void refresh_gamepads(void) {
     if (!sdl_ready) {
         if (!SDL_WasInit(SDL_INIT_GAMEPAD)) sotb_prepare_sdl_gamepad();
         sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
+        if (sdl_ready>0) load_user_gamepad_mappings();
     }
     if (sdl_ready<0) return;
     for (int i=0;i<MAX_PADS;++i) {
@@ -115,6 +144,7 @@ static void refresh_gamepads(void) {
     const uint64_t now=now_us();
     if (free_slot()<0 || (last_scan && now-last_scan<250000)) return;
     last_scan=now;
+    log_unmapped_joysticks();
     int count=0;
     SDL_JoystickID *ids=SDL_GetGamepads(&count);
     for (int j=0;ids && j<count && free_slot()>=0;++j) {
@@ -156,7 +186,6 @@ static ButtonMap pad_map={{
 },15};
 static ButtonMap key_map;
 static SotbKeyMap keys;
-static char keys_file[4200];
 void runtime_pad_set_settings(const char *settings_file) { snprintf(keys_file,sizeof(keys_file),"%s",settings_file ? settings_file : ""); }
 
 static const struct { SotbKeyAction action; uint32_t ps; } key_buttons[]={
@@ -568,6 +597,14 @@ static ABI int32_t pad_light_bar(int32_t handle, const uint8_t *rgb) {
     set_light(slot,rgb[0],rgb[1],rgb[2]);
     return 0;
 }
+/* The PS4's colour for each user: blue, red, green, pink. */
+static ABI int32_t pad_reset_light_bar(int32_t handle) {
+    static const uint8_t colors[MAX_PADS][3]={{0,0,255},{255,0,0},{0,255,0},{255,0,255}};
+    const int slot=open_slot(handle);
+    if (slot<0) return ERR_INVALID_HANDLE;
+    set_light(slot,colors[slot][0],colors[slot][1],colors[slot][2]);
+    return 0;
+}
 /* scePadGetHandle: the handle scePadOpen returned for this user's standard port. */
 static ABI int32_t pad_get_handle(int32_t user, int32_t type, int32_t index) {
     if (!initialized) return ERR_NOT_INITIALIZED;
@@ -580,7 +617,7 @@ static ABI int32_t pad_get_handle(int32_t user, int32_t type, int32_t index) {
 }
 static const RuntimeExport exports[]={
     {"scePadGetHandle",pad_get_handle},
-    {"scePadSetLightBar",pad_light_bar}, {"scePadResetLightBar",pad_ok_handle},
+    {"scePadSetLightBar",pad_light_bar}, {"scePadResetLightBar",pad_reset_light_bar},
     {"scePadInit",pad_init}, {"scePadOpen",pad_open}, {"scePadClose",pad_close},
     {"scePadReadState",pad_read_state}, {"scePadRead",pad_read},
     {"scePadGetControllerInformation",pad_info}, {"scePadSetVibration",pad_vibration},

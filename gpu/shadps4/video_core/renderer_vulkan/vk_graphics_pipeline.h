@@ -43,6 +43,7 @@ struct GraphicsPipelineKey {
     AmdGpu::ColorControl::LogicOp logic_op;
     u8 num_samples;
     u8 depth_samples;
+    vk::SampleMask sample_mask;
     std::array<u8, AmdGpu::NUM_COLOR_BUFFERS> color_samples;
     u32 mrt_mask;
     u32 motion_vectors = 0;
@@ -109,11 +110,6 @@ public:
         return key;
     }
 
-    /// sotb: second draw squaring a self-scaled MIN/MAX blend, or null (vk_blend_rewrite.h).
-    vk::Pipeline SquarePassHandle() const noexcept {
-        return *square_pipeline;
-    }
-
     /// Gets the attributes and bindings for vertex inputs.
     template <typename Attribute, typename Binding>
     void GetVertexInputs(VertexInputs<Attribute>& attributes, VertexInputs<Binding>& bindings,
@@ -127,7 +123,6 @@ private:
 private:
     GraphicsPipelineKey key;
     std::optional<const Shader::Gcn::FetchShaderData> fetch_shader{};
-    vk::UniquePipeline square_pipeline;
 };
 
 struct ClipDistanceShaderKey {

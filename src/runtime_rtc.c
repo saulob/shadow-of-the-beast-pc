@@ -160,6 +160,22 @@ static ABI int32_t rtc_rfc2822_local(char *out, const uint64_t *utc_tick) {
     memcpy(out,text,strlen(text)+1); /* 31 characters + NUL, the SDK's buffer size */
     return 0;
 }
+/* "YYYY-MM-DDThh:mm:ss.ccZ" or "...+hh:mm": the UTC tick shown in the zone `minutes` east of UTC, centiseconds. */
+static ABI int32_t rtc_rfc3339(char *out, const uint64_t *utc_tick, int32_t minutes) {
+    if (!out) return ERR_INVALID_POINTER;
+    const uint64_t utc=utc_tick ? *utc_tick : now_utc();
+    DateTime t; from_tick((uint64_t)((int64_t)utc+(int64_t)minutes*60000000),&t);
+    char zone[8]="Z";
+    if (minutes) {
+        const int32_t magnitude=minutes<0 ? -minutes : minutes;
+        snprintf(zone,sizeof(zone),"%c%02d:%02d",minutes<0 ? '-' : '+',(int)(magnitude/60),(int)(magnitude%60));
+    }
+    char text[40];
+    snprintf(text,sizeof(text),"%04u-%02u-%02uT%02u:%02u:%02u.%02u%s",t.year,t.month,t.day,t.hour,t.minute,t.second,
+             t.microsecond/10000,zone);
+    memcpy(out,text,strlen(text)+1);
+    return 0;
+}
 static int32_t parse_date(uint64_t *tick, const char *text) {
     if (!tick || !text) return ERR_INVALID_POINTER;
     int year=0, month=0, day=0, hour=0, minute=0, second=0;
@@ -217,5 +233,6 @@ static const RuntimeExport exports[]={
     {"sceRtcGetTime_t",rtc_get_time_t}, {"sceRtcFormatRFC2822LocalTime",rtc_rfc2822_local},
     {"sceRtcGetWin32FileTime",rtc_get_win32_filetime}, {"sceRtcSetWin32FileTime",rtc_set_win32_filetime},
     {"sceRtcParseDateTime",rtc_parse_date}, {"sceRtcParseRFC3339",rtc_parse_rfc3339},
+    {"sceRtcFormatRFC3339",rtc_rfc3339},
 };
 uintptr_t runtime_rtc_resolve(const char *name) { return RUNTIME_LOOKUP(exports,name); }

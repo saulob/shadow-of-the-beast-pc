@@ -32,9 +32,9 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 7u; // sotb: interpolated integer fix (Pascal)
-static constexpr u32 ShaderMetaVersion = 7u; // sotb: ImageResource::needs_native
-static constexpr u32 PipelineKeyVersion = 5u; // sotb: Info layout (ImageResource::needs_native)
+static constexpr u32 ShaderBinaryVersion = 20u; // sotb: runtime image offsets, cube/1D lowering, flat-buffer user data, shared memory segments, 11/11/10 image write clamp
+static constexpr u32 ShaderMetaVersion = 10u; // sotb: Info layout (flatbuf user data, shared segments, sampler is_cube)
+static constexpr u32 PipelineKeyVersion = 8u; // sotb: push constant layout, specialization without is_cube
 } // namespace Serialization
 
 namespace Vulkan {
@@ -608,6 +608,15 @@ void RegisterShaderBinary(std::vector<u32>&& spv, u64 pgm_hash, size_t perm_idx)
                                        std::move(spv));
 }
 
+namespace {
+// Per-mip image bindings are sized from live sharps, which a preloaded pipeline must not read.
+bool IsPreloadable(const Shader::Info& info) {
+    return std::ranges::none_of(info.images, [](const auto& image) {
+        return image.mip_fallback_mode == Shader::MipStorageFallbackMode::DynamicIndex;
+    });
+}
+} // namespace
+
 bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
                     std::optional<Shader::Gcn::FetchShaderData>& fetch_shader_data,
                     Shader::StageSpecialization& spec, size_t& perm_idx) {
@@ -635,6 +644,9 @@ bool LoadShaderMeta(Serialization::Archive& ar, Shader::Info& info,
     // Motion vertex shaders embed session-local buffer device addresses. They must be
     // recompiled for the current allocation, never loaded from a previous process.
     if (info.hw_stage == Shader::HwStage::Vertex && spec.runtime_info.hw.vs.motion_vectors) {
+        return false;
+    }
+    if (!IsPreloadable(info)) {
         return false;
     }
 
@@ -692,6 +704,10 @@ bool PipelineCache::LoadComputePipeline(Serialization::Archive& ar) {
     sel.infos.fill(nullptr);
     sel.modules.fill(nullptr);
 
+    if (it->second->Failed()) {
+        compute_pipelines.erase(it);
+        return false;
+    }
     return true;
 }
 
@@ -717,6 +733,7 @@ void GraphicsPipeline::SerializationSupport::Serialize(Serialization::Archive& a
     sdata.Write(multisampling);
     sdata.Write(tcs);
     sdata.Write(tes);
+    sdata.Write(fragment);
 }
 
 bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive& ar) {
@@ -728,6 +745,7 @@ bool GraphicsPipeline::SerializationSupport::Deserialize(Serialization::Archive&
     sdata.Read(multisampling);
     sdata.Read(tcs);
     sdata.Read(tes);
+    sdata.Read(fragment);
     return true;
 }
 
@@ -768,6 +786,10 @@ bool PipelineCache::LoadGraphicsPipeline(Serialization::Archive& ar) {
     sel.modules.fill(nullptr);
     sel.fetch_shader.reset();
 
+    if (it->second->Failed()) {
+        graphics_pipelines.erase(it);
+        return false;
+    }
     return true;
 }
 
@@ -901,10 +923,12 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
             pldata.Read(is_compute);
 
             bool result{};
-            if (is_compute) {
-                result = LoadComputePipeline(ar);
-            } else {
-                result = LoadGraphicsPipeline(ar);
+            try {
+                result = is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar);
+            } catch (const std::exception&) {
+                sel.infos.fill(nullptr);
+                sel.modules.fill(nullptr);
+                sel.fetch_shader.reset();
             }
 
             if (result) {
@@ -1019,7 +1043,7 @@ bool PipelineCache::StartBackgroundWarmUp() {
     return true;
 }
 
-void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data) {
+void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data) try {
     const auto entry_started = std::chrono::steady_clock::now();
     SCOPE_EXIT { warm.entry_ns += ElapsedNs(entry_started); ++warm.entries; };
     const auto skip = [&] { warm.done.fetch_add(1, std::memory_order_relaxed); };
@@ -1091,6 +1115,9 @@ void PipelineCache::ReadWarmEntry(BackgroundWarmup& warm, std::vector<u8>&& data
     }
     entry.queued = std::chrono::steady_clock::now();
     warm.read.Push(std::move(entry));
+} catch (const std::exception&) {
+    // A damaged blob: the entry is left for the game to compile.
+    warm.done.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool PipelineCache::MergeWarmStage(WarmStage& stage) {
@@ -1214,10 +1241,16 @@ void PipelineCache::PumpWarmUp() {
                 built.compute = std::make_unique<ComputePipeline>(
                     instance, scheduler, desc_heap, profile, *pipeline_cache, compute_key,
                     *infos[0], modules[0], compute_data, true);
+                if (built.compute->Failed()) {
+                    return false; // left for the game to compile
+                }
             } else {
                 built.graphics = std::make_unique<GraphicsPipeline>(
                     instance, scheduler, desc_heap, profile, graphics_key, *pipeline_cache, infos,
                     no_runtime_infos, fetch, modules, sdata, true);
+                if (built.graphics->Failed()) {
+                    return false;
+                }
             }
             warm.built.Push(std::move(built));
             return true;
@@ -1345,7 +1378,12 @@ bool PersistentSrtInfo::Deserialize(Serialization::Archive& ar) {
 
     srt.Read(this, sizeof(*this));
 
+    // The stored pointer belongs to the process that wrote the blob.
+    walker_func = nullptr;
     if (walker_func_size) {
+        if (walker_func_size > ar.Remaining()) {
+            throw Serialization::CorruptData{};
+        }
         walker_func = RegisterWalkerCode(ar.CurrPtr(), walker_func_size);
         ar.Advance(walker_func_size);
     }

@@ -37,6 +37,7 @@ class Instance;
 
 struct RenderAttachment {
     vk::ImageView image_view;
+    vk::Image image; ///< the view's image when known (attachment hazards), else null
     vk::ImageLayout image_layout;
     std::array<u32, 4> clear_value;
     union {
@@ -758,8 +759,7 @@ public:
             return;
         }
         if (!record_chunk->Push(std::forward<Func>(func))) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
+            full_chunks.push_back(std::exchange(record_chunk, AcquireChunk()));
             const bool pushed = record_chunk->Push(std::forward<Func>(func));
             ASSERT(pushed);
         }
@@ -781,8 +781,7 @@ public:
             bytes = 0; // RecordData() places it out of line; keep room for the command
         }
         if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
-            full_chunks.push_back(std::move(record_chunk));
-            record_chunk = AcquireChunk();
+            full_chunks.push_back(std::exchange(record_chunk, AcquireChunk()));
         }
     }
 
@@ -878,6 +877,12 @@ public:
         return &work_semaphore;
     }
 
+    /// The CPU will read memory the GPU writes in this submission: it ends with a barrier that
+    /// makes those writes visible to the host (a semaphore or fence wait alone does not).
+    void RequestHostReadBarrier() {
+        host_read_barrier.store(true, std::memory_order_relaxed);
+    }
+
     /// Defers an operation until the gpu has reached the current cpu tick.
     /// Will be run when submitting or calling PopPendingOperations.
     void DeferOperation(Common::UniqueFunction<void>&& func) {
@@ -900,6 +905,9 @@ public:
 
 private:
     void AllocateWorkerCommandBuffers();
+
+    void ReplayBeginRendering(vk::CommandBuffer cmdbuf, const vk::RenderingInfo& info);
+    void ReplayEndRendering(vk::CommandBuffer cmdbuf);
 
     std::unique_ptr<RecordChunk> AcquireChunk();
 
@@ -931,6 +939,9 @@ private:
     std::jthread priority_pending_ops_thread;
     RenderState render_state;
     bool is_rendering = false;
+    bool has_render_state = false; ///< render_state holds the last rendering instance
+    std::atomic<bool> host_read_barrier{false};
+    bool replay_rendering_open = false; ///< replay thread only
     // sotb: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     std::atomic<std::thread::id> recording_owner{}; // see OwnsRecording()

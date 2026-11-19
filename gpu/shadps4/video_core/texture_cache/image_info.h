@@ -56,6 +56,7 @@ struct ImageInfo {
     s32 SliceOf(const ImageInfo& info, s32 mip) const;
 
     bool IsCompatible(const ImageInfo& info) const;
+    bool IsSubrectOf(const ImageInfo& info) const;
     void UpdateSize();
 
     struct {
@@ -82,6 +83,7 @@ struct ImageInfo {
         u32 offset;
     };
     std::array<MipInfo, 16> mips_layout;
+    u32 micro_tiled_mips{};
     VAddr guest_address{};
     u32 guest_size{};
     u8 bank_swizzle{};

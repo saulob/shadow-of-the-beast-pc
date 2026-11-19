@@ -75,6 +75,23 @@ void AssembleRectVertices(std::span<const Index> indices, bool restart, u32 firs
                                       });
 }
 
+/// The first index of an indexed rectangle list whose whole rectangles name consecutive vertices from it, so it
+/// draws as the non-indexed list starting there; empty when it has no whole rectangle or they are not consecutive.
+template <typename Index>
+std::optional<u32> SequentialRectBase(std::span<const Index> indices) {
+    const size_t used = indices.size() / RectVerticesPerRect * RectVerticesPerRect;
+    if (used == 0) {
+        return std::nullopt;
+    }
+    const u64 base = indices[0];
+    for (size_t i = 1; i < used; ++i) {
+        if (u64(indices[i]) != base + i) {
+            return std::nullopt;
+        }
+    }
+    return u32(base);
+}
+
 /// What can be read of `requested` indices when only `readable_bytes` of them are mapped.
 inline u32 ReadableIndexCount(u32 requested, u64 readable_bytes, u32 index_size) {
     return u32(std::min<u64>(requested, readable_bytes / index_size));

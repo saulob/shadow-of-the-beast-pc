@@ -43,6 +43,7 @@ GLenum ImageTarget(AmdGpu::ImageType type) {
     case AmdGpu::ImageType::Color1DArray:
         return GL_TEXTURE_1D_ARRAY;
     case AmdGpu::ImageType::Color2DArray:
+    case AmdGpu::ImageType::Cube:
         return GL_TEXTURE_2D_ARRAY;
     case AmdGpu::ImageType::Color3D:
         return GL_TEXTURE_3D;
@@ -364,7 +365,8 @@ void TextureCache::Upload(Image& image) {
         }
         if (info.props.is_tiled) {
             scratch.resize(size_t(pitch) * rows * element_bytes * slices);
-            SurfaceTiler{tiling, pitch, rows}.Detile(source, size, scratch.data(), slices);
+            SurfaceTiler{tiling, pitch, rows, (info.micro_tiled_mips >> level & 1) != 0}.Detile(
+                source, size, scratch.data(), slices);
             UploadLevel(image, level, scratch.data(), pitch, rows);
         } else {
             if (size < u64(pitch) * rows * element_bytes) {

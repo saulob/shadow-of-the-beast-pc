@@ -6,6 +6,7 @@
 #include <boost/container/small_vector.hpp>
 
 #include "shader_recompiler/ir/opcodes.h"
+#include "shader_recompiler/ir/shared_memory.h"
 #include "shader_recompiler/ir/value.h"
 
 namespace Shader {
@@ -16,6 +17,7 @@ namespace Shader::Optimization {
 
 union PostOpData {
     u32 dw1_mask;
+    u32 dw2_shift;
     IR::Value lod_prod{};
 };
 
@@ -98,6 +100,8 @@ inline bool IsDataRingInstruction(const IR::Inst& inst) {
     case IR::Opcode::SharedAtomicUMin64:
     case IR::Opcode::SharedAtomicSMin32:
     case IR::Opcode::SharedAtomicSMin64:
+    case IR::Opcode::SharedAtomicFMin32:
+    case IR::Opcode::SharedAtomicFMax32:
     case IR::Opcode::SharedAtomicUMax32:
     case IR::Opcode::SharedAtomicUMax64:
     case IR::Opcode::SharedAtomicSMax32:
@@ -116,7 +120,7 @@ inline bool IsDataRingInstruction(const IR::Inst& inst) {
     case IR::Opcode::SharedAtomicDec64:
     case IR::Opcode::SharedAtomicCmpSwap32:
     case IR::Opcode::SharedAtomicCmpSwap64:
-        return inst.Flags<bool>(); // is_gds
+        return inst.Flags<SharedMemory::Flags>().is_gds.Value() != 0;
     default:
         return false;
     }

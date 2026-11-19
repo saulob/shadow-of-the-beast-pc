@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-fno-omit-frame-pointer)
 
 find_package(Vulkan REQUIRED)
-find_package(fmt REQUIRED)
+find_package(fmt REQUIRED GLOBAL)
 find_package(Boost REQUIRED CONFIG)
 find_package(tsl-robin-map REQUIRED)
 find_package(Zydis REQUIRED)
@@ -68,6 +68,7 @@ function(add_host_shader FILENAME SHADER_NAME)
     set(SHADER_HEADERS ${SHADER_HEADERS} ${OUT} PARENT_SCOPE)
 endfunction()
 add_host_shader(color_to_ms_depth.frag color_to_ms_depth_frag)
+add_host_shader(ms_depth_to_color.frag ms_depth_to_color_frag)
 add_host_shader(ms_image_blit.frag ms_image_blit_frag)
 add_host_shader(ms_image_blit.frag ms_image_blit_msaa_frag SRC_MSAA=1)
 add_host_shader(fault_buffer_process.comp fault_buffer_process_comp)
@@ -97,7 +98,7 @@ list(FILTER VIDEO_CORE EXCLUDE REGEX "renderdoc\\.cpp$")
 set(COMMON
     shadps4/common/decoder.cpp shadps4/common/error.cpp
     shadps4/common/io_file.cpp shadps4/common/native_clock.cpp shadps4/common/number_utils.cpp
-    shadps4/common/path_util.cpp shadps4/common/rdtsc.cpp shadps4/common/spin_lock.cpp shadps4/common/recursive_lock.cpp
+    shadps4/common/path_util.cpp shadps4/common/rdtsc.cpp shadps4/common/spin_lock.cpp shadps4/common/recursive_lock.cpp shadps4/common/slot_vector.cpp
     shadps4/common/string_util.cpp shadps4/common/thread.cpp shadps4/common/signal_context.cpp
     shim/common/logging/log.cpp)
 file(GLOB SHIM_SOURCES CONFIGURE_DEPENDS shim/*.cpp shim/*/*.cpp)

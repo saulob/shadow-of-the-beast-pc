@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Copyright 2024-2026 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
+#include <thread>
+
 #include "common/assert.h"
 #include "common/elf_info.h"
 #include "common/logging/log.h"
@@ -351,7 +354,20 @@ s32 sceVideoOutSubmitEopFlip(s32 handle, u32 buf_id, u32 mode, s64 flip_arg, voi
     Platform::IrqC::Instance()->RegisterOnce(
         Platform::InterruptId::GfxFlip, [=](Platform::InterruptId irq) {
             ASSERT_MSG(irq == Platform::InterruptId::GfxFlip, "An unexpected IRQ occured");
-            ASSERT_MSG(port->buffer_labels[buf_id] == 1, "Out of order flip IRQ");
+            // The label write may still be on its way from a recording thread: wait briefly and
+            // flip anyway (the frame can show twice) instead of stopping the game.
+            if (port->buffer_labels[buf_id] != 1) {
+                const auto deadline =
+                    std::chrono::steady_clock::now() + std::chrono::milliseconds(20);
+                while (reinterpret_cast<volatile u64&>(port->buffer_labels[buf_id]) != 1 &&
+                       std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::yield();
+                }
+                if (port->buffer_labels[buf_id] != 1) {
+                    LOG_WARNING(Lib_VideoOut, "Flip IRQ for buffer {} before its label was set",
+                                buf_id);
+                }
+            }
             const auto result = driver->SubmitFlip(port, buf_id, flip_arg, true);
             ASSERT_MSG(result, "EOP flip submission failed");
         });

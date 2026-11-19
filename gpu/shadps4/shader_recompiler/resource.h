@@ -13,7 +13,7 @@ namespace Shader {
 
 static constexpr u32 NUM_USER_DATA_REGS = 16;
 static constexpr u32 NUM_IMAGES = 64;
-static constexpr u32 NUM_BUFFERS = 40;
+static constexpr u32 NUM_BUFFERS = 56;
 static constexpr u32 NUM_SAMPLERS = 16;
 static constexpr u32 NUM_FMASKS = 8;
 
@@ -63,6 +63,9 @@ enum class SharpFetchPostOp : u8 {
     ForceRepeatXyzClamp,
     ForceLastTexelXyClamp,
     ClearAnisoRatioAndThreshold,
+    ForceUnnormalizedCoords,
+    // For buffers
+    ClearStrideAndBitshiftDw2WithImm,
 };
 
 enum class BufferType : u8 {
@@ -83,6 +86,7 @@ struct BufferResource {
     bool is_formatted{};
     SharpFetchPostOp post_op{};
     u32 post_op_dw1_mask{};
+    u32 post_op_dw2_shift{};
 
     bool IsSpecial() const noexcept {
         return buffer_type != BufferType::Guest;
@@ -97,8 +101,16 @@ struct BufferResource {
             reinterpret_cast<u32*>(&buffer)[1] |= post_op_dw1_mask;
         } else if (post_op == SharpFetchPostOp::OffsetByProgramBase) {
             buffer.base_address += info.ProgramBase();
+        } else if (post_op == SharpFetchPostOp::ClearStrideAndBitshiftDw2WithImm) {
+            buffer.stride = 0;
+            buffer.num_records <<= post_op_dw2_shift;
         }
         if (!buffer.Valid()) {
+            return AmdGpu::Buffer::Null();
+        }
+        // The rasterizer binds such buffers as null: specialize and translate them as null too,
+        // so that garbage strides and formats in these slots cannot create new shader variants.
+        if (buffer.num_records != 0 && (buffer.base_address == 0 || buffer.GetSize() == 0)) {
             return AmdGpu::Buffer::Null();
         }
         return buffer;
@@ -135,7 +147,7 @@ struct ImageResource {
             image.type = u64(AmdGpu::ImageType::Color2DArray);
             image.depth = (image.depth + 1) * 6 - 1;
         }
-        if (!image.Valid()) {
+        if (!image.Valid() || image.HasReservedFields()) {
             image = AmdGpu::Image::Null(is_depth);
         } else if (is_depth) {
             const auto data_fmt = image.GetDataFmt();
@@ -174,6 +186,8 @@ struct SamplerResource {
     SharpFetchPostOp post_op{};
     SharpLocation post_op_tsharp_dw3_off{};
     bool is_depth{};
+    /// Used with a cube image: cube faces are sampled as 2D array layers, whose edges must not wrap.
+    bool is_cube{};
 
     constexpr AmdGpu::Sampler GetSharp(const auto& info) const noexcept {
         AmdGpu::Sampler sampler{};
@@ -194,6 +208,12 @@ struct SamplerResource {
         } else if (post_op == SharpFetchPostOp::ClearAnisoRatioAndThreshold) {
             sampler.max_aniso.Assign(AmdGpu::AnisoRatio::One);
             sampler.aniso_threshold.Assign(0);
+        } else if (post_op == SharpFetchPostOp::ForceUnnormalizedCoords) {
+            sampler.force_unnormalized.Assign(1);
+        }
+        if (is_cube) {
+            sampler.clamp_x.Assign(AmdGpu::ClampMode::ClampLastTexel);
+            sampler.clamp_y.Assign(AmdGpu::ClampMode::ClampLastTexel);
         }
         return sampler;
     }
@@ -214,8 +234,7 @@ struct PushData {
     static constexpr u32 YOffsetIndex = 1;
     static constexpr u32 XScaleIndex = 2;
     static constexpr u32 YScaleIndex = 3;
-    static constexpr u32 UdRegsIndex = 4;
-    static constexpr u32 BufOffsetIndex = UdRegsIndex + NUM_USER_DATA_REGS / 4;
+    static constexpr u32 BufOffsetIndex = 4;
     static constexpr u32 MotionParamIndex = BufOffsetIndex + NUM_BUFFERS / 16 + 1;
     static constexpr u32 SceneSizeIndex = MotionParamIndex + 1;
 
@@ -223,7 +242,6 @@ struct PushData {
     float yoffset;
     float xscale;
     float yscale;
-    std::array<u32, NUM_USER_DATA_REGS> ud_regs;
     std::array<u8, NUM_BUFFERS> buf_offsets;
     u32 motion_param; ///< sotb: object motion parameter index (0: off)
     u32 scene_size; ///< reduced width | height << 16; zero means native pixel coordinates

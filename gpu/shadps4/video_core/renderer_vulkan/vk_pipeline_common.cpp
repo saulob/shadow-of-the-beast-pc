@@ -1,11 +1,14 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <chrono>
 #include <span>
+#include <thread>
 
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
 
+#include "common/logging/log.h"
 #include "shader_recompiler/resource.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
@@ -21,6 +24,36 @@ Pipeline::Pipeline(const Instance& instance_, Scheduler& scheduler_, DescriptorH
       is_compute{is_compute_} {}
 
 Pipeline::~Pipeline() = default;
+
+vk::UniquePipeline CreateRefusedPipelineAgain(
+    const std::function<vk::ResultValue<vk::UniquePipeline>()>& create, vk::Result first,
+    std::string_view what, std::string_view name) {
+    constexpr u32 MaxAttempts = 4;
+    const auto may_pass = [](vk::Result result) {
+        return result == vk::Result::eErrorUnknown ||
+               result == vk::Result::eErrorOutOfHostMemory ||
+               result == vk::Result::eErrorOutOfDeviceMemory ||
+               result == vk::Result::eErrorInitializationFailed;
+    };
+    vk::Result result = first;
+    u32 attempts = 0;
+    while (attempts < MaxAttempts && (attempts == 0 || may_pass(result))) {
+        if (attempts > 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds{100} * attempts);
+        }
+        ++attempts;
+        auto created = create();
+        result = created.result;
+        if (result == vk::Result::eSuccess) {
+            LOG_WARNING(Render_Vulkan, "The driver refused {} {} ({}), created after {} attempts",
+                        what, name, vk::to_string(first), attempts);
+            return std::move(created.value);
+        }
+    }
+    LOG_ERROR(Render_Vulkan, "The driver refused {} {} ({}, then {}), its draws are skipped", what,
+              name, vk::to_string(first), vk::to_string(result));
+    return {};
+}
 
 
 void Pipeline::BindResources(DescriptorWrites& set_writes,
