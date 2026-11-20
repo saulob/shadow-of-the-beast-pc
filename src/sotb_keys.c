@@ -88,15 +88,14 @@ int sotb_keys_apply(SotbKeyMap *map, const char *ini_key, const char *value) {
     return 0;
 }
 
-static char *trim(char *text) {
+char *sotb_text_trim(char *text) {
     while (*text==' ' || *text=='\t') ++text;
     char *end=text+strlen(text);
     while (end>text && (end[-1]==' ' || end[-1]=='\t' || end[-1]=='\r')) *--end=0;
     return text;
 }
 
-void sotb_keys_load(const char *path, SotbKeyMap *map) {
-    sotb_keys_defaults(map);
+void sotb_ini_read(const char *path, SotbIniEntry entry, void *user) {
     size_t size=0;
     char *text=path && *path ? (char *)SDL_LoadFile(path,&size) : NULL;
     if (!text) return;
@@ -105,14 +104,23 @@ void sotb_keys_load(const char *path, SotbKeyMap *map) {
         char *next=strchr(line,'\n');
         if (next) *next++=0;
         char *eq=strchr(line,'=');
-        if (eq && *trim(line)!='#') {
+        if (eq && *sotb_text_trim(line)!='#') {
             *eq=0;
-            char *value=trim(eq+1);
+            char *value=sotb_text_trim(eq+1);
             char *comment=strstr(value," #");
             if (comment) *comment=0;
-            sotb_keys_apply(map,trim(line),trim(value));
+            entry(sotb_text_trim(line),sotb_text_trim(value),user);
         }
         line=next;
     }
     SDL_free(text);
+}
+
+static void apply_key_entry(const char *key, const char *value, void *map) {
+    sotb_keys_apply((SotbKeyMap *)map,key,value);
+}
+
+void sotb_keys_load(const char *path, SotbKeyMap *map) {
+    sotb_keys_defaults(map);
+    sotb_ini_read(path,apply_key_entry,map);
 }

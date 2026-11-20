@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, GPU command snapshot and Vulkan recording tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, GPU command snapshot and Vulkan recording tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
   exit code is non-zero when any failed.
 
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
-  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the GPU command snapshot test and the Vulkan recording and synchronization test.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the pipeline warm-up test, the audio backlog recovery test, the controller rebinding test, the controller prompt test, the GPU command snapshot test and the Vulkan recording and synchronization test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
 .EXAMPLE
@@ -71,6 +71,14 @@ function Invoke-BuildIdentity { Invoke-FocusedTest 'sotb-build-identity-tests' '
 
 function Invoke-PipelineCache { Invoke-FocusedTest 'sotb-pipeline-cache-tests' '^pipeline cache tests' }
 
+function Invoke-PipelineWarmup { Invoke-FocusedTest 'sotb-pipeline-warmup-tests' '^pipeline warm-up tests' }
+
+function Invoke-AudioBacklog { Invoke-FocusedTest 'sotb-audio-backlog-tests' '^audio backlog tests' }
+
+function Invoke-PadBinding { Invoke-FocusedTest 'sotb-pad-binding-tests' '^pad binding tests' }
+
+function Invoke-PadPrompt { Invoke-FocusedTest 'sotb-pad-prompt-tests' '^pad prompt tests' }
+
 function Invoke-CommandSnapshot { Invoke-FocusedTest 'sotb-command-snapshot-tests' '^command snapshot tests' }
 
 function Invoke-GpuRecording { Invoke-FocusedTest 'sotb-gpu-recording-tests' '^gpu recording tests' }
@@ -121,6 +129,10 @@ $steps = @(
     @{ Title = 'GPU memory: sparse or fully resident arena decision, layout, overflow, allocation failure rollback and migration (fake arenas, no Vulkan device)'; Block = { Invoke-BufferArena } },
     @{ Title = 'Unsupported build diagnostics: supported identity, altered fields, candidates, deterministic report, refusal before guest code (synthetic; the real boot image is read only and skipped when absent)'; Block = { Invoke-BuildIdentity } },
     @{ Title = 'Pipeline cache: sealed blobs, host identity (GPU, driver, pipeline cache UUID, format), corruption and truncation, stale temporaries, atomic writes, failure keeps the previous cache, unrelated files kept (temporary folders, no Vulkan, no real cache)'; Block = { Invoke-PipelineCache } },
+    @{ Title = 'Pipeline warm-up: startup choice with an on-demand override, bounded worker pool and queue, no duplicate compilation against the game''s own pipelines, failures counted once and never retried, shutdown drain and refusal of new work (fake jobs and a fake renderer, no Vulkan, no window)'; Block = { Invoke-PipelineWarmup } },
+    @{ Title = 'Audio backlog recovery: format-aware queue duration, 100 ms threshold and boundary, invalid formats and overflow, steady playback never recovers, device stall and endpoint reset recover, repeated recoveries, log rate limit (pure queue model, no audio device)'; Block = { Invoke-AudioBacklog } },
+    @{ Title = 'Controller rebinding: default layout, every action and source, triggers, shoulders, stick clicks, Options and touchpad, persistence and reset in the settings file, invalid and older configs, duplicate policy, capture rules, hotplug (synthetic gamepad samples, no controller, no window)'; Block = { Invoke-PadBinding } },
+    @{ Title = 'Controller prompts: Xbox, DualShock, DualSense, generic and Steam Input detection, Auto/Xbox/PlayStation policy, active controller tracking without flapping, persisted mode, labels, regional Confirm/Back, prompts never change the guest buttons (synthetic metadata, no controller)'; Block = { Invoke-PadPrompt } },
     @{ Title = 'GPU command snapshot: owned copy at submission, isolation from guest rewrites, ordering, size bounds and overflow, lifetime until the last consumer, release, shutdown drain (synthetic command buffers, no GPU)'; Block = { Invoke-CommandSnapshot } },
     @{ Title = 'Vulkan recording and synchronization: replay rendering scope, staging size, alignment and reuse rules, recording chunk bounds, bounded device fault report, device lost reporting paths (no Vulkan device)'; Block = { Invoke-GpuRecording } }
 )

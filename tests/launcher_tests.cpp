@@ -289,7 +289,7 @@ void TestPageTexts() {
 #ifdef _WIN32
     CHECK(std::string(kRendererChoices[3].name) == "Direct3D 11 (experimental)");
 #endif
-    CHECK(!Contains(launcher, "Controller prompts"));
+    CHECK(Contains(launcher, "Controller prompts") && Contains(launcher, "the game's own button art is not changed"));
 }
 
 void TestManagedSettings() {

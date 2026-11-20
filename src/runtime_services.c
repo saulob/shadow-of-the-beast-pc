@@ -6,6 +6,7 @@
  * Every entry here is an explicit contract; unknown functions still stop. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "sotb_pad_prompts.h"
 #include "startup_phase.h"
 #include "sotbgpu.h"
 #include "trophies/trophy_runtime.h"
@@ -124,7 +125,7 @@ static ABI int32_t system_param(int32_t id,int32_t *value) {
 #endif
     case 5: *value=0; break;                    /* summer time */
     case 7: *value=0; break;                    /* parental level off */
-    case 1000: *value=1; break;                 /* enter button = cross */
+    case 1000: *value=sotb_prompt_enter_button_assign(); break; /* enter button = cross */
     default: fprintf(stderr,"STOP: unsupported system parameter %d\n",id); runtime_exit(21);
     }
     return 0;

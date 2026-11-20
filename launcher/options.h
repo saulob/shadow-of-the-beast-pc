@@ -8,6 +8,8 @@
 #include "guest_display.h"
 #include "sotb_displays.h"
 #include "sotb_keys.h"
+#include "sotb_pad.h"
+#include "sotb_pad_prompts.h"
 #include "trg/settings.h"
 
 namespace Sotb {
@@ -55,5 +57,18 @@ int SavedKey(const trg::SettingsStore& settings, SotbKeyAction action);
 void SetKey(trg::SettingsStore& settings, SotbKeyAction action, int scancode);
 // Puts every keyboard control and port hotkey back to its default and nothing else.
 void ResetKeys(trg::SettingsStore& settings);
+
+// The Controls page's controller bindings, one SDL gamepad name per PS4 button in the settings (sotb_pad.h).
+// The saved source of a PS4 button; the default when the setting is missing or names no bindable button or trigger.
+int SavedPadSource(const trg::SettingsStore& settings, SotbPadAction action);
+void SetPadSource(trg::SettingsStore& settings, SotbPadAction action, int source);
+// Puts every controller binding back to its default and nothing else.
+void ResetPads(trg::SettingsStore& settings);
+// The saved prompt mode; Auto when the setting is missing or unknown. It never changes a binding.
+SotbPromptMode SavedPromptMode(const trg::SettingsStore& settings);
+// "Auto", "Xbox", "PlayStation".
+const char* PromptModeLabel(SotbPromptMode mode);
+// "A" or "Cross" for the source of an action, in the prompt family that applies.
+std::string PadBindingLabel(const trg::SettingsStore& settings, SotbPadAction action, SotbPromptFamily family);
 
 } // namespace Sotb

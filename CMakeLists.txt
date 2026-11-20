@@ -41,7 +41,7 @@ add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c)
 target_include_directories(sotb_guest_display PUBLIC src)
 target_compile_options(sotb_guest_display PRIVATE -Wall -Wextra -Werror)
 
-add_library(sotb_keys STATIC src/sotb_keys.c)
+add_library(sotb_keys STATIC src/sotb_keys.c src/sotb_pad.c src/sotb_pad_prompts.c)
 target_include_directories(sotb_keys PUBLIC src)
 target_link_libraries(sotb_keys PUBLIC SDL3::SDL3)
 target_compile_options(sotb_keys PRIVATE -Wall -Wextra -Werror)
@@ -237,6 +237,17 @@ target_include_directories(sotb-pipeline-cache-tests PRIVATE $<TARGET_PROPERTY:s
 target_compile_definitions(sotb-pipeline-cache-tests PRIVATE $<TARGET_PROPERTY:sotbgpu,COMPILE_DEFINITIONS> SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(sotb-pipeline-cache-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sotb-pipeline-cache-tests PRIVATE fmt::fmt)
+
+add_executable(sotb-pipeline-warmup-tests EXCLUDE_FROM_ALL tests/pipeline_warmup_tests.cpp)
+set_target_properties(sotb-pipeline-warmup-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-pipeline-warmup-tests PRIVATE gpu/shim gpu/shadps4)
+target_compile_definitions(sotb-pipeline-warmup-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-pipeline-warmup-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sotb-pipeline-warmup-tests PRIVATE -pthread)
+
+add_executable(sotb-audio-backlog-tests EXCLUDE_FROM_ALL tests/audio_backlog_tests.c)
+target_include_directories(sotb-audio-backlog-tests PRIVATE src)
+target_compile_options(sotb-audio-backlog-tests PRIVATE -Wall -Wextra -Werror)
 
 add_executable(sotb-command-snapshot-tests EXCLUDE_FROM_ALL tests/command_snapshot_tests.cpp)
 set_target_properties(sotb-command-snapshot-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

@@ -27,6 +27,7 @@
 #include "launcher_quit.h"
 #include "host.h"
 #include "options.h"
+#include "pad_capture.h"
 #include "page_icons.h"
 #include "paths.h"
 #include "placement.h"
@@ -249,6 +250,7 @@ private:
                 SavePlacement(placement_.TakeSettled(now));
             }
             host_.BeginFrame();
+            PollPadCapture();
             NormalizeGraphicsCard();
             const trg::Result result = launcher_->Frame();
             const bool update_restart =
@@ -282,6 +284,7 @@ private:
                     settings_.GetBool(kSkipIntroKey, false) ? "on" : "off");
         launcher_.reset();
         trophy_page_.reset();
+        controllers_.Close();
         host_.Close();
         return outcome;
     }
@@ -499,9 +502,24 @@ private:
     }
 
     void DrawControls(trg::Ui& ui) {
+        const SotbPromptFamily family = RefreshPromptFamily();
         ui.Info("Controller", ControllersText().c_str());
         ui.Info("Keyboard", "Always on, together with the controller.");
         ui.Toggle("Controller Rumble", kControllerRumbleHelp, kControllerRumbleKey, true, "Off", "On");
+        ui.Combo("Controller prompts", kControllerPromptsHelp, kControllerPromptsKey, "auto",
+                 {{"auto", "Auto"}, {"xbox", "Xbox"}, {"playstation", "PlayStation"}});
+        ui.Info("Prompts shown", PromptsText(family).c_str());
+        if (ui.ConfirmRow("Controller defaults", "Puts every controller binding back to the standard layout.",
+                          "Reset to defaults", "Put every controller button back to its default?", "Reset")) {
+            ResetPads(settings_);
+            ui.SetStatus("Controller bindings reset to defaults.");
+        }
+        if (ui.Section("Controller bindings", true)) {
+            ui.Help(kControllerBindingsHelp);
+            for (int action = 0; action < SOTB_PAD_COUNT; ++action) {
+                PadRow(ui, static_cast<SotbPadAction>(action), family);
+            }
+        }
         ui.Help("A controller that is not recognized needs a line in gamecontrollerdb.txt in the user folder. The log "
                 "names its GUID.");
         if (ui.ConfirmRow("Keyboard defaults", "Puts the keyboard controls and the port hotkeys back to their defaults.",
@@ -515,8 +533,8 @@ private:
                 KeyRow(ui, static_cast<SotbKeyAction>(action));
             }
         }
-        if (ui.Section("Xbox controller mapping", false)) {
-            ui.Help("What each Xbox input does in the game. LS and RS pressed together open the Options menu instead.");
+        if (ui.Section("Default controller layout", false)) {
+            ui.Help("What each Xbox input does in the game by default. LS and RS pressed together open the Options menu instead.");
             for (const PadMapping& mapping : XboxMapping()) {
                 ui.Info(mapping.xbox, mapping.ps4);
             }
@@ -682,6 +700,91 @@ private:
         return names.empty() ? "None connected. Xbox controllers work without setup." : names;
     }
 
+    // Auto follows the controller in use; Xbox and PlayStation ignore it.
+    SotbPromptFamily RefreshPromptFamily() {
+        const std::vector<SotbPadDevice> devices = ConnectedPadDevices();
+        sotb_active_pad_update(&active_pad_, devices.data(), devices.size(), pad_input_id_);
+        pad_input_id_ = 0;
+        return sotb_prompt_family(SavedPromptMode(settings_), active_pad_.kind);
+    }
+
+    std::string PromptsText(SotbPromptFamily family) const {
+        std::string text = sotb_prompt_family_name(family);
+        if (SavedPromptMode(settings_) == SOTB_PROMPT_AUTO) {
+            text += std::string(" (detected: ") + sotb_pad_kind_name(active_pad_.kind) + ")";
+        }
+        return text + ". These names are for this page; the game's own button art is not changed.";
+    }
+
+    void PadRow(trg::Ui& ui, SotbPadAction action, SotbPromptFamily family) {
+        ui.Row(sotb_pad_actions[action].label, nullptr);
+        ImGui::PushID(sotb_pad_actions[action].ini_key);
+        if (pad_capture_.active() && pad_capture_.action() == action) {
+            pad_capture_drawn_ = true;
+            if (ui.AccentButton("Press a controller button...  (Esc cancels)")) {
+                pad_capture_.Cancel();
+                pad_hold_ = true;
+            }
+        } else {
+            std::string label = PadBindingLabel(settings_, action, family);
+            const SotbPadMap map = PadMap();
+            const int users = sotb_pad_source_users(&map, SavedPadSource(settings_, action));
+            if (users > 1) {
+                label += "  (also used by " + std::to_string(users - 1) + " more)";
+            }
+            if (ImGui::Button(label.c_str(), ImVec2(-FLT_MIN, 0))) {
+                if (pad_capture_.Begin(action, ControllerReader::Connected())) {
+                    pad_capture_drawn_ = true;
+                } else {
+                    ui.SetStatus("No controller connected. Connect one to change this binding.");
+                }
+            }
+        }
+        ImGui::PopID();
+    }
+
+    SotbPadMap PadMap() const {
+        SotbPadMap map;
+        for (int action = 0; action < SOTB_PAD_COUNT; ++action) {
+            map.source[action] = SavedPadSource(settings_, static_cast<SotbPadAction>(action));
+        }
+        return map;
+    }
+
+    // While a binding waits, and until the pressed button is released, the controller must not also drive the
+    // launcher: Menu would press Play.
+    void PollPadCapture() {
+        if (pad_capture_.active() && !pad_capture_drawn_) {
+            pad_capture_.Cancel();
+            pad_hold_ = true;
+        }
+        pad_capture_drawn_ = false;
+        if (!pad_capture_.active() && !pad_hold_) {
+            return;
+        }
+        uint32_t pressed_id = 0;
+        const std::vector<SotbPadInput> pads = controllers_.Read(&pressed_id);
+        if (pressed_id) {
+            pad_input_id_ = pressed_id;
+        }
+        if (pad_capture_.active()) {
+            const SotbPadAction action = pad_capture_.action();
+            const PadCaptureResult result = pad_capture_.Update(pads, ImGui::IsKeyPressed(ImGuiKey_Escape, false));
+            if (result.kind == PadCaptureResult::Kind::kAssigned) {
+                SetPadSource(settings_, action, result.source);
+            } else if (result.kind == PadCaptureResult::Kind::kNoController) {
+                launcher_->SetStatus("No controller connected. Connect one to change this binding.");
+            }
+            pad_hold_ = !pad_capture_.active();
+        } else if (std::none_of(pads.begin(), pads.end(), [](const SotbPadInput& pad) {
+                       return sotb_pad_first_pressed(&pad) != SOTB_PAD_SOURCE_NONE;
+                   })) {
+            pad_hold_ = false;
+            controllers_.Close();
+        }
+        ImGui::GetIO().ClearInputKeys();
+    }
+
     ImTextureID HeaderArtTexture(int width, int height) {
         if (header_art_.rgba.empty() || width <= 0 || height <= 0) {
             return ImTextureID{};
@@ -797,6 +900,12 @@ private:
     std::unique_ptr<TrophyPage> trophy_page_;
     std::unique_ptr<IncidentPage> incident_page_;
     std::unique_ptr<trg::update::UpdateController> updater_;
+    PadCapture pad_capture_;
+    ControllerReader controllers_;
+    SotbActivePad active_pad_{};
+    uint32_t pad_input_id_ = 0;
+    bool pad_capture_drawn_ = false;
+    bool pad_hold_ = false;
     GameFileState state_ = GameFileState::kMissing;
     const GameBuild* build_ = nullptr;
     std::string eboot_sha256_;

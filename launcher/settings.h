@@ -33,6 +33,7 @@ inline constexpr char kShowFpsTitleKey[] = "show_fps_title";
 inline constexpr char kShowResolutionTitleKey[] = "show_resolution_title";
 inline constexpr char kShowFrameCounterKey[] = "show_fps";
 inline constexpr char kControllerRumbleKey[] = "controller_rumble";
+inline constexpr char kControllerPromptsKey[] = "controller_prompts";
 inline constexpr char kDetailedLoggingKey[] = "detailed_logging";
 
 inline constexpr char kLauncherXKey[] = "launcher_x";
@@ -107,6 +108,13 @@ inline constexpr char kFrameCounterHelp[] =
 inline constexpr char kSkipIntroHelp[] = "Skip startup logos and intro and go directly to the Press Start screen. Applies at next start.";
 inline constexpr char kTextLanguageHelp[] = "Language used by game menus and subtitles.";
 inline constexpr char kControllerRumbleHelp[] = "Off disables controller vibration. Applies at the next game start.";
+inline constexpr char kControllerPromptsHelp[] =
+    "Auto names the buttons after the controller in use; Xbox or PlayStation always uses that style. This only changes "
+    "the names on this page and never the bindings or what the game receives.";
+inline constexpr char kControllerBindingsHelp[] =
+    "Click a row, then press a controller button or pull a trigger. Esc cancels. Each row is a PlayStation button, "
+    "which is what the game receives; the controller button shown presses it. The bindings apply to every connected "
+    "controller, the sticks stay analog, and a controller button can be used for more than one row.";
 inline constexpr char kDetailedLoggingHelp[] = "Keeps logs for normal sessions. Crash diagnostics are always preserved.";
 
 using Values = std::map<std::string, std::string, std::less<>>;

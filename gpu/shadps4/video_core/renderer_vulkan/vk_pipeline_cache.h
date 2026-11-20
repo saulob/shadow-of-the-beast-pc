@@ -224,7 +224,6 @@ private:
     std::unique_ptr<AsyncCompiler> compiler, capture_compiler;
     std::vector<vk::UniquePipelineCache> worker_pipeline_caches;
     bool worker_caches_seeded = false;
-    struct WarmupPool;
     /// sotb: StartBackgroundWarmUp state; owned here, deleted by StopWarmUp.
     BackgroundWarmup* background = nullptr;
     tsl::robin_map<GraphicsPipelineKey, std::shared_ptr<AsyncGraphicsCompilation>> pending_graphics;

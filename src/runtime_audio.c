@@ -8,6 +8,7 @@
  * ports only follow the clock. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "sotb_audio_backlog.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,13 +29,15 @@
 #define ERR_ALREADY_INIT ((int32_t)0x8026000E)
 #define ERR_NOT_INIT ((int32_t)0x8026000F)
 #define VOLUME_0DB 32768
+#define SOTB_AUDIO_RATE 48000
 
 typedef struct {
     int used, type, channels, is_float, frames, sample_bytes, std_layout, downmix;
     int32_t volume[8];
     SDL_AudioStream *stream;
     uint64_t next_deadline_ns; /* next return of sceAudioOutOutput */
-    int64_t adjust_ns; int window_min, window_count; /* queue level control */
+    SotbAudioLevel level; /* queue level control */
+    SotbAudioLogLimit backlog_log;
     uint64_t last_output_us;
     pthread_mutex_t lock;
     FILE *dump;                     /* SOTB_AUDIO_DUMP: raw converted PCM per port */
@@ -221,25 +224,23 @@ static int32_t output_port(int32_t handle, const void *data, int pace) {
         if (p->stream) {
             /* The device drains the queue in quanta (21 ms on PipeWire), so the level
                is a sawtooth: its minimum over ~32 buffers is what gets controlled. */
-            int low=2*(int)bytes, queued=SDL_GetAudioStreamQueued(p->stream);
+            const int queued=SDL_GetAudioStreamQueued(p->stream);
+            const int out_channels=p->downmix ? 2 : p->channels;
+            const SotbAudioLevelStep step=sotb_audio_level_step(&p->level,queued,(int)bytes,SOTB_AUDIO_RATE,out_channels,p->sample_bytes,period);
             /* A queue more than 100 ms above the target means the device stopped pulling (sleep, endpoint reset). */
-            if (p->frames>0 && (int64_t)queued>(int64_t)low+(int64_t)((uint64_t)bytes*4800u/(uint64_t)p->frames)) {
-                printf("Runtime: audio port %d dropped %.0f ms of backlog (device stalled)\n",(int)(p-ports),
-                       (double)(queued-low)*(double)period/(double)bytes/1e6);
+            if (step.clear) {
+                unsigned held_back=0;
+                if (sotb_audio_log_due(&p->backlog_log,now_ns(),&held_back))
+                    printf("Runtime: audio port %d dropped %.0f ms of backlog (device stalled, threshold %d ms, %u more recoveries since the last message)\n",
+                           (int)(p-ports),sotb_audio_queued_us(queued,SOTB_AUDIO_RATE,out_channels,p->sample_bytes)/1000.0,
+                           SOTB_AUDIO_BACKLOG_THRESHOLD_MS,held_back);
                 SDL_ClearAudioStream(p->stream);
-                queued=0; p->window_count=0; p->adjust_ns=0;
             }
-            if (queued<(int)bytes) {
+            if (step.silence_bytes) {
                 static const unsigned char silence[2048*8*4];
-                SDL_PutAudioStreamData(p->stream,silence,low-queued<(int)bytes ? low-queued : (int)bytes);
-                queued=low;
+                SDL_PutAudioStreamData(p->stream,silence,step.silence_bytes);
             }
-            if (!p->window_count || queued<p->window_min) p->window_min=queued;
-            if (++p->window_count==32) {
-                p->adjust_ns=p->window_min>low+2*(int)bytes ? (int64_t)(period/32) : p->window_min<low ? -(int64_t)(period/32) : 0;
-                p->window_count=0;
-            }
-            p->next_deadline_ns+=(uint64_t)p->adjust_ns;
+            p->next_deadline_ns+=(uint64_t)p->level.adjust_ns;
             SDL_PutAudioStreamData(p->stream,converted,(int)bytes);
         }
         ++buffers_out;

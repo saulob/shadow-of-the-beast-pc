@@ -56,9 +56,14 @@ The frame counter is drawn top right at 100%; its corner and size are not launch
 
 ## Controls
 
-Controller detection, **Controller Rumble** (`controller_rumble`), keyboard bindings (click a key, press the new one, Esc
-cancels, a key may serve more than one control, **Reset to defaults**), the port hotkeys, and the Xbox controller mapping the
-runtime applies. A controller SDL does not recognise needs a line in `user\gamecontrollerdb.txt`; `SDL_GAMECONTROLLERCONFIG`
+Controller detection, **Controller Rumble** (`controller_rumble`), **Controller prompts** (`controller_prompts`: `auto`, `xbox`
+or `playstation`; Auto follows the controller in use, anything it cannot classify shows Xbox names; it only names buttons on
+this page and never changes a binding, and the game's own button art is baked into its paks and is not changed), **Controller
+bindings** (`pad_cross`, `pad_circle`, ... one SDL gamepad name each: click a row, press a controller button or pull a trigger, Esc cancels; one
+controller button may press several PS4 buttons; sticks stay analog; **Reset to defaults** touches only these), keyboard
+bindings (click a key, press the new one, Esc cancels, a key may serve more than one control, **Reset to defaults**), the port
+hotkeys, and the default controller layout. The game asks the system for its enter button and always gets Cross.
+`SOTB_PIPELINE_ON_DEMAND=1` keeps pipelines out of the background warm-up. A controller SDL does not recognise needs a line in `user\gamecontrollerdb.txt`; `SDL_GAMECONTROLLERCONFIG`
 keeps priority and an unmapped joystick is logged once per connection with its GUID.
 
 ## Trophies

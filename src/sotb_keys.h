@@ -47,6 +47,12 @@ int sotb_keys_apply(SotbKeyMap *map, const char *ini_key, const char *value);
 /* Defaults, then every valid binding in the Sotb.ini at `path`; a missing file or line keeps the default. */
 void sotb_keys_load(const char *path, SotbKeyMap *map);
 
+/* Calls `entry` for every key=value line of the Sotb.ini at `path` (comments and a missing file are skipped). */
+typedef void (*SotbIniEntry)(const char *key, const char *value, void *user);
+void sotb_ini_read(const char *path, SotbIniEntry entry, void *user);
+/* Strips blanks at both ends in place. */
+char *sotb_text_trim(char *text);
+
 #ifdef __cplusplus
 }
 #endif

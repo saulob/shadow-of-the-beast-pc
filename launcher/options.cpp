@@ -1,4 +1,5 @@
 #include "options.h"
+#include "settings.h"
 
 #include <SDL3/SDL_keyboard.h>
 
@@ -99,6 +100,40 @@ void ResetKeys(trg::SettingsStore& settings) {
     for (int action = 0; action < SOTB_KEY_COUNT; ++action) {
         settings.Set(sotb_key_actions[action].ini_key, DefaultKeyName(static_cast<SotbKeyAction>(action)));
     }
+}
+
+int SavedPadSource(const trg::SettingsStore& settings, SotbPadAction action) {
+    const int saved = sotb_pad_source_from_name(settings.Get(sotb_pad_actions[action].ini_key).c_str());
+    return saved != SOTB_PAD_SOURCE_NONE ? saved : sotb_pad_actions[action].default_source;
+}
+
+void SetPadSource(trg::SettingsStore& settings, SotbPadAction action, int source) {
+    char name[32];
+    if (sotb_pad_source_name(source, name, sizeof(name))[0]) {
+        settings.Set(sotb_pad_actions[action].ini_key, name);
+    }
+}
+
+void ResetPads(trg::SettingsStore& settings) {
+    for (int action = 0; action < SOTB_PAD_COUNT; ++action) {
+        SetPadSource(settings, static_cast<SotbPadAction>(action), sotb_pad_actions[action].default_source);
+    }
+}
+
+SotbPromptMode SavedPromptMode(const trg::SettingsStore& settings) {
+    return sotb_prompt_mode_from_name(settings.Get(kControllerPromptsKey).c_str());
+}
+
+const char* PromptModeLabel(SotbPromptMode mode) {
+    switch (mode) {
+    case SOTB_PROMPT_XBOX: return "Xbox";
+    case SOTB_PROMPT_PLAYSTATION: return "PlayStation";
+    default: return "Auto";
+    }
+}
+
+std::string PadBindingLabel(const trg::SettingsStore& settings, SotbPadAction action, SotbPromptFamily family) {
+    return sotb_pad_source_label(SavedPadSource(settings, action), family);
 }
 
 } // namespace Sotb

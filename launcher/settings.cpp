@@ -12,6 +12,8 @@
 
 #include "guest_display.h"
 #include "sotb_keys.h"
+#include "sotb_pad.h"
+#include "sotb_pad_prompts.h"
 #include "sotb_launcher.h"
 #include "text_languages.h"
 #include "utf8.h"
@@ -46,6 +48,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kShowResolutionTitleKey, "0"},
     {kShowFrameCounterKey, "0"},
     {kControllerRumbleKey, "1"},
+    {kControllerPromptsKey, "auto"},
     {kDetailedLoggingKey, "1"},
     {kLauncherXKey, ""},
     {kLauncherYKey, ""},
@@ -75,6 +78,11 @@ std::span<const ManagedSetting> ManagedSettings() {
             default_names.emplace_back(sotb_key_name(action.default_scancode, name, sizeof(name)));
             all.push_back({action.ini_key, default_names.back()});
         }
+        for (const SotbPadInfo& action : sotb_pad_actions) {
+            char name[32];
+            default_names.emplace_back(sotb_pad_source_name(action.default_source, name, sizeof(name)));
+            all.push_back({action.ini_key, default_names.back()});
+        }
         return all;
     }();
     return settings;
@@ -87,6 +95,13 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     if (std::any_of(std::begin(sotb_key_actions), std::end(sotb_key_actions),
                     [&](const SotbKeyInfo& action) { return key == action.ini_key; })) {
         return sotb_key_from_name(std::string(value).c_str()) != 0;
+    }
+    if (std::any_of(std::begin(sotb_pad_actions), std::end(sotb_pad_actions),
+                    [&](const SotbPadInfo& action) { return key == action.ini_key; })) {
+        return sotb_pad_source_from_name(std::string(value).c_str()) != SOTB_PAD_SOURCE_NONE;
+    }
+    if (key == kControllerPromptsKey) {
+        return one_of({"auto", "xbox", "playstation"});
     }
     if (key == kDisplayModeKey) {
         return one_of({"windowed", "borderless"});
@@ -233,8 +248,14 @@ std::string SettingsSummary(const LauncherSettings& settings, const char* game_b
     const TextLanguage& language = ResolveTextLanguage(settings.Get(kTextLanguageKey));
     line("Menu & Subtitles " + std::string(language.name) + " (" + std::string(language.key) + ", system language " +
          std::to_string(language.ps4_id) + ")");
-    line(std::string("Controller rumble ") + OnOff(settings.GetBool(kControllerRumbleKey, true)) +
-         ", detailed logging " + OnOff(settings.GetBool(kDetailedLoggingKey, true)));
+    int custom_bindings = 0;
+    for (const SotbPadInfo& action : sotb_pad_actions) {
+        const int saved = sotb_pad_source_from_name(settings.Get(action.ini_key).c_str());
+        custom_bindings += saved != SOTB_PAD_SOURCE_NONE && saved != action.default_source;
+    }
+    line(std::string("Controller rumble ") + OnOff(settings.GetBool(kControllerRumbleKey, true)) + ", prompts " +
+         settings.Get(kControllerPromptsKey, "auto") + ", " + std::to_string(custom_bindings) +
+         " custom controller bindings, detailed logging " + OnOff(settings.GetBool(kDetailedLoggingKey, true)));
     return out;
 }
 

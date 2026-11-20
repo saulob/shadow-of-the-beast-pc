@@ -446,97 +446,6 @@ vk::ResultValue<vk::UniquePipeline> CreateCachedGraphicsPipeline(
     return result;
 }
 
-// sotb: the background warm-up's worker threads. The cache store is read and the shader modules
-// created in order on the calling thread (program_cache and its permutation checks are not
-// thread-safe); only the pipeline objects, the slow part, are built here.
-struct PipelineCache::WarmupPool {
-    explicit WarmupPool(u32 count, bool low_priority = false) {
-        for (u32 i = 0; i < count; ++i) {
-            threads.emplace_back([this, low_priority] {
-                if (low_priority) {
-                    Common::SetCurrentThreadName("sotb:ShaderWarmup");
-                    Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
-                }
-                Run();
-            });
-        }
-    }
-    ~WarmupPool() {
-        {
-            std::scoped_lock lock{mutex};
-            jobs.clear(); // only the running ones finish
-            closing = true;
-        }
-        cv.notify_all();
-        for (auto& thread : threads) {
-            thread.join();
-        }
-    }
-    void Push(std::function<bool()> job) {
-        {
-            std::scoped_lock lock{mutex};
-            jobs.push_back(std::move(job));
-        }
-        cv.notify_one();
-    }
-    /// Waits for every job; `tick` runs on this thread meanwhile (the loading screen).
-    void Wait(const std::function<void()>& tick) {
-        std::unique_lock lock{mutex};
-        while (!jobs.empty() || running) {
-            idle.wait_for(lock, std::chrono::milliseconds(50));
-            lock.unlock();
-            tick();
-            lock.lock();
-        }
-    }
-    /// Drops the queued jobs and waits for the running ones; the threads stay parked.
-    void Drain() {
-        std::unique_lock lock{mutex};
-        jobs.clear();
-        idle.wait(lock, [this] { return running == 0; });
-    }
-    bool Idle() {
-        std::scoped_lock lock{mutex};
-        return jobs.empty() && !running;
-    }
-    std::atomic<u32> built{0};
-    std::atomic<u32> failed{0};
-
-private:
-    void Run() {
-        std::unique_lock lock{mutex};
-        while (true) {
-            cv.wait(lock, [this] { return closing || !jobs.empty(); });
-            if (jobs.empty()) {
-                return;
-            }
-            auto job = std::move(jobs.front());
-            jobs.pop_front();
-            ++running;
-            lock.unlock();
-            bool ok = false;
-            try {
-                ok = job();
-            } catch (const std::exception& e) {
-                LOG_ERROR(Render_Vulkan, "sotb: warm-up pipeline failed: {}", e.what());
-            } catch (...) {
-                LOG_ERROR(Render_Vulkan, "sotb: warm-up pipeline failed");
-            }
-            (ok ? built : failed).fetch_add(1, std::memory_order_relaxed);
-            lock.lock();
-            --running;
-            idle.notify_all();
-        }
-    }
-
-    std::mutex mutex;
-    std::condition_variable cv, idle;
-    std::deque<std::function<bool()>> jobs;
-    std::vector<std::thread> threads;
-    u32 running = 0;
-    bool closing = false;
-};
-
 void RegisterPipelineData(const ComputePipelineKey& key,
                           ComputePipeline::SerializationSupport& sdata) {
     if (!Storage::DataBase::Instance().IsOpened()) {
@@ -1030,13 +939,17 @@ bool PipelineCache::StartBackgroundWarmUp() {
         return false;
     }
     if (!CheckCacheProfile()) {
+        Storage::DataBase::Instance().FinishPreload();
         return true; // nothing cached yet
     }
     background = new BackgroundWarmup;
     auto& warm = *background;
     warm.started = std::chrono::steady_clock::now();
     warm.threads = WarmupThreadCount(std::max(1u, std::thread::hardware_concurrency()));
-    warm.pool = std::make_unique<WarmupPool>(warm.threads, true);
+    warm.pool = std::make_unique<WarmupPool>(warm.threads, [] {
+        Common::SetCurrentThreadName("sotb:ShaderWarmup");
+        Common::SetCurrentThreadPriority(Common::ThreadPriority::Low);
+    });
     // The first job reads the whole store; with one thread the builds queue behind it.
     warm.pool->Push([this, &warm] {
         const auto reader_started = std::chrono::steady_clock::now();
@@ -1051,7 +964,8 @@ bool PipelineCache::StartBackgroundWarmUp() {
         warm.reading = false;
         return true;
     });
-    std::printf("Pipeline warm-up: loading in the background (%u threads)\n", warm.threads);
+    std::printf("Pipeline warm-up: loading in the background (%u threads, at most %zu queued builds)\n",
+                warm.threads, WarmupMaxQueuedBuilds);
     return true;
 }
 
@@ -1204,15 +1118,17 @@ void PipelineCache::PumpWarmUp() {
     }
     warm.last_batch = now;
     ++warm.batches;
-    const u32 done = warm.done + warm.pool->failed;
+    const u32 done = warm.done + warm.pool->Failed();
     SotbOverlay::SetBackgroundLoading(done, std::max(warm.total.load(), done));
 
     static const std::array<Shader::RuntimeInfo, MaxShaderStages> no_runtime_infos{};
-    for (auto& entry : warm.read.Take(32)) {
+    for (auto& entry : warm.read.Take(WarmupBatchRoom(warm.pool->Queued()))) {
         warm.read_queue_ns += ElapsedNs(entry.queued);
-        if (entry.compute ? compute_pipelines.contains(entry.compute_key)
-                          : graphics_pipelines.contains(entry.graphics_key)) {
-            warm.done.fetch_add(1, std::memory_order_relaxed); // the game compiled it first
+        const bool published = entry.compute ? compute_pipelines.contains(entry.compute_key)
+                                             : graphics_pipelines.contains(entry.graphics_key);
+        const bool on_demand_pending = !entry.compute && pending_graphics.contains(entry.graphics_key);
+        if (ClassifyWarmEntry(published, on_demand_pending) != WarmEntryAction::Build) {
+            warm.done.fetch_add(1, std::memory_order_relaxed); // the game has it, or is building it now
             continue;
         }
         std::array<const Shader::Info*, MaxShaderStages> infos{};
@@ -1281,9 +1197,10 @@ void PipelineCache::PumpWarmUp() {
     if (warm.reading || !warm.read.Empty() || !warm.pool->Idle() || !warm.built.Empty()) {
         return;
     }
-    std::printf("Pipeline warm-up: %u of %u pipelines in %.2f s in the background (%u threads)\n",
+    std::printf("Pipeline warm-up: %u of %u pipelines in %.2f s in the background (%u threads, %u failed)\n",
                 warm.loaded, warm.total.load(),
-                std::chrono::duration<double>(now - warm.started).count(), warm.threads);
+                std::chrono::duration<double>(now - warm.started).count(), warm.threads,
+                warm.pool->Failed());
     LOG_INFO(Render, "Preloaded {} pipelines in the background", warm.loaded);
     ReportPipelineBinaryCache();
     std::printf("Warm-up profile: reader wall %.3f s, entries %.3f s, shader IO/meta %.3f s, "
@@ -1321,6 +1238,9 @@ void PipelineCache::StopWarmUp() {
     }
     background->stopping = true;
     background->pool->Drain();
+    if (const u32 cancelled = background->pool->Cancelled()) {
+        std::printf("Pipeline warm-up: stopped, %u queued builds cancelled\n", cancelled);
+    }
     // ponytail: leaked with its parked threads (this runs at exit only): a thread that ended
     // while the game ran crashed in ntdll (RtlWakeAllConditionVariable). Join them once the
     // cause is known.

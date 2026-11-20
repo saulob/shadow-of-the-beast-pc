@@ -37,6 +37,7 @@ add_library(sotb_launcher_core STATIC
     json_lite.cpp
     log_scrubber.cpp
     options.cpp
+    pad_capture.cpp
     page_icons.cpp
     paths.cpp
     pkg_extract.cpp
@@ -102,6 +103,18 @@ target_compile_definitions(sotb-launcher-tests PRIVATE SOTB_BOOT_IMAGE="${PROJEC
     SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 set_target_properties(sotb-launcher-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-launcher-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-pad-binding-tests EXCLUDE_FROM_ALL ../tests/pad_binding_tests.cpp)
+target_link_libraries(sotb-pad-binding-tests PRIVATE sotb_launcher_core sotb_keys SDL3::SDL3)
+target_compile_definitions(sotb-pad-binding-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-pad-binding-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-pad-binding-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-pad-prompt-tests EXCLUDE_FROM_ALL ../tests/pad_prompt_tests.cpp)
+target_link_libraries(sotb-pad-prompt-tests PRIVATE sotb_launcher_core sotb_keys SDL3::SDL3)
+target_compile_definitions(sotb-pad-prompt-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-pad-prompt-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-pad-prompt-tests PRIVATE -Wall -Wextra)
 
 add_executable(sotb-build-identity-tests EXCLUDE_FROM_ALL ../tests/build_identity_tests.cpp)
 target_link_libraries(sotb-build-identity-tests PRIVATE sotb_launcher_core)

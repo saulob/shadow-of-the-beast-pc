@@ -13,6 +13,7 @@
 #include "video_core/renderdoc.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "sotb_overlay.h"
+#include "sotb_pipeline_startup.h"
 #include "sotb_settings.h"
 #include "sotb_graphics.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -26,6 +27,7 @@
 #include <chrono>
 #include <cmath>
 #include <csetjmp>
+#include <cstdlib>
 #include <cstring>
 #include <ctime>
 #include <filesystem>
@@ -157,7 +159,13 @@ Presenter::Presenter(Frontend::WindowSDL& window_, AmdGpu::Liverpool* liverpool_
     SotbOverlay::Init(instance, swapchain.GetSurfaceFormat().format, num_images);
 
     if (instance.GetPipelineBinaryGlobalKey().keySize != 0) {
-        rasterizer->GetPipelineCache().StartOnDemand();
+        // Restoring a binary is cheaper than compiling but still a hitch on the GPU thread.
+        const auto startup = Sotb::ChoosePipelineStartup(
+            std::getenv("SOTB_PIPELINE_ON_DEMAND"),
+            [&] { return rasterizer->GetPipelineCache().StartBackgroundWarmUp(); });
+        if (startup == Sotb::PipelineStartup::OnDemand) {
+            rasterizer->GetPipelineCache().StartOnDemand();
+        }
         return;
     }
 
