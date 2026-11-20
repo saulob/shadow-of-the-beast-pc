@@ -137,9 +137,7 @@ WindowSDL::WindowSDL(s32 width_, s32 height_, const char* title, GraphicsApi api
     }
     ApplyDisplayMode(SotbSettings::Get().display_mode);
     SDL_ShowWindow(window);
-    if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window))) {
-        SotbSettings::Get().display_refresh_hz = mode->refresh_rate;
-    }
+    UpdateDisplayRefresh();
     int w = 0, h = 0;
     SDL_GetWindowSizeInPixels(window, &w, &h);
     width = w;
@@ -237,6 +235,13 @@ void WindowSDL::UpdateFpsTitle() {
     fps = double(frames - fps_frames) / elapsed;
     fps_started = now;
     fps_frames = frames;
+}
+
+// The refresh of the display the window is on bounds the repeat cadence under VSync.
+void WindowSDL::UpdateDisplayRefresh() {
+    if (const SDL_DisplayMode* mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(window))) {
+        SotbSettings::Get().display_refresh_hz = mode->refresh_rate;
+    }
 }
 
 // F11: Windowed and Borderless, saved as the Display mode like the launcher's row.
@@ -392,6 +397,10 @@ bool WindowSDL::PollEvents() {
             height = h;
             break;
         }
+        case SDL_EVENT_WINDOW_DISPLAY_CHANGED:
+            UpdateDisplayRefresh();
+            display_generation.fetch_add(1, std::memory_order_relaxed);
+            break;
         case SDL_EVENT_QUIT:
         case SDL_EVENT_WINDOW_CLOSE_REQUESTED:
             is_open = false;

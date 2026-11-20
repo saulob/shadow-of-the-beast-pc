@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
@@ -11,7 +11,7 @@
   spinner every 500 ms in a terminal, a RUNNING text line every 15 s when output is redirected. A timing table and the slowest groups follow the last step.
 
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
-  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the pipeline warm-up test, the audio backlog recovery test, the controller rebinding test, the controller prompt test, the GPU command snapshot test, the Vulkan recording and synchronization test, the Vulkan device lost test, the GPU crash timeline test, the runtime thread cancellation test, the save mount diagnostics test, the GPU memory fallback test and the shader interface hardening test.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the pipeline warm-up test, the audio backlog recovery test, the controller rebinding test, the controller prompt test, the GPU command snapshot test, the Vulkan recording and synchronization test, the Vulkan device lost test, the GPU crash timeline test, the runtime thread cancellation test, the save mount diagnostics test, the GPU memory fallback test, the swapchain state test, the frame pacing and high frame rate test, the presentation hardening test and the shader interface hardening test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
 .EXAMPLE
@@ -140,6 +140,12 @@ function Invoke-GpuCrashTimeline { Invoke-FocusedTest 'sotb-gpu-crash-timeline-t
 
 function Invoke-GpuMemoryFallback { Invoke-FocusedTest 'sotb-gpu-memory-fallback-tests' '^gpu memory fallback tests' }
 
+function Invoke-SwapchainState { Invoke-FocusedTest 'sotb-swapchain-state-tests' '^swapchain state tests' }
+
+function Invoke-FramePacing { Invoke-FocusedTest 'sotb-frame-pacing-tests' '^frame pacing tests' }
+
+function Invoke-PresentationHardening { Invoke-FocusedTest 'sotb-presentation-hardening-tests' '^presentation hardening tests' }
+
 function Invoke-NvidiaHardening { Invoke-FocusedTest 'sotb-nvidia-hardening-tests' '^nvidia hardening tests' }
 
 function Invoke-WorkerService {
@@ -210,6 +216,9 @@ $steps = @(
     @{ Name = 'device-lost'; Title = 'Vulkan device lost: first fault owns the incident, repeated and competing losses, refused submissions and sparse binds, waits that end, GPU worker exit, stop token and shutdown, optional bounded device fault query, deterministic reason, opt-in simulation (fake callbacks, no Vulkan device)'; Block = { Invoke-DeviceLost } },
     @{ Name = 'gpu-crash-timeline'; Title = 'GPU crash timeline: bounded lock-free ring of recent GPU operations (order, wrap, payloads, timelines, concurrent producers and snapshots, no heap), deterministic text, one dump by the first device-lost owner, repeated and competing losses, unchanged reason (fake events, no Vulkan device)'; Block = { Invoke-GpuCrashTimeline } },
     @{ Name = 'gpu-memory-fallback'; Title = 'GPU memory fallback: preferred, other device-local, then system memory types for arena backing, only out of device memory moves on, valid types once each, telemetry, device lost hand-off (fake memory types, no real allocation)'; Block = { Invoke-GpuMemoryFallback } },
+    @{ Name = 'swapchain-state'; Title = 'Swapchain state: acquire and present results classified (success, suboptimal, out of date, surface lost, failure), one recreation for a persistently suboptimal surface, a clean frame or a resize, VSync, HDR or display change allows another, out of date and a lost surface never held back, zero-size and minimized windows never recreate, same extent keeps the swapchain, shutdown, counters, reason text, no impossible state (pure state machine, no Vulkan, no window)'; Block = { Invoke-SwapchainState } },
+    @{ Name = 'frame-pacing'; Title = 'Frame pacing and high frame rate: deadline limiter (first, on-time, early, late, slightly missed, large stall re-anchors with no catch-up burst, clock jumps and a clock going backwards, minimize and resize stalls), exact period with no drift over hours and days, sleep decision with no busy wait, 60 and 90 FPS and every rate''s cadence against VSync and the display, invalid rates fall back, gameplay timing not multiplied, present mode choice, log gate (synthetic timestamps, no sleeping)'; Block = { Invoke-FramePacing } },
+    @{ Name = 'presentation-hardening'; Title = 'Presentation hardening: acquire, present and swapchain creation lost-device results go to the one global owner, no recreation, retry or second owner after the loss, suboptimal and out of date are not a loss, failing presentation operation in the GPU crash timeline, ordinary presentations sampled so they do not flood the ring, swapchain, presenter, window and present thread wiring (fake results, no Vulkan device, no window)'; Block = { Invoke-PresentationHardening } },
     @{ Name = 'nvidia-hardening'; Title = 'Shader interface hardening: one clip distance rule for vertex and fragment stages, pipelines without a pixel shader, retired shader binaries (pure rules and source wiring, no Vulkan, no compilation)'; Block = { Invoke-NvidiaHardening } },
     @{ Name = 'progress-reporter'; Title = 'Test progress: percentage, bar, durations, ETA, check counts, previous group, timing summary, redirected output and a synthetic long group (synthetic time, no sleeping)'; Block = { Invoke-ProgressReporter } }
 )

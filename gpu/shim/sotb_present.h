@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Swapchain and flip pacing choices that need no Vulkan device (tests/present_tests.cpp).
+// Swapchain and flip pacing choices that need no Vulkan device (tests/frame_pacing_tests.cpp).
 #pragma once
 
 #include <algorithm>

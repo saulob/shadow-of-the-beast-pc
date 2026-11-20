@@ -7,6 +7,7 @@
 #include <string>
 #include <vector>
 #include "common/types.h"
+#include "sotb_swapchain_health.h"
 #include "video_core/renderer_vulkan/vk_common.h"
 
 namespace Frontend {
@@ -18,76 +19,27 @@ namespace Vulkan {
 class Instance;
 class Scheduler;
 
-/// Suboptimal is a Vulkan success code: the image was acquired or presented and the frame goes on.
-/// It asks for one recreation; a replacement that is suboptimal again is kept until a clean frame,
-/// or a surface that always reports it would get a new swapchain every frame.
-class SwapchainHealth {
-public:
-    enum class Result { Success, Suboptimal, OutOfDate, Failure };
-
-    /// Returns whether the acquired image can be used.
-    bool Acquire(Result result) {
-        clean_acquire = result == Result::Success;
-        return Observe(result);
-    }
-
-    /// Returns whether the image was queued for display.
-    bool Present(Result result) {
-        const bool usable = Observe(result);
-        if (result == Result::Success && clean_acquire) {
-            replaced_suboptimal = false;
-        }
-        return usable;
-    }
-
-    void Recreated() {
-        replaced_suboptimal = recreate && suboptimal_only;
-        recreate = false;
-        suboptimal_only = false;
-        clean_acquire = false;
-    }
-
-    bool NeedsRecreation() const {
-        return recreate;
-    }
-
-private:
-    bool Observe(Result result) {
-        switch (result) {
-        case Result::Success:
-            return true;
-        case Result::Suboptimal:
-            if (!replaced_suboptimal && !recreate) {
-                recreate = true;
-                suboptimal_only = true;
-            }
-            return true;
-        case Result::OutOfDate:
-            recreate = true;
-            suboptimal_only = false;
-            return false;
-        case Result::Failure:
-            break;
-        }
-        return false;
-    }
-
-    bool recreate = false;
-    bool suboptimal_only = false;     ///< only a suboptimal result asked for the pending recreation
-    bool replaced_suboptimal = false; ///< this swapchain replaced a suboptimal one and stays
-    bool clean_acquire = false;
-};
-
 class Swapchain {
 public:
     explicit Swapchain(const Instance& instance, const Frontend::WindowSDL& window);
     ~Swapchain();
 
-    /// Creates (or recreates) the swapchain with a given size.
-    void Create(u32 width, u32 height);
+    /// Creates (or recreates) the swapchain with a given size. False when none exists afterwards: the device
+    /// is lost, or the surface has no pixels yet.
+    bool Create(u32 width, u32 height, SotbSwapchain::Reason forced = SotbSwapchain::Reason::None);
 
     /// Recreates the swapchain with a given size and current surface.
-    void Recreate(u32 width, u32 height);
+    bool Recreate(u32 width, u32 height, SotbSwapchain::Reason forced = SotbSwapchain::Reason::None);
+
+    /// Present thread, before a frame: applies a VSync or display change and recreates for a new window size or a
+    /// pending recreation. False while the window has no pixels or the device is lost: nothing is presented.
+    bool PrepareFrame();
+
+    /// Recreates for the window's current size unless it has no pixels or the device is lost.
+    bool RecreateForWindow();
+
+    /// A recreation, then one more acquire after an acquire that needed one.
+    bool RecreateAndAcquire();
 
     /// Acquires the next image in the swapchain.
     bool AcquireNextImage();
@@ -131,6 +83,10 @@ public:
         return health.NeedsRecreation();
     }
 
+    const SotbSwapchain::Health& GetHealth() const {
+        return health;
+    }
+
     u32 GetFrameIndex() const {
         return frame_index;
     }
@@ -168,8 +124,8 @@ private:
     /// Selects the best available present mode
     void FindPresentMode();
 
-    /// Sets the surface properties according to device capabilities
-    void SetSurfaceProperties();
+    /// Sets the surface properties according to device capabilities; false when the surface has no pixels
+    bool SetSurfaceProperties();
 
     /// Destroys current swapchain resources
     void Destroy();
@@ -181,6 +137,11 @@ private:
     void RefreshSemaphores();
 
     void LogImages();
+
+    /// Rate-limited line for a recreation or a suboptimal result held back.
+    void LogRecreation(SotbSwapchain::Reason reason);
+    void LogSuboptimal(bool during_present);
+    void NoteDisplayChange();
 
 private:
     const Instance& instance;
@@ -209,7 +170,10 @@ private:
     std::string logged_images;
     u32 image_index = 0;
     u32 frame_index = 0;
-    SwapchainHealth health;
+    SotbSwapchain::Health health;
+    SotbSwapchain::LogGate recreation_log{4, 10'000'000'000ull};
+    SotbSwapchain::LogGate suboptimal_log{2, 30'000'000'000ull};
+    u32 seen_display_generation = 0;
     bool needs_hdr = false;    // The game requested HDR swapchain
     bool supports_hdr = false; // SC supports HDR output
 };

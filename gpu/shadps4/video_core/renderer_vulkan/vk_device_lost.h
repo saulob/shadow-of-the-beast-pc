@@ -27,6 +27,7 @@ inline constexpr std::int32_t Timeout = 2;
 inline constexpr std::int32_t DeviceLostResult = -4;
 inline constexpr int ExitStatus = 25;
 inline constexpr std::size_t MaxReasonBytes = 1024;
+inline constexpr std::uint32_t PresentSampleInterval = 16;
 inline constexpr auto WaitSlice = std::chrono::milliseconds(100);
 inline constexpr auto ShutdownGrace = std::chrono::seconds(2);
 
@@ -44,6 +45,7 @@ enum class Operation : std::uint32_t {
     QueuePresent,
     DeviceWaitIdle,
     AllocateMemory,
+    CreateSwapchain,
     Count,
 };
 
@@ -67,6 +69,8 @@ inline const char* OperationName(Operation operation) noexcept {
         return "vkDeviceWaitIdle";
     case Operation::AllocateMemory:
         return "vkAllocateMemory";
+    case Operation::CreateSwapchain:
+        return "vkCreateSwapchainKHR";
     case Operation::Count:
         break;
     }
@@ -182,10 +186,11 @@ public:
 
     // Only VK_ERROR_DEVICE_LOST changes state; any other result is the caller's to handle. Every result is recorded in
     // the timeline first, so the owner's own failing call is part of the history it dumps. A successful counter poll
-    // is not: it would push the submissions out of the ring.
+    // is not: it would push the submissions out of the ring. Successful acquires and presents happen once per
+    // presentation, up to hundreds a second, so one in PresentSampleInterval is kept; any other result is always kept.
     Outcome Report(Operation operation, const char* stage, std::int32_t result, std::uint64_t tick,
                    Timeline timeline = Timeline::None) {
-        if (operation != Operation::GetSemaphoreCounterValue || result != Success) {
+        if (ShouldRecord(operation, result)) {
             events.Record(std::uint32_t(operation), stage, result, tick, timeline);
         }
         if (result != DeviceLostResult) {
@@ -199,6 +204,22 @@ public:
         }
         Own(operation, stage, result, tick);
         return Outcome::First;
+    }
+
+    [[nodiscard]] bool ShouldRecord(Operation operation, std::int32_t result) noexcept {
+        if (result != Success) {
+            return true;
+        }
+        switch (operation) {
+        case Operation::GetSemaphoreCounterValue:
+            return false;
+        case Operation::AcquireNextImage:
+            return acquire_successes.fetch_add(1, std::memory_order_relaxed) % PresentSampleInterval == 0;
+        case Operation::QueuePresent:
+            return present_successes.fetch_add(1, std::memory_order_relaxed) % PresentSampleInterval == 0;
+        default:
+            return true;
+        }
     }
 
     void NoteRefused() noexcept {
@@ -370,6 +391,8 @@ private:
     std::atomic<std::uint32_t> fault_queries{};
     std::atomic<std::uint32_t> stop_requests{};
     std::atomic<std::uint32_t> timeline_dumps{};
+    std::atomic<std::uint32_t> acquire_successes{};
+    std::atomic<std::uint32_t> present_successes{};
     EventRing events;
     std::atomic<std::uint32_t> simulated_operation{std::uint32_t(Operation::Count)};
     std::atomic<std::uint64_t> simulated_calls{};
@@ -393,7 +416,7 @@ inline Monitor& Global() noexcept {
 // "submit:600" arms the 600th queue submission, "submit" the first; anything else arms nothing.
 inline bool ParseSimulation(std::string_view value, Operation& operation, std::uint64_t& calls) noexcept {
     constexpr std::string_view names[] = {"submit",  "sparse",  "semwait", "semread", "fence",
-                                          "acquire", "present", "idle",    "alloc"};
+                                          "acquire", "present", "idle",    "alloc",  "swapchain"};
     static_assert(std::size(names) == std::size_t(Operation::Count));
     const std::size_t colon = value.find(':');
     const std::string_view name = value.substr(0, colon);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <limits>
 #include <string>
@@ -37,6 +38,13 @@ static constexpr vk::SurfaceFormatKHR SURFACE_FORMAT_HDR = {
     .colorSpace = vk::ColorSpaceKHR::eHdr10St2084EXT,
 };
 
+static_assert(SotbSwapchain::kVkSuccess == int(vk::Result::eSuccess) &&
+              SotbSwapchain::kVkSuboptimal == int(vk::Result::eSuboptimalKHR) &&
+              SotbSwapchain::kVkErrorOutOfDate == int(vk::Result::eErrorOutOfDateKHR) &&
+              SotbSwapchain::kVkErrorSurfaceLost == int(vk::Result::eErrorSurfaceLostKHR) &&
+              SotbSwapchain::kVkErrorUnknown == int(vk::Result::eErrorUnknown) &&
+              SotbSwapchain::kVkErrorDeviceLost == DeviceLost::DeviceLostResult);
+
 static_assert(vk::PresentModeKHR(SotbPresent::Mode::Immediate) == vk::PresentModeKHR::eImmediate &&
               vk::PresentModeKHR(SotbPresent::Mode::Mailbox) == vk::PresentModeKHR::eMailbox &&
               vk::PresentModeKHR(SotbPresent::Mode::Fifo) == vk::PresentModeKHR::eFifo);
@@ -53,19 +61,38 @@ Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& windo
     ImGui::Core::Initialize(instance, window, image_count, surface_format.format);
 }
 
+static u64 NowNs() {
+    return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count());
+}
+
 Swapchain::~Swapchain() {
+    health.Stop();
     Destroy();
     instance.GetInstance().destroySurfaceKHR(surface);
 }
 
-void Swapchain::Create(u32 width_, u32 height_) {
+bool Swapchain::Create(u32 width_, u32 height_, SotbSwapchain::Reason forced) {
+    if (DeviceLost::IsLost()) {
+        return false;
+    }
+    if (forced == SotbSwapchain::Reason::None) {
+        forced = SotbSwapchain::ForcedReason(width, height, width_, height_);
+    }
     width = width_;
     height = height_;
-    health.Recreated();
 
     Destroy();
+    if (health.NeedsNewSurface()) {
+        instance.GetInstance().destroySurfaceKHR(surface);
+        surface = CreateSurface(instance.GetInstance(), window);
+    }
 
-    SetSurfaceProperties();
+    if (!SetSurfaceProperties()) {
+        health.CreateFailed();
+        return false;
+    }
 
     const std::array queue_family_indices = {
         instance.GetGraphicsQueueFamilyIndex(),
@@ -96,15 +123,26 @@ void Swapchain::Create(u32 width_, u32 height_) {
         .oldSwapchain = nullptr,
     };
 
-    auto [swapchain_result, chain] = instance.GetDevice().createSwapchainKHR(swapchain_info);
-    ASSERT_MSG(swapchain_result == vk::Result::eSuccess, "Failed to create swapchain: {}",
-               vk::to_string(swapchain_result));
+    vk::SwapchainKHR chain{};
+    const s32 created = DeviceLost::CallWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::CreateSwapchain, "swapchn", 0, [&] {
+            const auto [result, handle] = instance.GetDevice().createSwapchainKHR(swapchain_info);
+            chain = handle;
+            return result;
+        });
+    if (created == DeviceLost::DeviceLostResult) {
+        return false;
+    }
+    ASSERT_MSG(vk::Result(created) == vk::Result::eSuccess, "Failed to create swapchain: {}",
+               vk::to_string(vk::Result(created)));
     swapchain = chain;
+    health.Recreated(forced);
 
     SetupImages();
     RefreshSemaphores();
     frame_index = 0; // the semaphores are new and sized for the returned image count
     LogImages();
+    return true;
 }
 
 // Once per change of the image counts or the present mode: a window resize alone is not logged again.
@@ -120,10 +158,80 @@ void Swapchain::LogImages() {
     std::printf("Swapchain: images %s, extent %ux%u\n", counts, extent.width, extent.height);
 }
 
-void Swapchain::Recreate(u32 width_, u32 height_) {
+bool Swapchain::Recreate(u32 width_, u32 height_, SotbSwapchain::Reason forced) {
     LOG_DEBUG(Render_Vulkan, "Recreate the swapchain: width={} height={} HDR={}", width_, height_,
               needs_hdr);
-    Create(width_, height_);
+    SotbSwapchain::Reason reason = health.NeedsRecreation() ? health.Pending() : forced;
+    if (reason == SotbSwapchain::Reason::None) {
+        reason = SotbSwapchain::ForcedReason(width, height, width_, height_);
+    }
+    const bool created = Create(width_, height_, forced);
+    if (created) {
+        LogRecreation(reason);
+    }
+    return created;
+}
+
+bool Swapchain::PrepareFrame() {
+    const s32 window_width = window.GetWidth();
+    const s32 window_height = window.GetHeight();
+    if (window_width <= 0 || window_height <= 0 || DeviceLost::IsLost()) {
+        return false;
+    }
+    UpdateVsync();
+    NoteDisplayChange();
+    if (SotbSwapchain::ChooseFrameAction(window_width, window_height, width, height,
+                                         health.NeedsRecreation()) == SotbSwapchain::FrameAction::Recreate) {
+        Recreate(u32(window_width), u32(window_height));
+    }
+    return true;
+}
+
+bool Swapchain::RecreateForWindow() {
+    const s32 window_width = window.GetWidth();
+    const s32 window_height = window.GetHeight();
+    if (window_width <= 0 || window_height <= 0 || DeviceLost::IsLost()) {
+        return false;
+    }
+    return Recreate(u32(window_width), u32(window_height));
+}
+
+bool Swapchain::RecreateAndAcquire() {
+    return RecreateForWindow() && AcquireNextImage();
+}
+
+void Swapchain::NoteDisplayChange() {
+    const u32 generation = window.DisplayGeneration();
+    if (generation != seen_display_generation) {
+        seen_display_generation = generation;
+        health.DisplayChanged();
+    }
+}
+
+// Present thread. One line per recreation while they are rare, then at most one every ten seconds.
+void Swapchain::LogRecreation(SotbSwapchain::Reason reason) {
+    if (!recreation_log.Allow(NowNs())) {
+        return;
+    }
+    char line[256];
+    SotbSwapchain::FormatRecreation(line, sizeof(line), reason, health.Stats(), extent.width, extent.height,
+                                    image_count, vk::to_string(present_mode).c_str());
+    const unsigned held_back = recreation_log.TakeSuppressed();
+    if (held_back != 0) {
+        std::printf("%s; %u recreation lines held back\n", line, held_back);
+    } else {
+        std::printf("%s\n", line);
+    }
+}
+
+void Swapchain::LogSuboptimal(bool during_present) {
+    if (!suboptimal_log.Allow(NowNs())) {
+        return;
+    }
+    const auto& stats = health.Stats();
+    std::printf("Swapchain: suboptimal %s (%u seen, %u kept without recreation), %ux%u, %s\n",
+                during_present ? "present" : "acquire", stats.suboptimal, stats.suboptimal_kept, extent.width,
+                extent.height, health.Suppressing() ? "the surface stays suboptimal" : "recreation scheduled");
 }
 
 void Swapchain::SetHDR(bool hdr) {
@@ -133,12 +241,15 @@ void Swapchain::SetHDR(bool hdr) {
 
     WaitDeviceIdle(instance, "on an HDR change");
     needs_hdr = hdr;
-    Recreate(width, height);
+    Recreate(width, height, SotbSwapchain::Reason::Hdr);
     ImGui::Core::OnSurfaceFormatChange(needs_hdr ? SURFACE_FORMAT_HDR.format
                                                  : surface_format.format);
 }
 
 bool Swapchain::AcquireNextImage() {
+    if (!swapchain) {
+        return false;
+    }
     vk::Device device = instance.GetDevice();
     const s32 acquired = DeviceLost::CallWhileHealthy(
         DeviceLost::Global(), DeviceLost::Operation::AcquireNextImage, "acquire", 0, [&] {
@@ -149,31 +260,25 @@ bool Swapchain::AcquireNextImage() {
     if (acquired == DeviceLost::DeviceLostResult) {
         return false;
     }
-    const vk::Result result{acquired};
 
-    SwapchainHealth::Result kind = SwapchainHealth::Result::Failure;
-    switch (result) {
-    case vk::Result::eSuccess:
-        kind = SwapchainHealth::Result::Success;
-        break;
-    case vk::Result::eSuboptimalKHR:
-        kind = SwapchainHealth::Result::Suboptimal;
-        break;
-    case vk::Result::eErrorSurfaceLostKHR:
-    case vk::Result::eErrorOutOfDateKHR:
-    case vk::Result::eErrorUnknown:
-        kind = SwapchainHealth::Result::OutOfDate;
-        break;
-    default:
+    const SotbSwapchain::Result kind = SotbSwapchain::ClassifyAcquire(acquired);
+    if (kind == SotbSwapchain::Result::Failure) {
         LOG_CRITICAL(Render_Vulkan, "Swapchain acquire returned unknown result {}",
-                     vk::to_string(result));
+                     vk::to_string(vk::Result(acquired)));
         UNREACHABLE();
     }
 
-    return health.Acquire(kind);
+    const bool usable = health.Acquire(kind);
+    if (kind == SotbSwapchain::Result::Suboptimal) {
+        LogSuboptimal(false);
+    }
+    return usable;
 }
 
 bool Swapchain::Present() {
+    if (!swapchain) {
+        return false;
+    }
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
@@ -188,15 +293,13 @@ bool Swapchain::Present() {
     if (presented == DeviceLost::DeviceLostResult) {
         return true;
     }
-    const vk::Result result{presented};
-    if (result == vk::Result::eErrorOutOfDateKHR) {
-        health.Present(SwapchainHealth::Result::OutOfDate);
-    } else if (result == vk::Result::eSuboptimalKHR) {
-        health.Present(SwapchainHealth::Result::Suboptimal);
-    } else {
-        ASSERT_MSG(result == vk::Result::eSuccess, "Swapchain presentation failed: {}",
-                   vk::to_string(result));
-        health.Present(SwapchainHealth::Result::Success);
+
+    const SotbSwapchain::Result kind = SotbSwapchain::ClassifyPresent(presented);
+    ASSERT_MSG(kind != SotbSwapchain::Result::Failure, "Swapchain presentation failed: {}",
+               vk::to_string(vk::Result(presented)));
+    health.Present(kind);
+    if (kind == SotbSwapchain::Result::Suboptimal) {
+        LogSuboptimal(true);
     }
 
     frame_index = (frame_index + 1) % image_count;
@@ -274,22 +377,26 @@ void Swapchain::UpdateVsync() {
     }
     WaitDeviceIdle(instance, "before a VSync change");
     FindPresentMode();
-    Recreate(width, height);
+    Recreate(width, height, SotbSwapchain::Reason::PresentMode);
 }
 
-void Swapchain::SetSurfaceProperties() {
+bool Swapchain::SetSurfaceProperties() {
     const auto [capabilities_result, capabilities] =
         instance.GetPhysicalDevice().getSurfaceCapabilitiesKHR(surface);
     ASSERT_MSG(capabilities_result == vk::Result::eSuccess,
                "Failed to query surface capabilities: {}", vk::to_string(capabilities_result));
 
-    extent = capabilities.currentExtent;
+    vk::Extent2D surface_extent = capabilities.currentExtent;
     if (capabilities.currentExtent.width == std::numeric_limits<u32>::max()) {
-        extent.width = std::max(capabilities.minImageExtent.width,
-                                std::min(capabilities.maxImageExtent.width, width));
-        extent.height = std::max(capabilities.minImageExtent.height,
-                                 std::min(capabilities.maxImageExtent.height, height));
+        surface_extent.width = std::max(capabilities.minImageExtent.width,
+                                        std::min(capabilities.maxImageExtent.width, width));
+        surface_extent.height = std::max(capabilities.minImageExtent.height,
+                                         std::min(capabilities.maxImageExtent.height, height));
     }
+    if (surface_extent.width == 0 || surface_extent.height == 0) {
+        return false; // a minimized window can report 0x0 between the presenter's check and this query
+    }
+    extent = surface_extent;
 
     surface_min_images = capabilities.minImageCount;
     surface_max_images = capabilities.maxImageCount;
@@ -307,9 +414,13 @@ void Swapchain::SetSurfaceProperties() {
     if (!(capabilities.supportedCompositeAlpha & vk::CompositeAlphaFlagBitsKHR::eOpaque)) {
         composite_alpha = vk::CompositeAlphaFlagBitsKHR::eInherit;
     }
+    return true;
 }
 
 void Swapchain::Destroy() {
+    if (!swapchain && images_view.empty() && image_acquired.empty() && present_ready.empty()) {
+        return;
+    }
     vk::Device device = instance.GetDevice();
     WaitDeviceIdle(instance, "before destroying the swapchain");
 
@@ -320,6 +431,7 @@ void Swapchain::Destroy() {
 
     if (swapchain) {
         device.destroySwapchainKHR(swapchain);
+        swapchain = nullptr;
     }
 
     for (const auto& sem : image_acquired) {

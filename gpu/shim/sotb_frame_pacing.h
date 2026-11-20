@@ -7,7 +7,9 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <string>
 
 namespace SotbFramePacing {
@@ -89,30 +91,86 @@ constexpr bool PresentsFlip(int setting, std::uint64_t flip_index) {
     return RenderFps(setting) != 30 || flip_index % 2 == 0;
 }
 
+// The inputs the repeat cadence is derived from; the present thread starts a new limiter when any of them changes.
+struct Inputs {
+    int frame_rate = kGameHz;
+    bool vsync = true;
+    double display_hz = 0.0;
+    bool operator==(const Inputs&) const = default;
+};
+
+constexpr unsigned CadenceFor(const Inputs& inputs) {
+    return RepeatCadenceHz(inputs.frame_rate, inputs.vsync, inputs.display_hz);
+}
+
+// The last stretch of a wait is yielded, not slept: a coarse wait can return about a millisecond late.
+inline constexpr std::chrono::microseconds kSpinWindow{500};
+
+// How long the thread may sleep before it has to start yielding toward a slot; never negative.
+inline std::chrono::nanoseconds CoarseSleep(std::chrono::steady_clock::time_point slot,
+                                            std::chrono::steady_clock::time_point now) {
+    const auto sleep = slot - now - kSpinWindow;
+    return sleep > std::chrono::nanoseconds::zero() ? std::chrono::duration_cast<std::chrono::nanoseconds>(sleep)
+                                                    : std::chrono::nanoseconds::zero();
+}
+
 // Releases one presentation per period on absolute slots of a monotonic clock, so a late wake does not shift
-// later slots. Only a presentation more than one period late re-anchors to now + period, so lateness is
-// never repaid with a burst.
+// later slots. Only a presentation more than one period late, or a slot more than two periods ahead (the clock went
+// backwards), re-anchors to now + period, so lateness is never repaid with a burst. The period is exact over time: the
+// remainder of 1e9 / fps is carried, one nanosecond at a time, instead of being dropped every slot.
 class FrameLimiter {
 public:
     using Clock = std::chrono::steady_clock;
 
     FrameLimiter(unsigned fps, Clock::time_point start)
-        : period_(fps ? std::chrono::nanoseconds(1'000'000'000LL / fps) : std::chrono::nanoseconds(0)),
-          next_(start) {}
+        : fps_(fps),
+          period_(fps ? std::chrono::nanoseconds(1'000'000'000LL / fps) : std::chrono::nanoseconds(0)),
+          carry_step_(fps ? 1'000'000'000LL % fps : 0), next_(start) {}
 
     bool Enabled() const { return period_.count() != 0; }
     bool Due(Clock::time_point now) const { return !Enabled() || now >= next_; }
     Clock::time_point NextSlot() const { return next_; }
     std::chrono::nanoseconds Period() const { return period_; }
+    unsigned Resets() const { return resets_; }
+    std::chrono::nanoseconds LongestLate() const { return longest_late_; }
 
     void Release(Clock::time_point now) {
-        next_ = now - next_ > period_ ? now + period_ : next_ + period_;
+        if (!Enabled()) {
+            next_ = now;
+            return;
+        }
+        const auto late = now - next_;
+        longest_late_ = std::max(longest_late_, std::chrono::duration_cast<std::chrono::nanoseconds>(late));
+        if (late > period_ || -late > 2 * period_) {
+            next_ = now + period_;
+            carry_ = 0;
+            ++resets_;
+            return;
+        }
+        next_ += period_;
+        carry_ += carry_step_;
+        if (carry_ >= static_cast<std::int64_t>(fps_)) {
+            carry_ -= fps_;
+            next_ += std::chrono::nanoseconds(1);
+        }
     }
 
 private:
+    unsigned fps_;
     std::chrono::nanoseconds period_;
+    std::int64_t carry_step_;
+    std::int64_t carry_ = 0;
     Clock::time_point next_;
+    unsigned resets_ = 0;
+    std::chrono::nanoseconds longest_late_{0};
 };
+
+inline int FormatStall(char* out, std::size_t size, unsigned resets, std::chrono::nanoseconds longest_late,
+                       unsigned cadence_hz) {
+    return std::snprintf(out, size,
+                         "VideoOut: pacing re-anchored %u times at a %u FPS cadence, longest lateness %.1f ms",
+                         resets, cadence_hz, std::chrono::duration<double, std::milli>(longest_late).count());
+}
 
 inline std::string ModeName(int setting) {
     return setting == 0 ? "Unlimited" : std::to_string(setting);

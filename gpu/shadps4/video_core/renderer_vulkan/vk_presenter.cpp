@@ -526,13 +526,8 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::PresentLoadingFrame() {
-    if (window.GetWidth() == 0 || window.GetHeight() == 0 || DeviceLost::IsLost()) {
+    if (!swapchain.PrepareFrame()) {
         return;
-    }
-    swapchain.UpdateVsync();
-    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight() ||
-        swapchain.NeedsRecreation()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
     }
     if (!swapchain.AcquireNextImage()) {
         return;
@@ -595,29 +590,24 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
 
     // A minimized window has no pixels on Windows (0x0): keep the swapchain and skip presenting
     // until the window is restored. A lost device presents nothing, but its frames keep circulating.
-    if (window.GetWidth() == 0 || window.GetHeight() == 0 || DeviceLost::IsLost()) {
+    if (!swapchain.PrepareFrame()) {
         free_frame();
         return;
     }
 
-    // Recreate the swapchain if the window was resized.
-    swapchain.UpdateVsync();
-    if (window.GetWidth() != swapchain.GetWidth() || window.GetHeight() != swapchain.GetHeight()) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
-    }
-
-    if (!swapchain.AcquireNextImage()) {
-        if (DeviceLost::IsLost()) {
-            free_frame();
-            return;
+    if (!swapchain.AcquireNextImage() && !swapchain.RecreateAndAcquire()) {
+        if (!DeviceLost::IsLost()) {
+            // The window is resized faster than the swapchain follows, or it just lost its pixels.
+            static SotbSwapchain::LogGate skipped{3, 10'000'000'000ull};
+            const u64 now_ns = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count());
+            if (skipped.Allow(now_ns)) {
+                LOG_WARNING(Render_Vulkan, "Skipping frame! ({} more held back)", skipped.TakeSuppressed());
+            }
         }
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
-        if (!swapchain.AcquireNextImage()) {
-            // User resizes the window too fast and GPU can't keep up. Skip this frame.
-            LOG_WARNING(Render_Vulkan, "Skipping frame!");
-            free_frame();
-            return;
-        }
+        free_frame();
+        return;
     }
 
     // Reset fence for queue submission. Do it here instead of GetRenderFrame() because we may
@@ -757,8 +747,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
         std::scoped_lock submit_lock{Scheduler::submit_mutex};
         presented = swapchain.Present();
     }
-    if (!presented && window.GetWidth() != 0 && window.GetHeight() != 0) {
-        swapchain.Recreate(window.GetWidth(), window.GetHeight());
+    if (!presented) {
+        swapchain.RecreateForWindow();
     }
 
     free_frame();

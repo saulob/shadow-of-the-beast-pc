@@ -20,6 +20,7 @@
 #include "common/assert.h"
 #include "sotb_frame_pacing.h"
 #include "sotb_latency_trace.h"
+#include "sotb_log_gate.h"
 #include "sotb_present.h"
 #include "sotb_settings.h"
 #include "sotb_toggles.h"
@@ -672,12 +673,10 @@ void VideoOutDriver::RepeatLastFrame() {
 }
 
 namespace {
-constexpr auto kLimiterSpinWindow = std::chrono::microseconds(500);
-
 // A coarse wait can return about a millisecond late, so it stops short and the rest is yielded.
 void WaitUntilSlot(std::chrono::steady_clock::time_point slot) {
     using Clock = std::chrono::steady_clock;
-    const auto coarse = slot - Clock::now() - kLimiterSpinWindow;
+    const auto coarse = SotbFramePacing::CoarseSleep(slot, Clock::now());
 #ifdef _WIN32
     thread_local const HANDLE timer =
         CreateWaitableTimerExW(nullptr, nullptr, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
@@ -764,17 +763,42 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     Common::SetCurrentThreadRealtime(vblank_period);
 
     Common::AccurateTimer timer{vblank_period};
-    const int target_fps = SotbSettings::Get().frame_rate.load();
-    const double display_hz = SotbSettings::Get().display_refresh_hz;
-    bool vsync = SotbSettings::Get().vsync;
-    SotbFramePacing::FrameLimiter limiter{SotbFramePacing::RepeatCadenceHz(target_fps, vsync, display_hz),
-                                         std::chrono::steady_clock::now()};
-    const std::string cadence_text =
-        limiter.Enabled() ? std::to_string(SotbFramePacing::RepeatCadenceHz(target_fps, vsync, display_hz)) + " FPS"
-                          : "none";
-    std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s\n",
-                EmulatorSettings.GetVblankFrequency(), SotbFramePacing::ModeName(target_fps).c_str(),
-                cadence_text.c_str(), vsync ? "on" : "off");
+    const auto read_inputs = [] {
+        const auto& settings = SotbSettings::Get();
+        return SotbFramePacing::Inputs{.frame_rate = settings.frame_rate.load(),
+                                       .vsync = settings.vsync.load(),
+                                       .display_hz = settings.display_refresh_hz.load()};
+    };
+    SotbFramePacing::Inputs inputs = read_inputs();
+    SotbFramePacing::FrameLimiter limiter{0, std::chrono::steady_clock::now()};
+    SotbLog::LogGate stall_log{3, 30'000'000'000ull};
+    unsigned reported_resets = 0;
+    const auto start_pacing = [&](std::chrono::steady_clock::time_point now) {
+        const unsigned cadence = SotbFramePacing::CadenceFor(inputs);
+        limiter = SotbFramePacing::FrameLimiter{cadence, now};
+        reported_resets = 0;
+        const std::string cadence_text = cadence ? std::to_string(cadence) + " FPS" : "none";
+        std::printf("VideoOut: vblank %u Hz, frame rate %s, repeat cadence %s, VSync %s, display %.2f Hz\n",
+                    EmulatorSettings.GetVblankFrequency(), SotbFramePacing::ModeName(inputs.frame_rate).c_str(),
+                    cadence_text.c_str(), inputs.vsync ? "on" : "off", inputs.display_hz);
+    };
+    start_pacing(std::chrono::steady_clock::now());
+    // A late presentation re-anchors the limiter instead of repaying the lateness: one line, not one per frame.
+    const auto report_stall = [&] {
+        if (limiter.Resets() == reported_resets) {
+            return;
+        }
+        reported_resets = limiter.Resets();
+        const u64 now_ns = u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                   std::chrono::steady_clock::now().time_since_epoch())
+                                   .count());
+        if (stall_log.Allow(now_ns)) {
+            char line[160];
+            SotbFramePacing::FormatStall(line, sizeof(line), limiter.Resets(), limiter.LongestLate(),
+                                         SotbFramePacing::CadenceFor(inputs));
+            std::printf("%s\n", line);
+        }
+    };
     if (SotbLatencyTrace::enabled) {
         std::printf("Latency trace: on (SOTB_INPUT_LATENCY_TRACE=1), pad and present lines every 5 s\n");
     }
@@ -792,10 +816,9 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
     while (!token.stop_requested()) {
         timer.Start();
         const auto tick_start = std::chrono::steady_clock::now();
-        if (const bool vsync_now = SotbSettings::Get().vsync; vsync_now != vsync) {
-            vsync = vsync_now;
-            limiter = SotbFramePacing::FrameLimiter{SotbFramePacing::RepeatCadenceHz(target_fps, vsync, display_hz),
-                                                   tick_start};
+        if (const auto current = read_inputs(); !(current == inputs)) {
+            inputs = current;
+            start_pacing(tick_start);
         }
         const auto tick_deadline = tick_start + vblank_period;
 
@@ -826,6 +849,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                 }
             } else {
                 limiter.Release(tick_start);
+                report_stall();
                 Flip(request);
                 FRAME_END;
             }
@@ -866,6 +890,7 @@ void VideoOutDriver::PresentThread(std::stop_token token) {
                 WaitUntilSlot(slot);
             }
             limiter.Release(std::chrono::steady_clock::now());
+            report_stall();
             RepeatLastFrame();
         }
 

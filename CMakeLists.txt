@@ -277,6 +277,25 @@ target_compile_definitions(sotb-gpu-crash-timeline-tests PRIVATE SOTB_SOURCE_DIR
 target_compile_options(sotb-gpu-crash-timeline-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sotb-gpu-crash-timeline-tests PRIVATE -pthread)
 
+add_executable(sotb-swapchain-state-tests EXCLUDE_FROM_ALL tests/swapchain_state_tests.cpp)
+set_target_properties(sotb-swapchain-state-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-swapchain-state-tests PRIVATE gpu/shim gpu/shadps4)
+target_compile_definitions(sotb-swapchain-state-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-swapchain-state-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-frame-pacing-tests EXCLUDE_FROM_ALL tests/frame_pacing_tests.cpp)
+set_target_properties(sotb-frame-pacing-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-frame-pacing-tests PRIVATE gpu/shim gpu/shadps4)
+target_compile_definitions(sotb-frame-pacing-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-frame-pacing-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-presentation-hardening-tests EXCLUDE_FROM_ALL tests/presentation_hardening_tests.cpp)
+set_target_properties(sotb-presentation-hardening-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-presentation-hardening-tests PRIVATE gpu/shim gpu/shadps4)
+target_compile_definitions(sotb-presentation-hardening-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-presentation-hardening-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sotb-presentation-hardening-tests PRIVATE -pthread)
+
 add_executable(sotb-gpu-memory-fallback-tests EXCLUDE_FROM_ALL tests/gpu_memory_fallback_tests.cpp)
 set_target_properties(sotb-gpu-memory-fallback-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_include_directories(sotb-gpu-memory-fallback-tests PRIVATE gpu/shadps4)

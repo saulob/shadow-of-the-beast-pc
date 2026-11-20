@@ -44,6 +44,8 @@ public:
     s32 GetWidth() const { return width.load(std::memory_order_relaxed); }
     s32 GetHeight() const { return height.load(std::memory_order_relaxed); }
     SDL_Window* GetSDLWindow() const { return window; }
+    /// Counts the times the window moved to another display.
+    u32 DisplayGeneration() const { return display_generation.load(std::memory_order_relaxed); }
     WindowSystemInfo GetWindowInfo() const { return window_info; }
     bool IsOpen() const { return is_open.load(std::memory_order_relaxed); }
     /// Processes pending window events. Returns false once the user closed the window.
@@ -57,6 +59,7 @@ public:
 
 private:
     std::atomic<s32> width, height;
+    std::atomic<u32> display_generation{0};
     std::atomic<bool> is_open{true};
     std::atomic<bool> close_requested{false};
     std::mutex text_mutex;
@@ -69,6 +72,7 @@ private:
     void ApplyDisplayMode(int mode);
     void ToggleBorderless();
     void UpdateFpsTitle();
+    void UpdateDisplayRefresh();
     void UpdateCursor();
     bool TrackControllerEvent(const SDL_Event& event);
     std::unordered_map<u32, PadActivity> pad_activity; ///< window thread
