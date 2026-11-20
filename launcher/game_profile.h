@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <span>
 #include <string>
 #include <string_view>
@@ -29,6 +30,20 @@ struct TextLanguage {
     std::string_view archive;
 };
 
+struct ExecutableRange {
+    uint64_t start = 0;
+    uint64_t size = 0;
+};
+
+// What a build's eboot.bin looks like before it runs: recorded from the supported executable, compared with an unknown one.
+struct ExecutableProfile {
+    uint64_t file_size = 0;
+    uint64_t image_extent = 0;
+    uint64_t entry = 0;
+    ExecutableRange code;
+    ExecutableRange data;
+};
+
 struct GameBuild {
     const char* title_id;
     const char* content_id;
@@ -44,6 +59,7 @@ struct GameBuild {
     bool english_voices = false;
     const char* code_build = "";
     std::span<const char* const> alternate_eboots = {};
+    ExecutableProfile executable = {};
 };
 
 bool IsBuildExecutable(const GameBuild& build, std::string_view sha256);

@@ -1,4 +1,5 @@
 #include "game_files.h"
+#include "build_identity.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -536,17 +537,75 @@ const GameBuild* BuildOfImageDir(const char* image_dir) {
     return BuildOfImageReport(report, SupportedBuilds());
 }
 
+namespace {
+
+std::optional<std::string> ReportText(const std::string& report, const char* key) {
+    std::string value = JsonString(report, key);
+    return value.empty() ? std::optional<std::string>{} : std::optional<std::string>{std::move(value)};
+}
+
+std::optional<uint64_t> ReportNumber(const std::string& report, const char* key, int base) {
+    const std::string text = JsonString(report, key);
+    if (!text.empty()) {
+        char* end = nullptr;
+        const unsigned long long value = std::strtoull(text.c_str(), &end, base);
+        return end && !*end ? std::optional<uint64_t>{value} : std::nullopt;
+    }
+    const std::string needle = std::string("\"") + key + "\"";
+    size_t at = report.find(needle);
+    at = at == std::string::npos ? at : report.find(':', at);
+    at = at == std::string::npos ? at : report.find_first_not_of(" \t\r\n", at + 1);
+    if (at == std::string::npos || report[at] < '0' || report[at] > '9') {
+        return std::nullopt;
+    }
+    return std::strtoull(report.c_str() + at, nullptr, 10);
+}
+
+} // namespace
+
+// What a boot image report records of the executable it was built from.
+BuildEvidence ImageEvidence(const std::string& report) {
+    BuildEvidence evidence;
+    evidence.source = "boot image report (image.json)";
+    evidence.title_id = ReportText(report, "title_id");
+    evidence.app_ver = ReportText(report, "app_ver");
+    evidence.eboot_sha256 = ReportText(report, "eboot_sha256");
+    evidence.entry = ReportNumber(report, "entry", 16);
+    evidence.image_extent = ReportNumber(report, "eboot_image_bytes", 10);
+    return evidence;
+}
+
 // Why a boot image folder is not one of a supported build, for the loader's log.
 std::string ImageBuildProblem(const char* image_dir) {
     std::string report;
     if (!image_dir || !ReadSmallFile(PathFromUtf8(image_dir) / "image.json", report)) {
         return "the boot image report (image.json) cannot be read";
     }
+    const BuildAssessment assessment = AssessBuild(ImageEvidence(report));
     return "boot image of title " + Shown(JsonString(report, "title_id")) + ", APP_VER " + Shown(JsonString(report, "app_ver")) +
-           ", eboot SHA-256 " + Shown(JsonString(report, "eboot_sha256")) + " is not the executable of " + SupportedBuildsText();
+           ", eboot SHA-256 " + Shown(JsonString(report, "eboot_sha256")) + " is not the executable of " + SupportedBuildsText() + " (" +
+           VerdictName(assessment.verdict) + ")";
+}
+
+std::vector<std::string> ImageBuildReport(const char* image_dir) {
+    std::string report;
+    if (!image_dir || !ReadSmallFile(PathFromUtf8(image_dir) / "image.json", report)) {
+        return {"Build verdict: UNSUPPORTED (the boot image report image.json cannot be read)"};
+    }
+    const BuildEvidence evidence = ImageEvidence(report);
+    return DescribeAssessment(evidence, AssessBuild(evidence));
 }
 
 } // namespace Sotb
+
+extern "C" void sotb_game_build_report(const char* image_dir, void (*emit)(const char* line)) {
+    if (!emit) {
+        return;
+    }
+    for (const std::string& line : Sotb::ImageBuildReport(image_dir)) {
+        emit(line.c_str());
+    }
+}
 
 extern "C" void sotb_game_build_problem(const char* image_dir, char* out, size_t size) {
     if (out && size) {

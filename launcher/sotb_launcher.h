@@ -62,6 +62,8 @@ typedef struct {
 
 int sotb_game_build(const char* image_dir, SotbGameBuild* build);
 void sotb_game_build_problem(const char* image_dir, char* out, size_t size);
+/* The deterministic build verdict and the fields behind it, one call of `emit` per log line; read-only. */
+void sotb_game_build_report(const char* image_dir, void (*emit)(const char* line));
 
 int sotb_text_language(const char* settings_file);
 int sotb_detailed_logging(const char* settings_file);
@@ -70,6 +72,8 @@ int sotb_skip_intro(const char* settings_file);
 void sotb_log_settings_summary(const char* settings_file, const char* game_build);
 
 int sotb_check_vulkan(char* cause, size_t cause_size, char* advice, size_t advice_size);
+/* 1 when the saved Renderer can run: only Vulkan chosen by name needs a working Vulkan. Otherwise fills cause and advice. */
+int sotb_check_renderer(const char* settings_file, char* cause, size_t cause_size, char* advice, size_t advice_size);
 
 #ifdef __cplusplus
 }

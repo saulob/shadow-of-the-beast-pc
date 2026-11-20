@@ -184,3 +184,9 @@ Nothing is written to the repository by a player installation. `game\`, `user\`,
 An unsupported package is refused with a diagnostic block written to the log. The block lists the package's
 `param.sfo`, the `eboot.bin` hash, the required files that were found or missing, and the supported build. This is
 intentional: a different executable can have different code, and the port must not run it with the wrong expectations.
+
+The block starts with `Build verdict:` `SUPPORTED`, `UNSUPPORTED` or `POSSIBLE CANDIDATE`, then lists TITLE_ID, CONTENT_ID,
+APP_VER, VERSION, the executable's size, entry point, image extent, SHA-256 and code and data ranges, and for the closest
+supported build which of those fields match, differ or were not recorded. A candidate is a lead for maintainers and is never
+run; only an exact match of every recorded field is supported (`launcher/build_identity.cpp`). The loader prints the same
+verdict, from the boot image report, before it touches the guest.

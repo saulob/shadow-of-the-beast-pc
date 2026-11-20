@@ -17,6 +17,7 @@
 #include "sotb_latency_trace.h"
 #include "sotb_overlay.h"
 #include "sotb_renderer.h"
+#include "sotb_vulkan_support.h"
 #include "sotb_png.h"
 #include "sotb_settings.h"
 #include "sotb_title.h"
@@ -49,8 +50,6 @@ uint64_t runtime_process_time_counter(void);
 uint64_t runtime_tsc_frequency(void);
 int32_t* runtime_errno(void);
 void runtime_memory_set_gpu_hooks(RuntimeGpuRange map, RuntimeGpuRange unmap, RuntimeGpuRange invalidate);
-// sotb_gpu_list.cpp
-int sotb_check_vulkan(char* cause, size_t cause_size, char* advice, size_t advice_size);
 // runtime.c
 void runtime_report(void);
 // runtime_log.c
@@ -197,20 +196,33 @@ extern "C" int sotbgpu_available(void) {
     return 1;
 }
 
-// Each renderer needs its own kind of window, so Auto asks whether Vulkan can run before there is one.
-static void SelectRenderer() {
+// Each renderer needs its own kind of window, so the renderer is chosen, after Vulkan's preflight, before there is one.
+static bool SelectRenderer() {
     const auto choice = SotbRenderer::Choice(SotbSettings::Get().renderer.load());
-    char cause[320] = "", advice[320] = "";
-    const bool vulkan_usable = choice != SotbRenderer::Auto ||
-                               sotb_check_vulkan(cause, sizeof(cause), advice, sizeof(advice));
-    const auto resolution = SotbRenderer::Resolve(choice, vulkan_usable, cause);
+    const std::string requested(SotbRenderer::ChoiceKeys[choice]);
+    std::printf("Renderer: requested %s\n", requested.c_str());
+    bool vulkan_usable = true;
+    std::string problem;
+    if (choice == SotbRenderer::Vulkan || choice == SotbRenderer::Auto) {
+        const auto preflight = SotbVulkan::CheckSystemVulkan();
+        std::printf("Renderer: %s\n", preflight.Summary().c_str());
+        vulkan_usable = preflight.Passed();
+        if (!vulkan_usable) {
+            problem = preflight.problem->cause;
+            if (choice == SotbRenderer::Vulkan) {
+                std::printf("Renderer: Vulkan was requested and cannot run: %s %s\n", problem.c_str(),
+                            preflight.problem->advice.c_str());
+                return false;
+            }
+        }
+    }
+    const auto resolution = SotbRenderer::Resolve(choice, vulkan_usable, problem);
     SotbRenderer::SetActive(resolution.backend);
-    std::printf("Renderer: selected %s, active %s\n",
-                std::string(SotbRenderer::ChoiceKeys[choice]).c_str(),
-                SotbRenderer::BackendName(resolution.backend));
+    std::printf("Renderer: selected %s, active %s\n", requested.c_str(), SotbRenderer::BackendName(resolution.backend));
     if (!resolution.fallback_reason.empty()) {
         std::printf("Renderer: Auto fell back to OpenGL: %s\n", resolution.fallback_reason.c_str());
     }
+    return true;
 }
 
 static_assert(SOTB_GPU_FEATURE_RENDER_RESOLUTION == SotbSettings::RenderResolution);
@@ -218,7 +230,9 @@ static_assert(SOTB_GPU_FEATURE_RENDER_RESOLUTION == SotbSettings::RenderResoluti
 extern "C" int sotbgpu_init(const SotbGpuConfig* config) {
     SotbSettings::Load(config->settings_file);
     SotbSettings::Get().features = config->features;
-    SelectRenderer();
+    if (!SelectRenderer()) {
+        return 1;
+    }
     const std::string user_dir = config->user_dir;
     Common::FS::SetUserDir(std::filesystem::path(std::u8string(user_dir.begin(), user_dir.end())));
     g_sdk_version = config->sdk_version;

@@ -12,7 +12,32 @@ scales it.
 - **Vulkan, OpenGL and Direct3D 11 chosen by name** start or fail as themselves; there is no silent fallback.
 - An unknown value runs Vulkan.
 
-The selection, Auto fallback and parsing are covered by `sotb-launcher-tests`. Whether OpenGL and Direct3D 11 draw this
+## Vulkan preflight
+
+Before any renderer or window exists, `gpu/shim/sotb_vulkan_support.h` decides step by step whether Vulkan can run: loader,
+runtime version (1.3), instance, devices, then each device's mandatory capabilities. It returns the stage, the GPU and driver
+and the first missing capability instead of asserting, and the launcher's Play check, the Graphics card list and the direct
+launch all use it. Renderer Vulkan that fails it stops with the cause (`Renderer: Vulkan was requested and cannot run: ...`);
+Auto falls back to OpenGL as above.
+
+- **Mandatory**: `VK_KHR_swapchain`, `VK_KHR_push_descriptor`, `VK_EXT_vertex_attribute_divisor`, `VK_EXT_robustness2` with
+  `robustBufferAccess2`, `robustImageAccess2` and `nullDescriptor`, a graphics queue and a device-local memory heap.
+- **Optional**: every other extension the renderer enables; missing ones never reject a card.
+- **Handled by a fallback**: sparse buffers (below).
+
+The log shows `Renderer: requested ...`, `Renderer: Vulkan preflight: passed|failed (...); GPU ..., ...; missing ...`, and the
+selected and active renderer.
+
+## GPU memory arenas
+
+The buffer cache uses sparse arenas when the device has `sparseBinding`, `sparseResidencyBuffer` and a graphics queue that can
+bind sparse memory. Anything less selects fully resident arenas (16 MiB pages at most, 64 KiB blocks, migrated by copy when
+an access spans arenas); guest-visible behaviour is the same. The log says `GPU memory arena: sparse` or
+`GPU memory arena: fully resident fallback (reason)`. The decision and the arena layout live in
+`gpu/shadps4/video_core/buffer_cache/arena_mode.h` and `arena_layout.h`.
+
+The selection, Auto fallback and parsing are covered by `sotb-renderer-selection-tests`, the preflight by
+`sotb-vulkan-preflight-tests` and the arenas by `sotb-buffer-arena-tests`. Whether OpenGL and Direct3D 11 draw this
 game correctly has not been verified on a GPU; Vulkan is the renderer the game has been brought up with.
 
 ## Graphics card

@@ -8,6 +8,7 @@
 #include <string_view>
 #include <system_error>
 
+#include "build_identity.h"
 #include "crypto.h"
 #include "game_files.h"
 #include "utf8.h"
@@ -23,6 +24,7 @@ constexpr uint64_t kMaxExecutable = 128ull << 20;
 constexpr uint64_t kMaxModule = 64ull << 20;
 constexpr size_t kMaxSourceFiles = 5000;
 constexpr size_t kMaxListedFiles = 60;
+constexpr size_t kExecutableHeaderBytes = 16 * 1024;
 
 // The other releases of the game, so that a package of one is told apart from an unrelated game.
 class FolderSource final : public GameSource {
@@ -205,11 +207,44 @@ const GameBuild* BuildOfExecutable(const std::string& sha, const std::string& ti
     return found;
 }
 
-void DescribeExecutables(Lines& out, const GameSource& source, const std::string& sfo) {
+struct Eboot {
+    bool read = false;
     Bytes bytes;
-    if (source.Read("eboot.bin", kMaxExecutable, bytes)) {
-        const std::string sha = Sha256Of(bytes);
-        out.Add("eboot.bin: %zu bytes, SHA-256 %s", bytes.size(), Shown(sha).c_str());
+    std::string sha;
+};
+
+Eboot ReadEboot(const GameSource& source) {
+    Eboot eboot;
+    eboot.read = source.Read("eboot.bin", kMaxExecutable, eboot.bytes);
+    if (eboot.read) {
+        eboot.sha = Sha256Of(eboot.bytes);
+    }
+    return eboot;
+}
+
+BuildEvidence CollectEvidence(const GameSource& source, const std::string& sfo, const Eboot& eboot) {
+    BuildEvidence evidence;
+    evidence.source = source.Kind() + (eboot.read ? ": param.sfo and eboot.bin" : ": param.sfo only");
+    const auto text = [&](const char* key) {
+        const std::string value = SfoString(sfo, key);
+        return value.empty() ? std::optional<std::string>{} : std::optional<std::string>{value};
+    };
+    evidence.title_id = text("TITLE_ID");
+    evidence.content_id = text("CONTENT_ID");
+    evidence.app_ver = text("APP_VER");
+    evidence.sfo_version = text("VERSION");
+    if (eboot.read) {
+        const size_t head = std::min<size_t>(eboot.bytes.size(), kExecutableHeaderBytes);
+        AddExecutable(evidence, ReadExecutableHeader({eboot.bytes.data(), head}), eboot.bytes.size(), eboot.sha);
+    }
+    return evidence;
+}
+
+void DescribeExecutables(Lines& out, const GameSource& source, const std::string& sfo, const Eboot& eboot) {
+    Bytes bytes;
+    if (eboot.read) {
+        out.Add("eboot.bin: %zu bytes, SHA-256 %s", eboot.bytes.size(), Shown(eboot.sha).c_str());
+        const std::string& sha = eboot.sha;
         const GameBuild* executable = BuildOfExecutable(sha, SfoString(sfo, "TITLE_ID"));
         const GameBuild* named = CheckSfoIdentity(sfo).build;
         if (!executable) {
@@ -264,8 +299,13 @@ UnsupportedReport DiagnoseUnsupportedBuild(const GameSource& source, const std::
     Lines out;
     out.Add(kDiagnosticsBegin);
     out.Add("The game was recognized as Shadow of the Beast, but this exact build is not supported; nothing was installed.");
+    const Eboot eboot = ReadEboot(source);
+    const BuildEvidence evidence = CollectEvidence(source, sfo, eboot);
+    for (const std::string& line : DescribeAssessment(evidence, AssessBuild(evidence))) {
+        out.Add(line);
+    }
     DescribeIdentity(out, sfo, source);
-    DescribeExecutables(out, source, sfo);
+    DescribeExecutables(out, source, sfo, eboot);
     DescribeFiles(out, source.Files());
     out.Add(kDiagnosticsEnd);
     report.recognized = true;

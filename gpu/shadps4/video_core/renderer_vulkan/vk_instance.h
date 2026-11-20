@@ -6,6 +6,8 @@
 #include <span>
 #include <unordered_map>
 
+#include "sotb_vulkan_support.h"
+#include "video_core/buffer_cache/arena_mode.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
 #define TRACY_VK_USE_SYMBOL_TABLE
@@ -22,6 +24,7 @@ namespace Vulkan {
 
 /// The device meets the renderer's Vulkan version, extension and feature requirements.
 bool IsDeviceUsable(vk::PhysicalDevice physical);
+SotbVulkan::DeviceCapabilities QueryDeviceCapabilities(vk::PhysicalDevice physical);
 
 class Instance {
 public:
@@ -109,7 +112,11 @@ public:
 
     /// Returns true if buffers can be sparsely bound and partially resident
     bool IsSparseSupported() const {
-        return features.sparseBinding && features.sparseResidencyBuffer;
+        return VideoCore::ArenaLayout::DecideArenaMode(GetSparseCapabilities()).mode == VideoCore::ArenaLayout::ArenaMode::Sparse;
+    }
+
+    VideoCore::ArenaLayout::SparseCapabilities GetSparseCapabilities() const {
+        return {bool(features.sparseBinding), bool(features.sparseResidencyBuffer), queue_sparse_binding};
     }
 
     /// Returns true if 16-bit floats are supported in shaders
@@ -581,6 +588,7 @@ private:
     std::unordered_map<vk::Format, vk::FormatProperties3> format_properties;
     TracyVkCtx profiler_context{};
     u32 queue_family_index{0};
+    bool queue_sparse_binding{false};
     bool custom_border_color{};
     bool fragment_shader_barycentric{};
     bool amd_shader_explicit_vertex_parameter{};

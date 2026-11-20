@@ -217,6 +217,14 @@ static int cpu_usable(char *cause, size_t cause_size, char *advice, size_t advic
     return isa_host_usable(isa_host_features(), cause, cause_size, advice, advice_size);
 }
 
+static void print_build_line(const char *line) { printf("  %s\n", line); }
+
+static const char *renderer_settings_file;
+static int system_usable(char *cause, size_t cause_size, char *advice, size_t advice_size) {
+    return cpu_usable(cause, cause_size, advice, advice_size) &&
+           sotb_check_renderer(renderer_settings_file, cause, cause_size, advice, advice_size);
+}
+
 static int annotate_address(char *out, size_t size, uintptr_t address) {
     const int64_t data_import = import_traps.data ? import_trap_data_index(&import_traps, address) : -1;
     if (data_import >= 0) {
@@ -811,9 +819,10 @@ int main(int argc, char **argv) {
     _set_purecall_handler(purecall);
 
     log_cpu();
+    renderer_settings_file = settings_file;
     if (!cpu_only && !check_imports && !verify_slots) {
         SotbLauncherConfig launcher = {app0, paths.image_dir, user_dir, settings_file, log_folder,
-                                       skip_launcher, force_launcher, cpu_usable, log_started ? log_path : NULL};
+                                       skip_launcher, force_launcher, system_usable, log_started ? log_path : NULL};
         sotb_startup_phase("launcher handoff");
         const SotbLauncherResult launched = sotb_launcher_run(&launcher);
         sotb_startup_phase("launcher returned");
@@ -824,7 +833,9 @@ int main(int argc, char **argv) {
 
     {
         char cause[160], advice[160], message[330];
-        if (!cpu_usable(cause, sizeof(cause), advice, sizeof(advice))) {
+        const int graphics_needed = !cpu_only && !check_imports && !verify_slots;
+        if (!(graphics_needed ? system_usable(cause, sizeof(cause), advice, sizeof(advice))
+                              : cpu_usable(cause, sizeof(cause), advice, sizeof(advice)))) {
             snprintf(message, sizeof(message), "%s %s", cause, advice);
             fail(message);
         }
@@ -841,6 +852,9 @@ int main(int argc, char **argv) {
     if (!known_build) {
         char problem[512];
         sotb_game_build_problem(paths.image_dir, problem, sizeof(problem));
+        puts("Unsupported build diagnostics begin");
+        sotb_game_build_report(paths.image_dir, print_build_line);
+        puts("Unsupported build diagnostics end");
         char message[700];
         snprintf(message, sizeof(message), "unsupported build: %s (install from a supported Shadow of the Beast package)", problem);
         fail(message);

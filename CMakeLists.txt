@@ -219,6 +219,18 @@ target_include_directories(sotb-renderer-selection-tests PRIVATE gpu/shim gpu/sh
 target_compile_definitions(sotb-renderer-selection-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(sotb-renderer-selection-tests PRIVATE -Wall -Wextra -Werror)
 
+add_executable(sotb-vulkan-preflight-tests EXCLUDE_FROM_ALL tests/vulkan_preflight_tests.cpp)
+set_target_properties(sotb-vulkan-preflight-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-vulkan-preflight-tests PRIVATE gpu/shim gpu/shadps4)
+target_compile_definitions(sotb-vulkan-preflight-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-vulkan-preflight-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-buffer-arena-tests EXCLUDE_FROM_ALL tests/buffer_arena_tests.cpp)
+set_target_properties(sotb-buffer-arena-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-buffer-arena-tests PRIVATE gpu/shadps4)
+target_compile_definitions(sotb-buffer-arena-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-buffer-arena-tests PRIVATE -Wall -Wextra -Werror)
+
 add_executable(sotb-isa-tests EXCLUDE_FROM_ALL tests/isa_tests.c src/isa_emulate.c src/lzcnt_compat.c)
 target_include_directories(sotb-isa-tests PRIVATE src)
 target_compile_definitions(sotb-isa-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin")

@@ -26,6 +26,7 @@ find_package(ZLIB REQUIRED)
 add_library(sotb_launcher_core STATIC
     boot_image.cpp
     build_diagnostics.cpp
+    build_identity.cpp
     game_files.cpp
     game_install.cpp
     game_profile.cpp
@@ -101,6 +102,12 @@ target_compile_definitions(sotb-launcher-tests PRIVATE SOTB_BOOT_IMAGE="${PROJEC
     SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 set_target_properties(sotb-launcher-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-launcher-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-build-identity-tests EXCLUDE_FROM_ALL ../tests/build_identity_tests.cpp)
+target_link_libraries(sotb-build-identity-tests PRIVATE sotb_launcher_core)
+target_compile_definitions(sotb-build-identity-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-build-identity-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-build-identity-tests PRIVATE -Wall -Wextra)
 
 add_executable(sotb-bug-report-tests EXCLUDE_FROM_ALL ../tests/bug_report_tests.cpp)
 target_link_libraries(sotb-bug-report-tests PRIVATE sotb_launcher_core)

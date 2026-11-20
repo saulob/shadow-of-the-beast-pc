@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, updater, crash report, guest memory and CPU compatibility tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena and build identity tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
   exit code is non-zero when any failed.
 
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
-  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test and the CPU compatibility test.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test and the build identity (unsupported build diagnostics) test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
 .EXAMPLE
@@ -61,6 +61,14 @@ function Invoke-GuestMemory { Invoke-FocusedTest 'memory_windows_test' }
 
 function Invoke-CpuCompatibility { Invoke-FocusedTest 'sotb-isa-tests' '^(real image|site table|table shapes|no LZCNT|isa tests)' }
 
+function Invoke-RendererSelection { Invoke-FocusedTest 'sotb-renderer-selection-tests' '^renderer selection tests' }
+
+function Invoke-VulkanPreflight { Invoke-FocusedTest 'sotb-vulkan-preflight-tests' '^vulkan preflight tests' }
+
+function Invoke-BufferArena { Invoke-FocusedTest 'sotb-buffer-arena-tests' '^(BDA page table|buffer arena tests)' }
+
+function Invoke-BuildIdentity { Invoke-FocusedTest 'sotb-build-identity-tests' '^(real image|build identity tests)' }
+
 function Invoke-WorkerService {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { return Result 'SKIPPED' 'Node.js 22 or newer not found' }
@@ -101,7 +109,11 @@ $steps = @(
     @{ Title = 'Updater: trg-updater.exe run headless from a temporary folder (parent wait, install, restart marker, environment cleanup, protected data)'; Block = { Invoke-UpdateHelper } },
     @{ Title = 'Crash report: module history, call sites, fault ownership and startup phase (no window, no game)'; Block = { Invoke-ModuleHistory } },
     @{ Title = 'Runtime: guest memory, and file reads into it while a map splits the view (synthetic file, no game)'; Block = { Invoke-GuestMemory } },
-    @{ Title = 'CPU compatibility: MOVBE, BMI1 and LZCNT (host classification, MOVBE and BMI1 emulation, LZCNT rewrite run on synthetic forms and applied to every site; the real boot image is read only and skipped when absent)'; Block = { Invoke-CpuCompatibility } }
+    @{ Title = 'CPU compatibility: MOVBE, BMI1 and LZCNT (host classification, MOVBE and BMI1 emulation, LZCNT rewrite run on synthetic forms and applied to every site; the real boot image is read only and skipped when absent)'; Block = { Invoke-CpuCompatibility } },
+    @{ Title = 'Renderer selection: the Renderer setting, Auto fallback and the sources that must agree (no window, no context)'; Block = { Invoke-RendererSelection } },
+    @{ Title = 'Vulkan preflight: loader, runtime, device, mandatory extensions and features, optional capabilities, explicit Vulkan and Auto fallback (synthetic capabilities, no Vulkan, no window)'; Block = { Invoke-VulkanPreflight } },
+    @{ Title = 'GPU memory: sparse or fully resident arena decision, layout, overflow, allocation failure rollback and migration (fake arenas, no Vulkan device)'; Block = { Invoke-BufferArena } },
+    @{ Title = 'Unsupported build diagnostics: supported identity, altered fields, candidates, deterministic report, refusal before guest code (synthetic; the real boot image is read only and skipped when absent)'; Block = { Invoke-BuildIdentity } }
 )
 
 $tc = Resolve-Toolchain 'auto'

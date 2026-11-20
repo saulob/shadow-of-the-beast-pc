@@ -26,7 +26,12 @@ constexpr GameBuild kGameBuilds[] = {
      .region = "Korea",
      .layers = kBaseLayers,
      .text_languages = {},
-     .code_build = "CUSA03762-1.00"},
+     .code_build = "CUSA03762-1.00",
+     .executable = {.file_size = 75181963,
+                    .image_extent = 0x4260838,
+                    .entry = 0x19105d0,
+                    .code = {0x0, 0x3be8018},
+                    .data = {0x3e80000, 0x3e0838}}},
 };
 
 constexpr TextLanguage kFallbackLanguage{"english", "English", 1, ""};

@@ -15,6 +15,7 @@
 #include "video_core/renderdoc.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "sotb_graphics.h"
+#include "sotb_vulkan_support.h"
 #include "sotb_settings.h"
 #include "sdl_window.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
@@ -104,21 +105,52 @@ Instance::Instance(Frontend::WindowSDL& window, s32 physical_device_index,
                    bool enable_validation /*= false*/, bool enable_crash_diagnostic /*= false*/)
     : Instance(window.GetWindowInfo(), physical_device_index, enable_validation, enable_crash_diagnostic) {}
 
-bool IsDeviceUsable(vk::PhysicalDevice physical) {
-    if (physical.getProperties().apiVersion < TargetVulkanApiVersion) {
-        return false;
+static_assert(SotbVulkan::kMandatoryExtensions[0] == VK_KHR_SWAPCHAIN_EXTENSION_NAME &&
+              SotbVulkan::kMandatoryExtensions[1] == VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME &&
+              SotbVulkan::kMandatoryExtensions[2] == VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME &&
+              SotbVulkan::kMandatoryExtensions[3] == VK_EXT_ROBUSTNESS_2_EXTENSION_NAME);
+
+SotbVulkan::DeviceCapabilities QueryDeviceCapabilities(vk::PhysicalDevice physical) {
+    SotbVulkan::DeviceCapabilities caps;
+    const auto properties = physical.getProperties();
+    caps.name = properties.deviceName.data();
+    caps.vendor_id = properties.vendorID;
+    caps.api_version = properties.apiVersion;
+    caps.driver_version = properties.driverVersion;
+    caps.extensions = GetSupportedExtensions(physical);
+    if (properties.apiVersion >= VK_API_VERSION_1_2) {
+        const auto driver = physical.getProperties2<vk::PhysicalDeviceProperties2,
+                                                    vk::PhysicalDeviceDriverProperties>()
+                                .get<vk::PhysicalDeviceDriverProperties>();
+        caps.driver_name = driver.driverName.data();
+        caps.driver_info = driver.driverInfo.data();
     }
-    const auto extensions = GetSupportedExtensions(physical);
-    for (const char* required : {VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
-                                 VK_EXT_VERTEX_ATTRIBUTE_DIVISOR_EXTENSION_NAME,
-                                 VK_EXT_ROBUSTNESS_2_EXTENSION_NAME}) {
-        if (std::ranges::find(extensions, std::string_view{required}) == extensions.end()) {
-            return false;
+    if (SotbVulkan::HasExtension(caps, VK_EXT_ROBUSTNESS_2_EXTENSION_NAME)) {
+        const auto chain = physical.getFeatures2<vk::PhysicalDeviceFeatures2,
+                                                 vk::PhysicalDeviceRobustness2FeaturesEXT>();
+        const auto& robustness2 = chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
+        caps.robust_buffer_access2 = robustness2.robustBufferAccess2;
+        caps.robust_image_access2 = robustness2.robustImageAccess2;
+        caps.null_descriptor = robustness2.nullDescriptor;
+    }
+    const auto features = physical.getFeatures();
+    caps.sparse.sparse_binding = features.sparseBinding;
+    caps.sparse.sparse_residency_buffer = features.sparseResidencyBuffer;
+    for (const auto& family : physical.getQueueFamilyProperties()) {
+        if (family.queueFlags & vk::QueueFlagBits::eGraphics) {
+            caps.graphics_queue = true;
+            caps.sparse.queue_sparse_binding = bool(family.queueFlags & vk::QueueFlagBits::eSparseBinding);
         }
     }
-    const auto chain = physical.getFeatures2<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceRobustness2FeaturesEXT>();
-    const auto& robustness2 = chain.get<vk::PhysicalDeviceRobustness2FeaturesEXT>();
-    return robustness2.robustBufferAccess2 && robustness2.robustImageAccess2 && robustness2.nullDescriptor;
+    const auto memory = physical.getMemoryProperties();
+    for (u32 i = 0; i < memory.memoryHeapCount; ++i) {
+        caps.device_local_memory |= bool(memory.memoryHeaps[i].flags & vk::MemoryHeapFlagBits::eDeviceLocal);
+    }
+    return caps;
+}
+
+bool IsDeviceUsable(vk::PhysicalDevice physical) {
+    return SotbVulkan::EvaluateDevice(QueryDeviceCapabilities(physical), TargetVulkanApiVersion).usable;
 }
 
 Instance::Instance(s32 index, bool validation)
@@ -527,6 +559,7 @@ bool Instance::CreateDevice() {
         const u32 index = static_cast<u32>(i);
         if (family_properties[i].queueFlags & vk::QueueFlagBits::eGraphics) {
             queue_family_index = index;
+            queue_sparse_binding = bool(family_properties[i].queueFlags & vk::QueueFlagBits::eSparseBinding);
             graphics_queue_found = true;
         }
     }
