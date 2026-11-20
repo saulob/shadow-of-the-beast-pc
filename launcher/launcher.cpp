@@ -233,17 +233,17 @@ private:
         SotbLauncherResult outcome = SOTB_LAUNCHER_QUIT;
         bool first = true;
         while (true) {
-            if (!host_.PumpEvents()) {
+            const Sotb::FrameGate gate = host_.NextFrame();
+            if (gate == Sotb::FrameGate::kQuit) {
                 outcome = SOTB_LAUNCHER_QUIT;
                 break;
             }
-            if (!first && host_.Minimized()) {
-                SDL_Delay(30);
+            PollInstall();
+            updater_->Poll();
+            if (gate == Sotb::FrameGate::kIdle && !first) {
                 continue;
             }
             first = false;
-            PollInstall();
-            updater_->Poll();
             const double now = double(SDL_GetTicksNS()) / 1e9;
             if (const std::optional<WindowState> state = host_.State()) {
                 placement_.Observe(*state, host_.Fullscreen(), now);

@@ -9,6 +9,7 @@
 
 #include <imgui.h>
 
+#include "launcher_pacing.h"
 #include "placement.h"
 
 struct SDL_Renderer;
@@ -16,6 +17,8 @@ struct SDL_Texture;
 struct SDL_Window;
 
 namespace Sotb {
+
+enum class FrameGate { kQuit, kDraw, kIdle };
 
 struct HostOptions {
     std::string title;
@@ -40,9 +43,10 @@ public:
     void Show();
     void Close();
 
-    // Handles the window's events (F11 switches the launcher's own fullscreen). False once it was closed.
-    bool PumpEvents();
-    bool Minimized() const;
+    // Handles the window's events (F11 switches the launcher's own fullscreen), then waits until the next frame is
+    // due: kDraw at most 60 times a second (a hidden window is not limited), kQuit once the window was closed, kIdle
+    // after a short sleep while it is minimized, when the caller does its background work and does not draw.
+    FrameGate NextFrame();
 
     // Between these two the caller draws the launcher with ImGui. A capture path saves the frame as a PNG.
     void BeginFrame();
@@ -60,6 +64,11 @@ public:
     const std::optional<WindowPlacement>& Restored() const { return restored_; }
 
 private:
+    bool PumpEvents();
+    bool Minimized() const;
+    void ConfigureVsync();
+    void NoteFrameDrawn(int64_t now_ns, const FrameTimes& times);
+
     std::optional<WindowPlacement> restored_;
     SDL_Window* window_ = nullptr;
     SDL_Renderer* renderer_ = nullptr;
@@ -69,6 +78,10 @@ private:
     bool gamepad_ = false;
     bool hidden_ = false;
     bool quit_ = false;
+    LoopGate gate_;
+    LoopMonitor monitor_;
+    std::string renderer_name_;
+    int64_t frame_begin_ns_ = 0;
 };
 
 } // namespace Sotb

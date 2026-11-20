@@ -134,6 +134,14 @@ target_compile_definitions(sotb-cursor-policy-tests PRIVATE SOTB_SOURCE_DIR="${P
 set_target_properties(sotb-cursor-policy-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-cursor-policy-tests PRIVATE -Wall -Wextra)
 
+foreach (launcher_test IN ITEMS renderer pacing performance)
+    add_executable(sotb-launcher-${launcher_test}-tests EXCLUDE_FROM_ALL ../tests/launcher_${launcher_test}_tests.cpp)
+    target_include_directories(sotb-launcher-${launcher_test}-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ../tests)
+    target_compile_definitions(sotb-launcher-${launcher_test}-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    set_target_properties(sotb-launcher-${launcher_test}-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(sotb-launcher-${launcher_test}-tests PRIVATE -Wall -Wextra -Werror)
+endforeach()
+
 add_executable(sotb-build-identity-tests EXCLUDE_FROM_ALL ../tests/build_identity_tests.cpp)
 target_link_libraries(sotb-build-identity-tests PRIVATE sotb_launcher_core)
 target_compile_definitions(sotb-build-identity-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

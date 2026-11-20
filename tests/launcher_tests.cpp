@@ -205,7 +205,7 @@ void TestLauncherQuit() {
     CHECK(Contains(launcher, "result == trg::Result::kQuit && LauncherQuitAllowed(ImGui::IsKeyPressed(ImGuiKey_Escape, false))"));
     CHECK(Contains(launcher, "config.hints = \"Enter  Play     Alt+F4  Quit     Ctrl+S  Save\""));
     CHECK(!Contains(launcher, "Esc  Quit"));
-    CHECK(Contains(launcher, "if (!host_.PumpEvents())"));
+    CHECK(Contains(launcher, "host_.NextFrame()") && !Contains(launcher, "host_.PumpEvents()"));
 }
 
 void TestSkipIntro(const fs::path& base) {
