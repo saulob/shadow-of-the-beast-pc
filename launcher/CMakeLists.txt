@@ -70,7 +70,11 @@ add_custom_command(OUTPUT ${SOTB_PAGE_ICON_SOURCE}
     COMMENT "Embedding the page icons")
 target_sources(sotb_launcher_core PRIVATE ${SOTB_PAGE_ICON_SOURCE})
 
-add_library(sotb_launcher STATIC host.cpp incident_page.cpp launcher.cpp my_reports_page.cpp trophy_page.cpp)
+add_library(sotb_launcher STATIC host.cpp incident_page.cpp launcher.cpp my_reports_page.cpp trophy_page.cpp update_config.cpp
+    updater/github_release.cpp updater/json.cpp updater/sha256.cpp updater/third_party/miniz/miniz.c
+    updater/update_controller.cpp updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp
+    updater/update_ui.cpp updater/update_zip.cpp updater/version.cpp)
+set_source_files_properties(updater/third_party/miniz/miniz.c PROPERTIES COMPILE_OPTIONS "-w")
 target_compile_definitions(sotb_launcher PRIVATE SOTB_PORT_VERSION="${PROJECT_VERSION}")
 target_include_directories(sotb_launcher PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
 target_link_libraries(sotb_launcher PUBLIC sotb_launcher_core trg_launcher sotb_imgui_sdl ${CMAKE_DL_LIBS})
@@ -111,3 +115,50 @@ target_link_libraries(sotb-launcher-ui-tests PRIVATE sotb_launcher_core trg_core
 target_include_directories(sotb-launcher-ui-tests PRIVATE ${IMGUI_DIR} ${PROJECT_SOURCE_DIR}/gpu/shim)
 target_compile_definitions(sotb-launcher-ui-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 set_target_properties(sotb-launcher-ui-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+
+# The helper that replaces the program after it exits. Static, so it needs none of the DLLs it may be replacing.
+add_executable(trg-updater WIN32 updater/helper_main.cpp updater/install_transaction.cpp updater/sha256.cpp
+    updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp)
+target_include_directories(trg-updater PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(trg-updater PRIVATE shell32)
+target_link_options(trg-updater PRIVATE -static)
+set_target_properties(trg-updater PROPERTIES OUTPUT_NAME "trg-updater" CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON
+    CXX_EXTENSIONS OFF)
+target_compile_options(trg-updater PRIVATE -Wall -Wextra)
+
+add_executable(sotb-update-restart-marker EXCLUDE_FROM_ALL WIN32 ../tests/update_restart_marker.cpp)
+target_link_libraries(sotb-update-restart-marker PRIVATE shell32)
+target_link_options(sotb-update-restart-marker PRIVATE -static)
+set_target_properties(sotb-update-restart-marker PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+
+add_executable(sotb-update-helper-tests EXCLUDE_FROM_ALL ../tests/update_helper_tests.cpp)
+target_compile_definitions(sotb-update-helper-tests PRIVATE
+    SOTB_UPDATER_EXE="$<TARGET_FILE:trg-updater>"
+    SOTB_MARKER_EXE="$<TARGET_FILE:sotb-update-restart-marker>")
+add_dependencies(sotb-update-helper-tests trg-updater sotb-update-restart-marker)
+set_target_properties(sotb-update-helper-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-update-helper-tests PRIVATE -Wall -Wextra)
+
+# Versions, release JSON, SHA-256, ZIP safety, staging, jobs, rollback and the release contract; no network.
+add_executable(sotb-update-tests EXCLUDE_FROM_ALL ../tests/update_tests.cpp update_config.cpp
+    updater/github_release.cpp updater/install_transaction.cpp updater/json.cpp updater/sha256.cpp
+    updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp updater/update_zip.cpp
+    updater/version.cpp updater/third_party/miniz/miniz.c)
+target_include_directories(sotb-update-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(sotb-update-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
+    SOTB_UPDATER_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}" SOTB_PORT_VERSION="${SOTB_PORT_VERSION}")
+target_link_libraries(sotb-update-tests PRIVATE trg_core shell32)
+set_target_properties(sotb-update-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-update-tests PRIVATE -Wall -Wextra)
+
+# The update controller against a scripted loopback HTTP server: no release yet (404), 504, dropped connections,
+# stalls, redirects, retries, and the production address and asset names. Never contacts GitHub.
+add_executable(sotb-update-network-tests EXCLUDE_FROM_ALL ../tests/update_network_tests.cpp update_config.cpp
+    updater/github_release.cpp updater/install_transaction.cpp updater/json.cpp updater/sha256.cpp
+    updater/update_controller.cpp updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp
+    updater/update_zip.cpp updater/version.cpp updater/third_party/miniz/miniz.c)
+target_include_directories(sotb-update-network-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_compile_definitions(sotb-update-network-tests PRIVATE SOTB_PORT_VERSION="${SOTB_PORT_VERSION}")
+target_link_libraries(sotb-update-network-tests PRIVATE trg_core shell32 ws2_32)
+set_target_properties(sotb-update-network-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-update-network-tests PRIVATE -Wall -Wextra)

@@ -111,6 +111,7 @@ target_link_options(shadow_of_the_beast PRIVATE -Wl,--disable-high-entropy-va
     "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
 target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
     onecore bcrypt ws2_32 user32 -pthread)
+add_dependencies(shadow_of_the_beast trg-updater)
 
 add_executable(import_slots_test EXCLUDE_FROM_ALL tests/import_slots_test.c src/import_slots.c)
 target_include_directories(import_slots_test PRIVATE src)

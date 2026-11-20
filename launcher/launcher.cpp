@@ -34,6 +34,9 @@
 #include "startup_phase.h"
 #include "text_languages.h"
 #include "trophy_page.h"
+#include "update_config.h"
+#include "updater/update_platform.h"
+#include "updater/update_ui.h"
 #include "sotb_graphics.h"
 #include "sotb_png.h"
 #include "trg/launcher.h"
@@ -219,6 +222,8 @@ private:
         incident_page_ = std::make_unique<IncidentPage>(IncidentPlaces());
         incident_page_->CheckReports();
         launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
+        updater_ = std::make_unique<trg::update::UpdateController>(MakeUpdateConfig(InstallDir()));
+        updater_->StartCheck();
         host_.BeginFrame();
         host_.EndFrame(LauncherTheme().bg);
         host_.Show();
@@ -237,6 +242,7 @@ private:
             }
             first = false;
             PollInstall();
+            updater_->Poll();
             const double now = double(SDL_GetTicksNS()) / 1e9;
             if (const std::optional<WindowState> state = host_.State()) {
                 placement_.Observe(*state, host_.Fullscreen(), now);
@@ -245,7 +251,14 @@ private:
             host_.BeginFrame();
             NormalizeGraphicsCard();
             const trg::Result result = launcher_->Frame();
+            const bool update_restart =
+                result == trg::Result::kNone &&
+                HandleUpdateAction(trg::update::DrawUpdateBanner(updater_->snapshot(), LauncherTheme(), fonts_));
             host_.EndFrame(LauncherTheme().bg);
+            if (update_restart) {
+                outcome = SOTB_LAUNCHER_QUIT;
+                break;
+            }
             if (result == trg::Result::kPlay) {
                 outcome = SOTB_LAUNCHER_PLAY;
                 break;
@@ -256,6 +269,11 @@ private:
             }
         }
         sotb_startup_phase("launcher loop ended");
+        updater_->Cancel();
+        if (updater_->Busy()) {
+            // A network call in flight is never joined on the UI thread; its worker finishes on its own.
+            updater_.release();
+        }
         incident_page_.reset();
         std::printf("Launcher: closed%s\n", outcome == SOTB_LAUNCHER_PLAY ? ", starting the game" : "");
         SavePlacement(placement_.Flush());
@@ -266,6 +284,46 @@ private:
         trophy_page_.reset();
         host_.Close();
         return outcome;
+    }
+
+    std::filesystem::path InstallDir() const {
+        const std::filesystem::path executable = trg::update::CurrentExecutablePath();
+        return executable.has_parent_path() ? executable.parent_path() : std::filesystem::current_path();
+    }
+
+    bool HandleUpdateAction(trg::update::UpdateUiAction action) {
+        switch (action) {
+        case trg::update::UpdateUiAction::kDownload:
+            updater_->StartDownload();
+            break;
+        case trg::update::UpdateUiAction::kRetry:
+            if (!updater_->RetryNeedsInstall()) {
+                updater_->Retry();
+            } else if (PrepareUpdateRestart()) {
+                return updater_->Retry();
+            }
+            break;
+        case trg::update::UpdateUiAction::kRestart:
+            if (PrepareUpdateRestart()) {
+                return updater_->BeginInstall();
+            }
+            break;
+        case trg::update::UpdateUiAction::kNone:
+            break;
+        }
+        return false;
+    }
+
+    bool PrepareUpdateRestart() {
+        if (install_.running()) {
+            launcher_->SetStatus("Wait for the current install to finish.", 5.0);
+            return false;
+        }
+        if (!launcher_->Save()) {
+            return false;
+        }
+        SavePlacement(placement_.Flush());
+        return true;
     }
 
     trg::LauncherConfig MakeConfig() {
@@ -738,6 +796,7 @@ private:
     std::unique_ptr<trg::Launcher> launcher_;
     std::unique_ptr<TrophyPage> trophy_page_;
     std::unique_ptr<IncidentPage> incident_page_;
+    std::unique_ptr<trg::update::UpdateController> updater_;
     GameFileState state_ = GameFileState::kMissing;
     const GameBuild* build_ = nullptr;
     std::string eboot_sha256_;

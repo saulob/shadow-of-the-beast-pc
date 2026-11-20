@@ -123,6 +123,41 @@ A normal launcher sends to `https://shadow-bug-reports.saulobenigno.workers.dev`
 page contacts nothing. The developer dashboard is `https://shadow-bug-reports.saulobenigno.workers.dev/admin`, protected by the Worker secret
 `SOTB_BUG_REPORT_ADMIN_TOKEN`; see the service's README for its endpoints, limits and retention. `.\tools\worker.ps1 -DryRun` validates and bundles the Worker without uploading, `.\tools\worker.ps1` deploys it, and `namespace_id` in `wrangler.toml` and the admin secret are set by hand first.
 
+## Updates
+
+When the launcher opens it asks GitHub for the latest published release of `saulob/shadow-of-the-beast-pc` (a plain GET; nothing about
+the PC is sent). A draft, a prerelease or a version that is not newer is ignored. When the automatic check fails (offline, rate
+limited, no release yet) the launcher stays quiet and writes the reason to the log; Play is never blocked by it.
+
+A newer release shows a banner. **UPDATE NOW** downloads the package, and nothing is downloaded or installed before that click.
+The package is checked, unpacked into a temporary workspace and validated; **RESTART TO UPDATE** then closes the launcher and
+`trg-updater.exe` replaces the program files and starts the new version at the launcher. A failed step shows **RETRY**; it
+runs only when pressed, starts that step again (check, download or install) from the beginning and verifies everything again.
+
+| Contract | Value |
+| --- | --- |
+| Release address | `https://api.github.com/repos/saulob/shadow-of-the-beast-pc/releases/latest` |
+| Package | `ShadowOfTheBeastPC-v<version>-windows-x64.zip` |
+| Checksum | `ShadowOfTheBeastPC-v<version>-windows-x64.zip.sha256` (`<64 hex digits>  <package name>`) |
+| Required in the package | `shadow_of_the_beast.exe`, `trg-updater.exe`, `SDL3.dll`, `libc++.dll` |
+| Version | `project(... VERSION x.y.z)` in `CMakeLists.txt`, the only source |
+
+Every request and redirect stays on HTTPS to `api.github.com`, `github.com`, `objects.githubusercontent.com` and
+`release-assets.githubusercontent.com`; a package or checksum address must also start with
+`https://github.com/saulob/shadow-of-the-beast-pc/releases/download/`. The downloaded size must equal the published size and the
+SHA-256 must equal the digest GitHub publishes for the package, or else the one in the checksum file (which must match its own
+published digest when the release has one). A release with neither is refused. Downloads go through `<file>.part`.
+
+Only the files of the package are replaced, each one backed up first and compared with its source afterwards; any failure puts the
+backups back, and a restart that fails restores the previous version. Nothing else is removed. A package that contains `game\`,
+`user\`, `logs\`, `cache\`, `shader\`, saves, trophies, `sotb.ini`, `keys.json`, `bug_reports.json`, anything named `CUSA03762*`, `.pak`,
+`.pkg` or `eboot.bin` is refused. The helper writes `trg-updater.log` in the update workspace (`trg-update-*` in the temporary folder).
+
+Test mode never turns on by itself. With `SOTB_UPDATE_TEST=1`, `SOTB_UPDATE_TEST_CURRENT_VERSION`, `SOTB_UPDATE_TEST_RELEASE_JSON`
+(a release file instead of GitHub) and `SOTB_UPDATE_TEST_ASSET_SHA256` can simulate a newer release; the restarted program
+does not inherit them. The updater tests use a loopback server and temporary folders only: `sotb-update-tests`,
+`sotb-update-network-tests` and `sotb-update-helper-tests`.
+
 ## About
 
 Port version, installed build, renderer, folders, the logs folder, **Detailed logging** (`detailed_logging`), the settings

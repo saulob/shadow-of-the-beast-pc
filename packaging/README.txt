@@ -9,3 +9,5 @@ Run shadow_of_the_beast.exe, open the Play page, choose Install game..., and sel
 The game is unpacked into the game folder next to the program.
 
 Settings and saves live in user\; logs live in logs\.
+
+trg-updater.exe installs launcher updates after you choose UPDATE NOW; keep it beside the program.
