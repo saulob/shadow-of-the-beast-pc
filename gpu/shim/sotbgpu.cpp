@@ -339,6 +339,10 @@ u32 ConsumeWithOverlaysScreenshotRequests() { return 0; }
 ScreenshotRequests ConsumeScreenshotRequests() { return {}; }
 } // namespace VideoCore
 
+extern "C" int sotbgpu_controller_rumble(void) {
+    return SotbSettings::Get().controller_rumble ? 1 : 0;
+}
+
 extern "C" int sotbgpu_overlay_captures_input(void) {
     return SotbOverlay::CapturesInput() ? 1 : 0;
 }

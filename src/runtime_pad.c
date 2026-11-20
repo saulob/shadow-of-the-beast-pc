@@ -576,7 +576,7 @@ static ABI int32_t pad_vibration(int32_t handle, const uint8_t *param) {
     pthread_mutex_lock(&lock);
     refresh_gamepads();
     SDL_Gamepad *g=slots[slot].gamepad;
-    if (g) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
+    if (g && sotbgpu_controller_rumble()) SDL_RumbleGamepad(g,(uint16_t)(param[0]*257),(uint16_t)(param[1]*257),1000);
     pthread_mutex_unlock(&lock);
     return 0;
 }

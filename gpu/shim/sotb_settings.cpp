@@ -77,6 +77,8 @@ void Set(Values& v, const std::string& key, const std::string& value) {
         v.renderer = SotbRenderer::ParseChoice(value);
     } else if (key == "render_resolution") {
         v.render_resolution = SotbGraphics::ParseRenderResolution(value);
+    } else if (key == "controller_rumble") {
+        v.controller_rumble = ParseBool(value, v.controller_rumble);
     } else if (key == "anisotropy") {
         v.anisotropy = SotbGraphics::ParseAnisotropy(ParseInt(value, 0));
     } else if (key == "window_width") {

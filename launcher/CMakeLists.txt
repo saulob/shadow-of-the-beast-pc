@@ -34,9 +34,20 @@ add_library(sotb_launcher_core STATIC
     page_icons.cpp
     paths.cpp
     pkg_extract.cpp
+    settings.cpp
+    text_languages.cpp
+    trophy_content.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_data.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_key.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_pack.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_runtime.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_service.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_store.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trophy_view.cpp
+    ${PROJECT_SOURCE_DIR}/src/trophies/trp_archive.cpp
     crypto_win.cpp)
 target_include_directories(sotb_launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(sotb_launcher_core PUBLIC trg_core SDL3::SDL3 sotb_startup_phase
+target_link_libraries(sotb_launcher_core PUBLIC trg_core SDL3::SDL3 sotb_startup_phase sotb_guest_display
     PRIVATE ZLIB::ZLIB bcrypt)
 
 # The sidebar's page icons (assets/launcher/icons/*.svg) as a table of byte arrays, page_icon_data.cpp.
@@ -52,7 +63,7 @@ add_custom_command(OUTPUT ${SOTB_PAGE_ICON_SOURCE}
     COMMENT "Embedding the page icons")
 target_sources(sotb_launcher_core PRIVATE ${SOTB_PAGE_ICON_SOURCE})
 
-add_library(sotb_launcher STATIC host.cpp launcher.cpp)
+add_library(sotb_launcher STATIC host.cpp launcher.cpp trophy_page.cpp)
 target_compile_definitions(sotb_launcher PRIVATE SOTB_PORT_VERSION="${PROJECT_VERSION}")
 target_include_directories(sotb_launcher PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
 target_link_libraries(sotb_launcher PUBLIC sotb_launcher_core trg_launcher sotb_imgui_sdl ${CMAKE_DL_LIBS})
@@ -61,3 +72,29 @@ set_target_properties(sotb_launcher_core sotb_launcher PROPERTIES CXX_STANDARD 2
     CXX_EXTENSIONS OFF)
 target_compile_options(sotb_launcher_core PRIVATE -Wall -Wextra)
 target_compile_options(sotb_launcher PRIVATE -Wall -Wextra)
+
+find_package(PNG REQUIRED)
+set(SOTB_LOG_SOURCES ${PROJECT_SOURCE_DIR}/src/runtime_log.c ${PROJECT_SOURCE_DIR}/src/runtime_session_log.c)
+
+add_executable(sotb-trophy-tests EXCLUDE_FROM_ALL ../tests/trophy_tests.cpp ${SOTB_LOG_SOURCES} ../gpu/shim/sotb_png.cpp)
+target_link_libraries(sotb-trophy-tests PRIVATE sotb_launcher_core PNG::PNG sotb_keys)
+target_include_directories(sotb-trophy-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
+target_compile_definitions(sotb-trophy-tests PRIVATE SOTB_TROPHY_SOURCE_DIR="${PROJECT_SOURCE_DIR}/src/trophies")
+set_target_properties(sotb-trophy-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-trophy-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-launcher-tests EXCLUDE_FROM_ALL ../tests/launcher_tests.cpp ../gpu/shim/sotb_settings.cpp)
+target_link_libraries(sotb-launcher-tests PRIVATE sotb_launcher_core sotb_keys SDL3::SDL3)
+target_include_directories(sotb-launcher-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
+target_compile_definitions(sotb-launcher-tests PRIVATE SOTB_BOOT_IMAGE="${PROJECT_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin"
+    SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-launcher-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-launcher-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-launcher-ui-tests EXCLUDE_FROM_ALL ../tests/launcher_ui_tests.cpp ${TRG_DIR}/src/launcher.cpp
+    ${TRG_DIR}/src/headers.cpp ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp)
+target_link_libraries(sotb-launcher-ui-tests PRIVATE sotb_launcher_core trg_core sotb_keys SDL3::SDL3)
+target_include_directories(sotb-launcher-ui-tests PRIVATE ${IMGUI_DIR} ${PROJECT_SOURCE_DIR}/gpu/shim)
+target_compile_definitions(sotb-launcher-ui-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+set_target_properties(sotb-launcher-ui-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)

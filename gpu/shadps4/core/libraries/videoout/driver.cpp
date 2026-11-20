@@ -16,6 +16,7 @@
 #ifndef _WIN32
 #include <sys/resource.h>
 #endif
+#include "skip_intro.h"
 #include "common/assert.h"
 #include "sotb_frame_pacing.h"
 #include "sotb_latency_trace.h"
@@ -359,6 +360,11 @@ void VideoOutDriver::Flip(const Request& req) {
     RunPresenter([this, frame = req.frame, hdr = req.port->is_hdr, submitted = req.submitted, present] {
         if (!present) {
             presenter->RetireFrame(frame);
+            return;
+        }
+        if (skip_intro_hide_presentation()) {
+            presenter->RetireFrame(frame);
+            presenter->Present(presenter->PrepareBlankFrame(true), false, false);
             return;
         }
         presenter->SetHDR(hdr);

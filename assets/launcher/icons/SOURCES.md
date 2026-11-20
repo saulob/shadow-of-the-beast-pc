@@ -2,6 +2,8 @@
 
 The sidebar's SVG set. Filenames are semantic, so the folder can be copied to another project as it is.
 
+**Copy `SOURCES.md` with the icons.** `display.svg` requires attribution, and that attribution has to go wherever the icon goes.
+
 ## Attribution required
 
 | File | Title | Author | Collection | Source | License |
@@ -23,4 +25,5 @@ CC0 asks for no attribution; the sources are kept for provenance.
 | `graphics.svg` | Controls Alt | https://www.svgrepo.com/svg/348105/controls-alt | CC0 |
 | `gameplay.svg` | Gamepad | https://www.svgrepo.com/svg/523439/gamepad | CC0 |
 | `controls.svg` | Keyboard | https://www.svgrepo.com/svg/524665/keyboard | CC0 |
+| `trophies.svg` | Achievements | https://www.svgrepo.com/svg/304482/achievements | CC0 |
 | `about.svg` | About | https://www.svgrepo.com/svg/486929/about | CC0 |

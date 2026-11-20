@@ -80,7 +80,7 @@ nanosvg
 Launcher navigation icons (assets/launcher/icons)
   display.svg: "Display Television Tv Screen Gadget" by nickylimyeanfen, Inc Device Icons,
   https://www.svgrepo.com/svg/381247/display-television-tv-screen-gadget, CC Attribution 4.0
-  play.svg, graphics.svg, gameplay.svg, controls.svg, about.svg: CC0; sources in assets/launcher/icons/SOURCES.md
+  play.svg, graphics.svg, gameplay.svg, controls.svg, trophies.svg, about.svg: CC0; sources in assets/launcher/icons/SOURCES.md
 
 Sponsor heart (assets/launcher/sponsor-heart.svg)
   CC0

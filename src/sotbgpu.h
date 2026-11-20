@@ -32,6 +32,7 @@ int sotbgpu_choice_begin(const char *title, const char *const *items, const char
 int sotbgpu_choice_poll(void);
 void sotbgpu_choice_set_input(uint32_t (*buttons)(void));
 int sotbgpu_overlay_captures_input(void);
+int sotbgpu_controller_rumble(void);
 int sotbgpu_latency_trace_enabled(void);
 uint64_t sotbgpu_latency_press_ns(void);
 #ifdef __cplusplus

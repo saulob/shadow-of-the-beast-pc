@@ -26,6 +26,16 @@ std::vector<WindowSize> WindowSizes() {
     return sizes;
 }
 
+std::span<const PadMapping> XboxMapping() {
+    static constexpr PadMapping kMapping[] = {
+        {"A", "Cross"},          {"B", "Circle"},         {"X", "Square"},         {"Y", "Triangle"},
+        {"LB", "L1"},            {"RB", "R1"},            {"LT", "L2"},            {"RT", "R2"},
+        {"Left stick", "Left stick"}, {"Right stick", "Right stick"}, {"LS (press)", "L3"},
+        {"RS (press)", "R3"},    {"Menu", "Options"},     {"View", "Touchpad"},    {"D-pad", "D-pad"},
+    };
+    return kMapping;
+}
+
 const char* PageName(PageId page) {
     switch (page) {
     case PageId::kPlay: return "Play";
@@ -33,18 +43,10 @@ const char* PageName(PageId page) {
     case PageId::kGraphics: return "Graphics";
     case PageId::kGameplay: return "Gameplay";
     case PageId::kControls: return "Controls";
+    case PageId::kTrophies: return "Trophies";
     case PageId::kAbout: return "About";
     }
     return "";
-}
-
-WindowSize FitGameWindow(WindowSize requested, const Display& display) {
-    FitToDisplay(requested.width, requested.height, display);
-    return requested;
-}
-
-bool WindowSizeFits(WindowSize size, const Display& display) {
-    return FitGameWindow(size, display) == size;
 }
 
 std::string WindowSizeLabel(WindowSize size) {
@@ -53,6 +55,10 @@ std::string WindowSizeLabel(WindowSize size) {
         label += "   (the game's own size)";
     }
     return label;
+}
+
+std::string ResolutionLabel(const SotbResolution& resolution) {
+    return std::string(resolution.name) + " \xE2\x80\x94 " + Dimensions(resolution.width, resolution.height);
 }
 
 std::string MonitorLabel(int monitor, const std::vector<Display>& displays) {

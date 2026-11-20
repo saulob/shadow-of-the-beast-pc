@@ -10,6 +10,8 @@
 #include <time.h>
 
 #include "import_slots.h"
+#include "guest_display.h"
+#include "skip_intro.h"
 #include "guest_patches.h"
 #include "isa_emulate.h"
 #include "module_diagnostics.h"
@@ -18,6 +20,7 @@
 #include "sotb_launcher.h"
 #include "sotb_sdl_compat.h"
 #include "sotbgpu.h"
+#include "trophies/trophy_runtime.h"
 #include "startup_phase.h"
 
 #if !defined(_WIN32)
@@ -800,7 +803,7 @@ int main(int argc, char **argv) {
         strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", localtime(&now));
         printf("[run] %s\n[run] %s\n[run] log %s\n[run] prepared root %s\n", stamp, command_line(), log_path, app0);
         atexit(runtime_log_flush);
-        runtime_log_set_detailed(1);
+        runtime_log_set_detailed(sotb_detailed_logging(settings_file));
         runtime_log_install_cleanup();
         if (!sotb_logs_directory(paths.logs_dir, log_path, log_folder, sizeof(log_folder)))
             snprintf(log_folder, sizeof(log_folder), "%s", paths.logs_dir);
@@ -821,6 +824,7 @@ int main(int argc, char **argv) {
         sotb_startup_phase("launcher handoff");
         const SotbLauncherResult launched = sotb_launcher_run(&launcher);
         sotb_startup_phase("launcher returned");
+        runtime_log_set_detailed(sotb_detailed_logging(settings_file));
         if (launched == SOTB_LAUNCHER_QUIT) { runtime_log_mark_clean_exit(); exit(0); }
         if (launched == SOTB_LAUNCHER_BLOCKED) exit(1);
     }
@@ -866,6 +870,11 @@ int main(int argc, char **argv) {
     }
 
     runtime_pad_set_settings(settings_file);
+    runtime_set_language(sotb_text_language(settings_file));
+    trophy_runtime_configure(app0, user_dir ? user_dir : "user");
+    sotb_log_settings_summary(settings_file, game_build.label);
+    const SotbResolution *render_resolution = &sotb_resolutions[sotb_render_resolution(settings_file)];
+    const int native_target = render_resolution->width == 1920 && render_resolution->height == 1080;
 
     if (content_profile) {
         sotb_startup_phase("content profile");
@@ -1035,7 +1044,7 @@ int main(int argc, char **argv) {
         char running[48];
         snprintf(running, sizeof(running), "%s %s", game_build.title_id, game_build.version);
         SotbGpuConfig gpu = {SOTB_WINDOW_TITLE, running, serial, user_dir, settings_file, (uint32_t)sdk, attributes,
-                             1920, 1080, 0};
+                             1920, 1080, SOTB_GPU_FEATURE_RENDER_RESOLUTION};
         gpu_enabled = 1;
         if (sotbgpu_init(&gpu)) fail("GPU initialization failed");
         sotb_startup_phase("GPU initialized");
@@ -1092,7 +1101,26 @@ int main(int argc, char **argv) {
         const size_t cave_size = round_page(GUEST_PATCH_CAVE_SIZE);
         unsigned char *cave = allocate(cave_size);
         guest_patches_apply(image, size, cave, cave_size);
+        if (sotb_skip_intro(settings_file)) {
+            char reason[160];
+            if (skip_intro_apply(image, size, cave + 1024, cave_size - 1024, reason, sizeof(reason))) {
+                printf("Skip Intro: on, startup presentation hidden\n");
+            } else {
+                printf("Skip Intro: requested but unavailable: %s\n", reason);
+            }
+        } else {
+            printf("Skip Intro: off\n");
+        }
         protect(cave, cave_size, 5);
+    }
+    {
+        char error[160];
+        if (!native_target && !guest_apply_display_size(image, size, render_resolution->width, render_resolution->height, error, sizeof(error))) {
+            char message[256];
+            snprintf(message, sizeof(message), "render resolution is not available: %s", error);
+            fail_running(message);
+        }
+        printf("Display: render resolution %dx%d (%s)\n", render_resolution->width, render_resolution->height, render_resolution->key);
     }
     if (gpu_enabled) {
         uint64_t *triples = calloc(ns * 3, sizeof(*triples));

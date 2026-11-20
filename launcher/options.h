@@ -1,9 +1,11 @@
 // What the launcher's pages offer and how they label it.
 #pragma once
 
+#include <span>
 #include <string>
 #include <vector>
 
+#include "guest_display.h"
 #include "sotb_displays.h"
 #include "sotb_keys.h"
 #include "trg/settings.h"
@@ -22,21 +24,26 @@ inline constexpr WindowSize kGamePictureSize{1920, 1080};
 
 std::vector<WindowSize> WindowSizes();
 
-enum class PageId { kPlay, kDisplay, kGraphics, kGameplay, kControls, kAbout };
+enum class PageId { kPlay, kDisplay, kGraphics, kGameplay, kControls, kTrophies, kAbout };
 
-inline constexpr PageId kPageOrder[] = {PageId::kPlay,  PageId::kDisplay,  PageId::kGraphics,
-                                        PageId::kGameplay, PageId::kControls, PageId::kAbout};
+inline constexpr PageId kPageOrder[] = {PageId::kPlay,     PageId::kDisplay,  PageId::kGraphics, PageId::kGameplay,
+                                        PageId::kControls, PageId::kTrophies, PageId::kAbout};
 
 const char* PageName(PageId page);
 
-// The window a requested size becomes on this display: unchanged when it fits, else shrunk to fit, keeping its shape.
-WindowSize FitGameWindow(WindowSize requested, const Display& display);
+struct PadMapping {
+    const char* xbox;
+    const char* ps4;
+};
 
-// Whether the size fits the display, so the game window is not larger than the screen.
-bool WindowSizeFits(WindowSize size, const Display& display);
+// What each Xbox controller input does in the game, as src/runtime_pad.c maps it.
+std::span<const PadMapping> XboxMapping();
 
 // "1920 × 1080", with a note on the game's own picture size.
 std::string WindowSizeLabel(WindowSize size);
+
+// "1440p — 2560 × 1440".
+std::string ResolutionLabel(const SotbResolution& resolution);
 
 // "Display 2 (primary)   2560 × 1440   Name". Monitor settings are 1-based.
 std::string MonitorLabel(int monitor, const std::vector<Display>& displays);

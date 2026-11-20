@@ -8,6 +8,7 @@
 #include "runtime.h"
 #include "startup_phase.h"
 #include "sotbgpu.h"
+#include "trophies/trophy_runtime.h"
 #include "runtime_log.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -596,37 +597,17 @@ static ABI int32_t voice_qos_read(int32_t connection,void *data,uint32_t *size) 
     return 0;
 }
 
-/* ---- Trophies: not available in this round ---- */
-static int trophy_unavailable(void) {
-    static int reported;
-    if (!reported) {
-        reported = 1;
-        puts("Runtime: libSceNpTrophy is not available; the game runs without trophies");
-    }
-    return (int32_t)0x80551601;
-}
-static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) {
-    (void)ctx; (void)user; (void)label; (void)options; return trophy_unavailable();
-}
-static ABI int32_t trophy_handle(int32_t *handle) { (void)handle; return trophy_unavailable(); }
-static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) {
-    (void)ctx; (void)handle; (void)options; return trophy_unavailable();
-}
-static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) {
-    (void)ctx; (void)handle; (void)id; (void)platinum; return trophy_unavailable();
-}
-static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) {
-    (void)ctx; (void)handle; (void)details; (void)data; return trophy_unavailable();
-}
-static ABI int32_t trophy_info(int32_t ctx,int32_t handle,int32_t id,void *details,void *data) {
-    (void)ctx; (void)handle; (void)id; (void)details; (void)data; return trophy_unavailable();
-}
-static ABI int32_t trophy_unlock_state(int32_t ctx,int32_t handle,uint32_t *flags,uint32_t *count) {
-    (void)ctx; (void)handle; (void)flags; (void)count; return trophy_unavailable();
-}
+/* ---- Trophies: kept on this PC (src/trophies) ---- */
+static ABI int32_t trophy_context(int32_t *ctx,int32_t user,uint32_t label,uint64_t options) { return trophy_runtime_create_context(ctx,user,label,options); }
+static ABI int32_t trophy_handle(int32_t *handle) { return trophy_runtime_create_handle(handle); }
+static ABI int32_t trophy_register(int32_t ctx,int32_t handle,uint64_t options) { return trophy_runtime_register_context(ctx,handle,options); }
+static ABI int32_t trophy_unlock(int32_t ctx,int32_t handle,int32_t id,int32_t *platinum) { return trophy_runtime_unlock(ctx,handle,id,platinum); }
+static ABI int32_t trophy_game_info(int32_t ctx,int32_t handle,void *details,void *data) { return trophy_runtime_game_info(ctx,handle,details,data); }
+static ABI int32_t trophy_info(int32_t ctx,int32_t handle,int32_t id,void *details,void *data) { return trophy_runtime_trophy_info(ctx,handle,id,details,data); }
+static ABI int32_t trophy_unlock_state(int32_t ctx,int32_t handle,uint32_t *flags,uint32_t *count) { return trophy_runtime_unlock_state(ctx,handle,flags,count); }
 static ABI int32_t trophy_abort_handle(int32_t handle) { (void)handle; return 0; }
-static ABI int32_t trophy_destroy_handle(int32_t handle) { (void)handle; return 0; }
-static ABI int32_t trophy_destroy_context(int32_t ctx) { (void)ctx; return 0; }
+static ABI int32_t trophy_destroy_handle(int32_t handle) { return trophy_runtime_destroy_handle(handle); }
+static ABI int32_t trophy_destroy_context(int32_t ctx) { return trophy_runtime_destroy_context(ctx); }
 
 /* ---- PlayGo: fully installed package ---- */
 static int playgo_handle, playgo_chunks=-1;

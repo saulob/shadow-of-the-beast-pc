@@ -20,13 +20,19 @@
 #include "game_files.h"
 #include "game_install.h"
 #include "game_profile.h"
+#include "gameplay_rows.h"
+#include "guest_display.h"
 #include "header_art.h"
+#include "launcher_quit.h"
 #include "host.h"
 #include "options.h"
 #include "page_icons.h"
 #include "paths.h"
 #include "placement.h"
 #include "settings.h"
+#include "text_languages.h"
+#include "trophy_page.h"
+#include "sotb_graphics.h"
 #include "sotb_png.h"
 #include "trg/launcher.h"
 #include "trg/layout.h"
@@ -158,7 +164,7 @@ public:
           image_dir_(PathFromUtf8(config.image_dir ? config.image_dir : "")),
           user_dir_(PathFromUtf8(config.user_dir ? config.user_dir : "")),
           logs_dir_(PathFromUtf8(config.logs_dir ? config.logs_dir : "")),
-          settings_(Utf8(user_dir_ / "sotb.ini")) {
+          settings_(user_dir_ / "sotb.ini") {
         roots_ = RootsOf(GamePaths{app0_, image_dir_});
         std::error_code ec;
         std::filesystem::create_directories(user_dir_, ec);
@@ -206,6 +212,7 @@ private:
             }
         }
 
+        trophy_page_ = std::make_unique<TrophyPage>(host_, user_dir_);
         launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
         host_.BeginFrame();
         host_.EndFrame(LauncherTheme().bg);
@@ -230,20 +237,24 @@ private:
                 SavePlacement(placement_.TakeSettled(now));
             }
             host_.BeginFrame();
+            NormalizeGraphicsCard();
             const trg::Result result = launcher_->Frame();
             host_.EndFrame(LauncherTheme().bg);
             if (result == trg::Result::kPlay) {
                 outcome = SOTB_LAUNCHER_PLAY;
                 break;
             }
-            if (result == trg::Result::kQuit) {
+            if (result == trg::Result::kQuit && LauncherQuitAllowed(ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
                 outcome = SOTB_LAUNCHER_QUIT;
                 break;
             }
         }
         SavePlacement(placement_.Flush());
-        settings_.Save();
+        const bool saved = settings_.Save();
+        std::printf("Launcher: settings %s, Skip Intro %s\n", saved ? "saved" : "NOT SAVED",
+                    settings_.GetBool(kSkipIntroKey, false) ? "on" : "off");
         launcher_.reset();
+        trophy_page_.reset();
         host_.Close();
         return outcome;
     }
@@ -254,7 +265,7 @@ private:
         config.save_on_play = true;
         config.theme = LauncherTheme();
         config.fonts = fonts_;
-        config.hints = "Enter  Play        Esc  Quit        Ctrl+S  Save";
+        config.hints = "Enter  Play     Alt+F4  Quit     Ctrl+S  Save";
         config.note = "Settings are saved when you press Play.";
         config.branding.title = kPortTitle;
         config.branding.subtitle_segments = {
@@ -266,7 +277,7 @@ private:
             [this](int width, int height) { return HeaderArtTexture(width, height); }, header_aspect_);
         config.sponsor = {"Sponsor on GitHub", kSponsorUrl, sponsor_icon_};
         config.restart_keys = {kWindowWidthKey, kWindowHeightKey, kMonitorKey, kRendererKey, kGraphicsCardKey,
-                               kRenderResolutionKey, kAnisotropyKey};
+                               kAnisotropyKey, kTextLanguageKey};
         for (const PageId page : kPageOrder) {
             config.pages.push_back(MakePage(page));
             config.pages.back().icon = [this, page](int pixels) { return PageIconTexture(page, pixels); };
@@ -287,7 +298,7 @@ private:
         const std::string name(PageName(page));
         switch (page) {
         case PageId::kPlay:
-            return {name, "Install the game and start it.", [this](trg::Ui& ui) { DrawPlay(ui); },
+            return {name, "Check the game files and start playing.", [this](trg::Ui& ui) { DrawPlay(ui); },
                     [this] { return state_ != GameFileState::kValid; }, nullptr};
         case PageId::kDisplay:
             return {name, "Window, monitor, scaling and presentation.", [this](trg::Ui& ui) { DrawDisplay(ui); },
@@ -299,6 +310,8 @@ private:
             return {name, "Frame rate and readouts.", [this](trg::Ui& ui) { DrawGameplay(ui); }, nullptr, nullptr};
         case PageId::kControls:
             return {name, "Controller and keyboard.", [this](trg::Ui& ui) { DrawControls(ui); }, nullptr, nullptr};
+        case PageId::kTrophies:
+            return {name, "Your trophies on this PC.", [this](trg::Ui& ui) { DrawTrophies(ui); }, nullptr, nullptr};
         case PageId::kAbout:
             return {name, "This port, and where your files and settings live.",
                     [this](trg::Ui& ui) { DrawAbout(ui); }, nullptr, nullptr};
@@ -318,6 +331,12 @@ private:
         return icon->second;
     }
 
+    static std::string GameFilesHelp() {
+        return "Select your own legally obtained Shadow of the Beast package (.pkg). Supported: " + SupportedBuildsText() +
+               ". The game is unpacked into the game folder next to the program. The game itself is not included. "
+               "Reinstalling keeps your saves and settings.";
+    }
+
     void DrawPlay(trg::Ui& ui) {
         const bool ready = state_ == GameFileState::kValid;
         const std::string title = ready && build_ ? std::string(StatusTitle(state_)) + " \xC2\xB7 " + build_->label
@@ -332,7 +351,7 @@ private:
             ui.Spacer(4);
         }
 
-        ui.Row("Game files", "The package is only read; the game is installed into the game folder next to this program.");
+        ui.Row("Game files");
         if (!ui.TaskProgress(install_)) {
             const bool clicked = ready ? ImGui::Button("Reinstall game...", ImVec2(-FLT_MIN, 0))
                                        : ui.AccentButton("Install game...");
@@ -341,7 +360,8 @@ private:
             }
         }
         ui.EndRows();
-        ui.Toggle("Show this launcher", kShowLauncherHelp, kShowLauncherKey, true, "Off", "At startup");
+        ui.Help(GameFilesHelp().c_str());
+        ui.Toggle("Show this launcher", kShowLauncherHelp, kShowLauncherKey, true, "Off", "On");
         ui.EndRows();
 
         ui.Spacer(6.0f);
@@ -363,14 +383,19 @@ private:
         WindowSizeCombo();
         ui.Row("Monitor", kMonitorHelp);
         MonitorCombo();
-        ui.Combo("Renderer", kRendererHelp, kRendererKey, "auto",
-                 {{"auto", "Auto"}, {"vulkan", "Vulkan"}, {"opengl", "OpenGL (experimental)"},
-                  {"d3d11", "Direct3D 11 (experimental)"}});
+        std::vector<trg::Option> renderers;
+        for (const Choice& choice : kRendererChoices) {
+            renderers.push_back({std::string(choice.key), std::string(choice.name)});
+        }
+        ui.Combo("Renderer", kRendererHelp, kRendererKey, kDefaultRenderer, renderers);
         ui.Row("Graphics card", kGraphicsCardHelp);
         GraphicsCardCombo();
         ui.Toggle("VSync", kVSyncHelp, kVSyncKey, true, "Off", "On");
-        ui.Choice("Presentation", kPresentationHelp, kPresentationKey, "letterbox",
-                  {{"letterbox", "Letterbox"}, {"stretch", "Stretch"}}, 2);
+        std::vector<trg::Option> presentations;
+        for (const Choice& choice : kPresentationChoices) {
+            presentations.push_back({std::string(choice.key), std::string(choice.name)});
+        }
+        ui.Choice("Presentation", kPresentationHelp, kPresentationKey, kDefaultPresentation, presentations, 2);
         ui.Heading("Scaling and sharpening");
         ui.Toggle("Upscaling", kUpscaleHelp, kUpscaleKey, false, "Off", "FSR 1");
         ui.Toggle("Sharpening", kSharpenHelp, kSharpenKey, true, "Off", "On");
@@ -381,8 +406,11 @@ private:
     }
 
     void DrawGraphics(trg::Ui& ui) {
-        ui.Combo("Render resolution", kRestrictedRenderResolutionHelp, kRenderResolutionKey, kNativeResolution,
-                 {{kNativeResolution, "Native (1080p)"}});
+        std::vector<trg::Option> resolutions;
+        for (const SotbResolution& resolution : sotb_resolutions) {
+            resolutions.push_back({resolution.key, ResolutionLabel(resolution)});
+        }
+        ui.Combo("Render resolution", kRenderResolutionHelp, kRenderResolutionKey, kNativeResolution, resolutions);
         ui.Toggle("Anti-aliasing", kAntiAliasingHelp, kAntiAliasingKey, false, "Off", "SMAA");
         ui.Combo("Texture filtering", kAnisotropyHelp, kAnisotropyKey, "0",
                  {{"0", "Game"}, {"2", "2x"}, {"4", "4x"}, {"8", "8x"}, {"16", "16x"}});
@@ -390,23 +418,22 @@ private:
     }
 
     void DrawGameplay(trg::Ui& ui) {
+        DrawGameplayStartRows(ui);
         ui.Combo("Frame rate", kFrameRateHelp, kFrameRateKey, "60",
                  {{"30", "30 FPS"}, {"60", "60 FPS (Original)"}, {"90", "90 FPS"}, {"120", "120 FPS"},
                   {"144", "144 FPS"}, {"165", "165 FPS"}, {"240", "240 FPS"}, {"0", "Unlimited"}});
         ui.Toggle("Frame rate in title", kShowFpsTitleHelp, kShowFpsTitleKey, false, "Off", "On");
         ui.Toggle("Render resolution in title", kShowResolutionTitleHelp, kShowResolutionTitleKey, false, "Off", "On");
         ui.Toggle("Frame counter", kFrameCounterHelp, kShowFrameCounterKey, false, "Hidden", "Shown");
-        ImGui::BeginDisabled(!settings_.GetBool(kShowFrameCounterKey, false));
-        ui.SliderInt("Frame counter size", kOverlayScaleHelp, kOverlayScaleKey, 100, 50, 300, "%d%%", 5);
-        ui.Combo("Frame counter corner", kOverlayCornerHelp, kOverlayCornerKey, "1",
-                 {{"0", "Top left"}, {"1", "Top right"}, {"2", "Bottom left"}, {"3", "Bottom right"}});
-        ImGui::EndDisabled();
         ui.EndRows();
     }
 
     void DrawControls(trg::Ui& ui) {
         ui.Info("Controller", ControllersText().c_str());
         ui.Info("Keyboard", "Always on, together with the controller.");
+        ui.Toggle("Controller Rumble", kControllerRumbleHelp, kControllerRumbleKey, true, "Off", "On");
+        ui.Help("A controller that is not recognized needs a line in gamecontrollerdb.txt in the user folder. The log "
+                "names its GUID.");
         if (ui.ConfirmRow("Keyboard defaults", "Puts the keyboard controls and the port hotkeys back to their defaults.",
                           "Reset to defaults", "Put every key back to its default?", "Reset")) {
             ResetKeys(settings_);
@@ -418,11 +445,22 @@ private:
                 KeyRow(ui, static_cast<SotbKeyAction>(action));
             }
         }
+        if (ui.Section("Xbox controller mapping", false)) {
+            ui.Help("What each Xbox input does in the game. LS and RS pressed together open the Options menu instead.");
+            for (const PadMapping& mapping : XboxMapping()) {
+                ui.Info(mapping.xbox, mapping.ps4);
+            }
+        }
         if (ui.Section("Port hotkeys", true)) {
             for (int action = SOTB_KEY_FIRST_HOTKEY; action < SOTB_KEY_COUNT; ++action) {
                 KeyRow(ui, static_cast<SotbKeyAction>(action));
             }
         }
+    }
+
+    void DrawTrophies(trg::Ui& ui) {
+        trophy_page_->SetGame(state_ == GameFileState::kValid ? app0_ : std::filesystem::path());
+        trophy_page_->Draw(ui);
     }
 
     void DrawAbout(trg::Ui& ui) {
@@ -441,8 +479,7 @@ private:
         ui.FolderRow("Saves and settings", "Settings, saves and caches.", "Open user folder", Utf8(user_dir_));
         if (ui.ButtonRow("Settings file", "Launcher choices stored as plain text.", "Show settings file") &&
             launcher_->Save()) {
-            trg::OpenInFileManager(Utf8(std::filesystem::exists(settings_.path(), ec) ? std::filesystem::path(settings_.path())
-                                                                                     : user_dir_));
+            trg::OpenInFileManager(Utf8(std::filesystem::exists(settings_.file(), ec) ? settings_.file() : user_dir_));
         }
         if (ui.ConfirmRow("Reset settings", "Put the launcher and display settings back to their defaults.",
                           "Reset all settings", "Put every setting back to its default?", "Reset")) {
@@ -450,6 +487,8 @@ private:
             launcher_->SetStatus("Settings reset to defaults. Save or press Play to keep them.", 6.0);
         }
         ui.Heading("Diagnostics");
+        ui.Toggle("Detailed logging", kDetailedLoggingHelp, kDetailedLoggingKey, true, "Off", "On");
+        ui.EndRows();
         if (ui.ButtonRow("Logs folder", "Open the folder containing the session and crash logs", "Open logs folder")) {
             trg::OpenInFileManager(Utf8(logs_dir_));
         }
@@ -475,13 +514,9 @@ private:
             height = kDefaultWindowHeight;
         }
         const WindowSize current{width, height};
-        const Display* display = DisplayForSetting(displays_, settings_.GetInt(kMonitorKey, 1));
         if (ImGui::BeginCombo("##window_size", WindowSizeLabel(current).c_str())) {
             for (const WindowSize size : WindowSizes()) {
                 const bool selected = size == current;
-                if (!selected && display && !WindowSizeFits(size, *display)) {
-                    continue;
-                }
                 if (ImGui::Selectable(WindowSizeLabel(size).c_str(), selected) && !selected) {
                     settings_.SetInt(kWindowWidthKey, size.width);
                     settings_.SetInt(kWindowHeightKey, size.height);
@@ -512,17 +547,21 @@ private:
             return;
         }
         const std::string current = settings_.Get(kGraphicsCardKey);
-        const std::string shown = current.empty() ? "Automatic" : current;
-        if (ImGui::BeginCombo("##graphics_card", shown.c_str())) {
-            if (ImGui::Selectable("Automatic", current.empty()) && !current.empty()) {
-                settings_.Set(kGraphicsCardKey, "automatic");
-            }
+        if (ImGui::BeginCombo("##graphics_card", current.c_str())) {
             for (const std::string& name : gpu_names_) {
                 if (ImGui::Selectable(name.c_str(), name == current) && name != current) {
                     settings_.Set(kGraphicsCardKey, name);
                 }
             }
             ImGui::EndCombo();
+        }
+    }
+
+    void NormalizeGraphicsCard() {
+        const std::string current = settings_.Get(kGraphicsCardKey);
+        const int found = SotbGraphics::ResolveGpuByName(gpu_names_, current);
+        if (found >= 0 && gpu_names_[found] != current) {
+            settings_.Set(kGraphicsCardKey, gpu_names_[found]);
         }
     }
 
@@ -625,6 +664,9 @@ private:
         }
         image_rebuilt_ = false;
         Refresh();
+        if (trophy_page_) {
+            trophy_page_->Invalidate();
+        }
     }
 
     void Refresh() {
@@ -654,12 +696,13 @@ private:
     std::filesystem::path app0_, image_dir_, user_dir_, logs_dir_;
     GameRoots roots_;
     LauncherHost host_;
-    trg::TextFileSettings settings_;
+    LauncherSettings settings_;
     trg::Fonts fonts_;
     PlacementTracker placement_;
     std::vector<Display> displays_;
     std::vector<std::string> gpu_names_;
     std::unique_ptr<trg::Launcher> launcher_;
+    std::unique_ptr<TrophyPage> trophy_page_;
     GameFileState state_ = GameFileState::kMissing;
     const GameBuild* build_ = nullptr;
     std::string eboot_sha256_;

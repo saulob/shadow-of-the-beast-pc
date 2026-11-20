@@ -32,6 +32,7 @@ struct Values {
     std::string graphics_card; ///< exact Vulkan device name; empty: the first usable device. Set by Load() only
     std::atomic<int> renderer{0}; ///< SotbRenderer::Choice; read once at start
     std::atomic<int> anisotropy{0}; ///< 0: the game's own; 2, 4, 8 or 16 times
+    std::atomic<bool> controller_rumble{true};
     // Set by the presenter: sharpening ran on the last frame, the game's image and the window it is shown in.
     std::atomic<bool> rcas_applied{false};
     std::atomic<int> image_width{0}, image_height{0}, window_width{0}, window_height{0};

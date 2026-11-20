@@ -63,6 +63,12 @@ typedef struct {
 int sotb_game_build(const char* image_dir, SotbGameBuild* build);
 void sotb_game_build_problem(const char* image_dir, char* out, size_t size);
 
+int sotb_text_language(const char* settings_file);
+int sotb_detailed_logging(const char* settings_file);
+int sotb_render_resolution(const char* settings_file);
+int sotb_skip_intro(const char* settings_file);
+void sotb_log_settings_summary(const char* settings_file, const char* game_build);
+
 int sotb_check_vulkan(char* cause, size_t cause_size, char* advice, size_t advice_size);
 
 #ifdef __cplusplus
