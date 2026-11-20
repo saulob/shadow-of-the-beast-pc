@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena and build identity tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, GPU command snapshot and Vulkan recording tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
   exit code is non-zero when any failed.
 
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
-  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test and the build identity (unsupported build diagnostics) test.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the GPU command snapshot test and the Vulkan recording and synchronization test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
 .EXAMPLE
@@ -69,6 +69,12 @@ function Invoke-BufferArena { Invoke-FocusedTest 'sotb-buffer-arena-tests' '^(BD
 
 function Invoke-BuildIdentity { Invoke-FocusedTest 'sotb-build-identity-tests' '^(real image|build identity tests)' }
 
+function Invoke-PipelineCache { Invoke-FocusedTest 'sotb-pipeline-cache-tests' '^pipeline cache tests' }
+
+function Invoke-CommandSnapshot { Invoke-FocusedTest 'sotb-command-snapshot-tests' '^command snapshot tests' }
+
+function Invoke-GpuRecording { Invoke-FocusedTest 'sotb-gpu-recording-tests' '^gpu recording tests' }
+
 function Invoke-WorkerService {
     $node = Get-Command node -ErrorAction SilentlyContinue
     if (-not $node) { return Result 'SKIPPED' 'Node.js 22 or newer not found' }
@@ -113,7 +119,10 @@ $steps = @(
     @{ Title = 'Renderer selection: the Renderer setting, Auto fallback and the sources that must agree (no window, no context)'; Block = { Invoke-RendererSelection } },
     @{ Title = 'Vulkan preflight: loader, runtime, device, mandatory extensions and features, optional capabilities, explicit Vulkan and Auto fallback (synthetic capabilities, no Vulkan, no window)'; Block = { Invoke-VulkanPreflight } },
     @{ Title = 'GPU memory: sparse or fully resident arena decision, layout, overflow, allocation failure rollback and migration (fake arenas, no Vulkan device)'; Block = { Invoke-BufferArena } },
-    @{ Title = 'Unsupported build diagnostics: supported identity, altered fields, candidates, deterministic report, refusal before guest code (synthetic; the real boot image is read only and skipped when absent)'; Block = { Invoke-BuildIdentity } }
+    @{ Title = 'Unsupported build diagnostics: supported identity, altered fields, candidates, deterministic report, refusal before guest code (synthetic; the real boot image is read only and skipped when absent)'; Block = { Invoke-BuildIdentity } },
+    @{ Title = 'Pipeline cache: sealed blobs, host identity (GPU, driver, pipeline cache UUID, format), corruption and truncation, stale temporaries, atomic writes, failure keeps the previous cache, unrelated files kept (temporary folders, no Vulkan, no real cache)'; Block = { Invoke-PipelineCache } },
+    @{ Title = 'GPU command snapshot: owned copy at submission, isolation from guest rewrites, ordering, size bounds and overflow, lifetime until the last consumer, release, shutdown drain (synthetic command buffers, no GPU)'; Block = { Invoke-CommandSnapshot } },
+    @{ Title = 'Vulkan recording and synchronization: replay rendering scope, staging size, alignment and reuse rules, recording chunk bounds, bounded device fault report, device lost reporting paths (no Vulkan device)'; Block = { Invoke-GpuRecording } }
 )
 
 $tc = Resolve-Toolchain 'auto'

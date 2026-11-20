@@ -14,6 +14,7 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
+#include "video_core/renderer_vulkan/vk_staging_policy.h"
 
 namespace Vulkan {
 
@@ -57,8 +58,10 @@ StagingBufferPool::~StagingBufferPool() = default;
 
 StagingBufferRef StagingBufferPool::Request(u64 size, MemoryType type, u64 alignment,
                                             bool deferred) {
+    ASSERT_MSG(StagingPolicy::IsValidRequest(size, alignment),
+               "Invalid staging request: {} bytes, alignment {}", size, alignment);
     Ring& ring = rings[u32(type)];
-    if (deferred || size > BLOCK_SIZE) {
+    if (deferred || !StagingPolicy::FitsRingBlock(size, instance.NonCoherentAtomSize(), BLOCK_SIZE)) {
         return RequestLarge(size, type, deferred);
     }
     return RequestFromRing(ring, size, alignment, type);
@@ -86,7 +89,14 @@ StagingBufferRef StagingBufferPool::RequestFromRing(Ring& ring, u64 size, u64 al
             .last_used_frame = frame,
         });
         ring.current = ring.blocks.size() - 1;
-        best_offset = *best->buffer->Reserve(size, alignment, false);
+        const auto offset = best->buffer->Reserve(size, alignment, false);
+        if (!offset) {
+            // Alignment padding left no room even in an empty block.
+            ring.blocks.pop_back();
+            ring.current = 0;
+            return RequestLarge(size, type, false);
+        }
+        best_offset = *offset;
     }
 
     auto& buffer = *best->buffer;
@@ -109,15 +119,15 @@ StagingBufferRef StagingBufferPool::RequestLarge(u64 size, MemoryType type, bool
     auto& cache = large_caches[u32(type)];
     // Held requests (readbacks) come in arbitrary sizes: power-of-two buckets let their buffers be
     // reused instead of allocating one per request.
-    const u64 alloc_size = deferred ? std::bit_ceil(std::max<u64>(size, 256_KB)) : size;
+    const u64 alloc_size = deferred ? *StagingPolicy::HeldBucketSize(size, 256_KB) : size;
     const u64 max_size = deferred ? alloc_size * 2 - 1
                                   : std::max(size + size / 4, RoundAllocationSize(size));
 
     LargeBuffer* best{};
     for (LargeBuffer& entry : cache) {
         const u64 entry_size = entry.buffer->SizeBytes();
-        if (entry.held || entry_size < alloc_size || entry_size > max_size ||
-            !scheduler.IsFree(entry.tick)) {
+        if (!StagingPolicy::CanReuseLarge({entry_size, entry.held, scheduler.IsFree(entry.tick)},
+                                          alloc_size, max_size)) {
             continue;
         }
         if (!best || entry_size < best->buffer->SizeBytes()) {

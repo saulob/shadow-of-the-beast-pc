@@ -188,20 +188,18 @@ void Scheduler::BeginRendering(const RenderState& new_state) {
 
 // vkCmdBeginRendering inside an open instance and vkCmdEndRendering outside one are invalid.
 void Scheduler::ReplayBeginRendering(vk::CommandBuffer cmdbuf, const vk::RenderingInfo& info) {
-    if (replay_rendering_open) {
+    if (replay_rendering.Begin()) {
         LOG_WARNING(Render_Vulkan, "Dynamic rendering begun while an instance is open");
         cmdbuf.endRendering();
     }
-    replay_rendering_open = true;
     cmdbuf.beginRendering(info);
 }
 
 void Scheduler::ReplayEndRendering(vk::CommandBuffer cmdbuf) {
-    if (!replay_rendering_open) {
+    if (!replay_rendering.End()) {
         LOG_WARNING(Render_Vulkan, "Dynamic rendering ended without an open instance");
         return;
     }
-    replay_rendering_open = false;
     cmdbuf.endRendering();
 }
 
@@ -475,7 +473,7 @@ void Scheduler::AllocateWorkerCommandBuffers() {
     };
 
     current_cmdbuf = command_pool.Commit();
-    replay_rendering_open = false;
+    replay_rendering.Reset();
     Check(current_cmdbuf.begin(begin_info));
 
     // Invalidate dynamic state so it gets applied to the new command buffer.
@@ -515,7 +513,7 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     SyncRecording();
     // Guest memory copies into staging read by this submission (copy threads).
     WaitHostCopies();
-    if (replay_rendering_open) {
+    if (replay_rendering.IsOpen()) {
         LOG_WARNING(Render_Vulkan, "Dynamic rendering still open at submission");
         ReplayEndRendering(current_cmdbuf);
     }
@@ -562,6 +560,8 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
         instance.ReportDeviceFault();
     }
     ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
+    ASSERT_MSG(submit_result == vk::Result::eSuccess, "Queue submit failed: {}",
+               vk::to_string(submit_result));
 
     work_semaphore.Refresh();
     AllocateWorkerCommandBuffers();

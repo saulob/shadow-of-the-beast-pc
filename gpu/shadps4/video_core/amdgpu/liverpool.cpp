@@ -1805,6 +1805,11 @@ void Liverpool::HandleGetLodStats(const PM4CmdGetLodStats* get_lod) {
 void Liverpool::SubmitGfx(std::span<const u32> dcb, std::span<const u32> ccb) {
     auto& queue = mapped_queues[GfxQueueId];
 
+    if (CheckSnapshotSize(dcb.size(), ccb.size()) != SnapshotStatus::Ok) {
+        LOG_ERROR(Render, "GPU: dropped a graphics submission with an implausible size ({} + {} dwords)",
+                  dcb.size(), ccb.size());
+        return;
+    }
     // The copies are made before taking the queue lock, which the GPU thread needs to pick up work.
     auto commands = command_snapshots.Take(dcb, {});
     std::vector<u32> ce_words(ccb.begin(), ccb.end());

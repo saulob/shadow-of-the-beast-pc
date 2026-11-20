@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <boost/container/static_vector.hpp>
@@ -286,37 +287,52 @@ void Instance::ReportDeviceFault() const {
                          props.memoryProperties.memoryHeaps[heap].size >> 20);
         }
     }
-    if (!device_fault) {
-        LOG_CRITICAL(Render_Vulkan, "Device fault report unavailable (no VK_EXT_device_fault)");
-        return;
+    for (const auto& line : FormatFaultReport(QueryDeviceFault())) {
+        LOG_CRITICAL(Render_Vulkan, "{}", line);
     }
+}
+
+FaultReport Instance::QueryDeviceFault() const {
+    FaultReport report;
+    if (!device_fault || !VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT) {
+        return report;
+    }
+    report.status = FaultStatus::Failed;
     vk::DeviceFaultCountsEXT counts{};
-    if (device->getFaultInfoEXT(&counts, nullptr) != vk::Result::eSuccess) {
-        return;
+    if (const auto result = device->getFaultInfoEXT(&counts, nullptr);
+        result != vk::Result::eSuccess) {
+        report.result = s32(result);
+        return report;
     }
-    std::vector<vk::DeviceFaultAddressInfoEXT> addresses(counts.addressInfoCount);
-    std::vector<vk::DeviceFaultVendorInfoEXT> vendor_infos(counts.vendorInfoCount);
+    report.address_count = counts.addressInfoCount;
+    report.vendor_count = counts.vendorInfoCount;
+    std::array<vk::DeviceFaultAddressInfoEXT, MaxFaultAddresses> addresses{};
+    std::array<vk::DeviceFaultVendorInfoEXT, MaxVendorFaults> vendor_infos{};
+    counts.addressInfoCount = BoundedFaultCount(counts.addressInfoCount, MaxFaultAddresses);
+    counts.vendorInfoCount = BoundedFaultCount(counts.vendorInfoCount, MaxVendorFaults);
     counts.vendorBinarySize = 0;
     vk::DeviceFaultInfoEXT info{
         .pAddressInfos = addresses.data(),
         .pVendorInfos = vendor_infos.data(),
     };
     const vk::Result result = device->getFaultInfoEXT(&counts, &info);
+    report.result = s32(result);
     if (result != vk::Result::eSuccess && result != vk::Result::eIncomplete) {
-        return;
+        return report;
     }
-    LOG_CRITICAL(Render_Vulkan, "Device fault: {}", info.description.data());
+    report.status = FaultStatus::Captured;
+    report.description = SanitizeDriverText(info.description.data(), info.description.size());
     for (u32 i = 0; i < counts.addressInfoCount; ++i) {
-        const auto& address = addresses[i];
-        LOG_CRITICAL(Render_Vulkan, "{} at {:#x} (precision {:#x})",
-                     vk::to_string(address.addressType), address.reportedAddress,
-                     address.addressPrecision);
+        report.addresses.push_back({u32(addresses[i].addressType), addresses[i].reportedAddress,
+                                    addresses[i].addressPrecision});
     }
     for (u32 i = 0; i < counts.vendorInfoCount; ++i) {
-        const auto& vendor = vendor_infos[i];
-        LOG_CRITICAL(Render_Vulkan, "Vendor fault {:#x} data {:#x}: {}", vendor.vendorFaultCode,
-                     vendor.vendorFaultData, vendor.description.data());
+        report.vendors.push_back(
+            {vendor_infos[i].vendorFaultCode, vendor_infos[i].vendorFaultData,
+             SanitizeDriverText(vendor_infos[i].description.data(),
+                                vendor_infos[i].description.size())});
     }
+    return report;
 }
 
 std::string Instance::GetDriverVersionName() {

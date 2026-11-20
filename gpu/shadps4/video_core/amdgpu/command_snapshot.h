@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 
+#include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <span>
@@ -19,12 +21,32 @@ struct CommandSnapshot {
     const u32* guest_dcb{};
 };
 
+enum class SnapshotStatus { Ok, TooLarge };
+
+/// Per submission, DCB and CCB together. Real command buffers are far smaller; a larger length is
+/// a corrupt or hostile size and must not become an allocation.
+constexpr size_t MaxSnapshotWords = size_t{16} << 20;
+
+/// Snapshots kept for reuse are trimmed to this capacity so one huge submission does not pin memory.
+constexpr size_t MaxRetainedWords = size_t{1} << 20;
+
+inline SnapshotStatus CheckSnapshotSize(size_t dcb_words, size_t ccb_words) {
+    if (dcb_words > MaxSnapshotWords || ccb_words > MaxSnapshotWords - dcb_words) {
+        return SnapshotStatus::TooLarge;
+    }
+    return SnapshotStatus::Ok;
+}
+
 /// Snapshot storage reused across submissions: no allocation once the largest submission has been seen.
 class CommandSnapshots {
 public:
     static constexpr size_t MaxSpare = 8;
 
+    /// Null when the submission is larger than MaxSnapshotWords.
     std::unique_ptr<CommandSnapshot> Take(std::span<const u32> dcb, std::span<const u32> ccb) {
+        if (CheckSnapshotSize(dcb.size(), ccb.size()) != SnapshotStatus::Ok) {
+            return nullptr;
+        }
         std::unique_ptr<CommandSnapshot> snapshot;
         {
             std::scoped_lock lock{mutex};
@@ -49,7 +71,7 @@ public:
     }
 
     void Return(std::unique_ptr<CommandSnapshot> snapshot) {
-        if (!snapshot) {
+        if (!snapshot || snapshot->words.capacity() > MaxRetainedWords) {
             return;
         }
         std::scoped_lock lock{mutex};

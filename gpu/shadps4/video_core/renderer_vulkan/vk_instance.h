@@ -8,6 +8,7 @@
 
 #include "sotb_vulkan_support.h"
 #include "video_core/buffer_cache/arena_mode.h"
+#include "video_core/renderer_vulkan/vk_fault_report.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
 #define TRACY_VK_USE_SYMBOL_TABLE
@@ -40,6 +41,8 @@ public:
 
     /// Logs heap budgets and the driver's fault report (VK_EXT_device_fault) after device loss.
     void ReportDeviceFault() const;
+    /// Never throws and needs no extension: reports Unsupported without VK_EXT_device_fault.
+    [[nodiscard]] FaultReport QueryDeviceFault() const;
 
     /// Gets a compatibility format if the format is not supported.
     [[nodiscard]] vk::Format GetSupportedFormat(vk::Format format,

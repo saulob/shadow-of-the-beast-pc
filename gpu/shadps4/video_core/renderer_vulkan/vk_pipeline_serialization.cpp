@@ -25,6 +25,7 @@
 #include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
 #include "video_core/cache_storage.h"
+#include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
@@ -851,42 +852,54 @@ bool PipelineCache::CheckCacheProfile() {
         return false;
     }
 
-    Storage::DataBase::Instance().Open();
+    using namespace PipelineCachePolicy;
+    auto& db = Storage::DataBase::Instance();
+    db.Open();
 
-    // Check if cache is compatible
-    std::vector<u8> profile_data{};
-    Storage::DataBase::Instance().Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
-    if (profile_data.empty()) {
-        Storage::DataBase::Instance().FinishPreload();
+    std::vector<u8> profile_data, identity_data;
+    db.Load(Storage::BlobType::ShaderProfile, "profile", profile_data);
+    db.Load(Storage::BlobType::ShaderProfile, "identity", identity_data);
+    StoreIdentity current{
+        .vendor_id = instance.GetVendorID(),
+        .device_id = instance.GetDeviceID(),
+        .driver_id = u32(instance.GetDriverID()),
+        .driver_version = instance.GetDriverVersion(),
+        .api_version = instance.ApiVersion(),
+        .shader_binary_version = Serialization::ShaderBinaryVersion,
+        .shader_meta_version = Serialization::ShaderMetaVersion,
+        .pipeline_key_version = Serialization::PipelineKeyVersion,
+    };
+    const auto uuid = instance.GetPipelineCacheUUID();
+    std::memcpy(current.pipeline_cache_uuid.data(), uuid.data(), current.pipeline_cache_uuid.size());
 
-        profile_data.resize(sizeof(profile));
-        std::memcpy(profile_data.data(), &profile, sizeof(profile));
-        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
-        return false;
-    }
-    if (profile_data.size() != sizeof(Shader::Profile)) {
-        LOG_WARNING(Render, "Pipeline cache profile has unexpected size ({} != {})",
-                    profile_data.size(), sizeof(Shader::Profile));
-    }
-    Shader::Profile cached_profile{};
+    const auto verdict = CheckStore(identity_data, current);
+    bool profile_match = false;
     if (profile_data.size() == sizeof(Shader::Profile)) {
+        Shader::Profile cached_profile{};
         std::memcpy(&cached_profile, profile_data.data(), sizeof(cached_profile));
+        profile_match = cached_profile == profile;
     }
-    if (profile_data.size() != sizeof(Shader::Profile) || cached_profile != profile) {
-        // sotb: upstream closed the cache for the session here, so it was never rewritten
-        // and every later session compiled every shader again (stutters on each new area).
-        // Start a fresh cache for this build and GPU instead.
-        LOG_WARNING(Render, "Pipeline cache isn't compatible with current system: rebuilding it");
-        Storage::DataBase::Instance().Clear();
-        Storage::DataBase::Instance().FinishPreload();
-        profile_data.resize(sizeof(profile));
-        std::memcpy(profile_data.data(), &profile, sizeof(profile));
-        Storage::DataBase::Instance().Save(Storage::BlobType::ShaderProfile, "profile",
-                                           std::move(profile_data));
-        return false;
+    if (verdict == StoreVerdict::Reuse && profile_match) {
+        LOG_INFO(Render, "Pipeline cache: loaded ({})", DescribeVerdict(verdict, identity_data, current));
+        return true;
     }
-    return true;
+
+    // sotb: upstream closed the cache for the session here, so it was never rewritten and every
+    // later session compiled every shader again. Start a fresh cache for this build and GPU instead.
+    const bool had_cache = !profile_data.empty() || verdict != StoreVerdict::Missing;
+    if (had_cache) {
+        const auto reason = verdict == StoreVerdict::Reuse
+                                ? std::string{"shader profile changed"}
+                                : DescribeVerdict(verdict, identity_data, current);
+        LOG_WARNING(Render, "Pipeline cache: ignored, {}; rebuilding", reason);
+    }
+    db.Clear();
+    db.FinishPreload();
+    profile_data.resize(sizeof(profile));
+    std::memcpy(profile_data.data(), &profile, sizeof(profile));
+    db.Save(Storage::BlobType::ShaderProfile, "profile", std::move(profile_data));
+    db.Save(Storage::BlobType::ShaderProfile, "identity", EncodeStoreIdentity(current));
+    return false;
 }
 
 void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
@@ -913,17 +926,16 @@ void PipelineCache::WarmUp(const std::function<void(u32, u32)>& progress) {
             Serialization::Archive ar{std::move(data)};
             Serialization::Reader pldata{ar};
 
-            u32 version{};
-            pldata.Read(version);
-            if (version != Serialization::PipelineKeyVersion) {
-                return;
-            }
-
-            u32 is_compute{};
-            pldata.Read(is_compute);
-
             bool result{};
             try {
+                u32 version{};
+                pldata.Read(version);
+                if (version != Serialization::PipelineKeyVersion) {
+                    return;
+                }
+
+                u32 is_compute{};
+                pldata.Read(is_compute);
                 result = is_compute ? LoadComputePipeline(ar) : LoadGraphicsPipeline(ar);
             } catch (const std::exception&) {
                 sel.infos.fill(nullptr);

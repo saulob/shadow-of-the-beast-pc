@@ -24,7 +24,9 @@
 #include "common/unique_function.h"
 #include "video_core/amdgpu/regs_color.h"
 #include "video_core/amdgpu/regs_primitive.h"
+#include "video_core/renderer_vulkan/vk_recording_state.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
+#include "video_core/renderer_vulkan/vk_staging_policy.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
 namespace tracy {
@@ -589,10 +591,11 @@ public:
     bool Push(Func&& func) {
         using Command = TypedCommand<std::decay_t<Func>>;
         static_assert(sizeof(Command) <= Capacity, "recorded command is too large");
-        const size_t offset = (used + alignof(Command) - 1) & ~(alignof(Command) - 1);
-        if (offset + sizeof(Command) > Capacity) {
+        const auto placed = StagingPolicy::ChunkOffset(used, sizeof(Command), alignof(Command), Capacity);
+        if (!placed) {
             return false;
         }
+        const size_t offset = *placed;
         auto* command = new (storage + offset) Command(std::forward<Func>(func));
         if (last) {
             last->next = command;
@@ -607,10 +610,11 @@ public:
 
     /// Raw storage in the chunk for a command's variable-length data; null when full.
     void* Allocate(size_t bytes, size_t align) {
-        const size_t offset = (used + align - 1) & ~(align - 1);
-        if (offset + bytes > Capacity) {
+        const auto placed = StagingPolicy::ChunkOffset(used, bytes, align, Capacity);
+        if (!placed) {
             return nullptr;
         }
+        const size_t offset = *placed;
         used = offset + bytes;
         PrefetchAhead();
         return storage + offset;
@@ -777,7 +781,7 @@ public:
         if (!IsRecordingDeferred()) {
             return;
         }
-        if (bytes + 1024 > RecordChunk::Capacity) {
+        if (bytes > RecordChunk::Capacity - 1024) {
             bytes = 0; // RecordData() places it out of line; keep room for the command
         }
         if (RecordChunk::Capacity - record_chunk->Size() < bytes + 1024) {
@@ -941,7 +945,7 @@ private:
     bool is_rendering = false;
     bool has_render_state = false; ///< render_state holds the last rendering instance
     std::atomic<bool> host_read_barrier{false};
-    bool replay_rendering_open = false; ///< replay thread only
+    RenderingScope replay_rendering; ///< replay thread only
     // sotb: threaded recording
     std::unique_ptr<RecordChunk> record_chunk;
     std::atomic<std::thread::id> recording_owner{}; // see OwnsRecording()

@@ -8,6 +8,7 @@
 #include "core/emulator_settings.h"
 
 #include "video_core/cache_storage.h"
+#include "video_core/pipeline_cache_policy.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
 
@@ -33,6 +34,30 @@ std::mutex m_request{};
 
 mz_zip_archive zip_ar{};
 bool ar_is_read_only{true};
+
+std::atomic<u32> rejected_blobs{};
+
+std::vector<u8> ReadFileBytes(const std::filesystem::path& path) {
+    using namespace Common::FS;
+    const auto file = IOFile{path, FileAccessMode::Read};
+    if (!file.IsOpen()) {
+        return {};
+    }
+    const u64 size = file.GetSize();
+    if (size > PipelineCachePolicy::MaxBlobBytes + PipelineCachePolicy::SealSize) {
+        return {};
+    }
+    std::vector<u8> bytes(size);
+    if (file.Read(bytes) != bytes.size()) {
+        return {};
+    }
+    return bytes;
+}
+
+void NoteRejectedBlob(const std::filesystem::path& path) {
+    rejected_blobs.fetch_add(1, std::memory_order_relaxed);
+    LOG_DEBUG(Render, "Pipeline cache: rejected {}", path.filename().string());
+}
 
 } // namespace
 
@@ -140,14 +165,18 @@ void DataBase::Open() {
         if (!std::filesystem::exists(cache_path)) {
             std::filesystem::create_directories(cache_path);
         }
-        // Writes a previous run ended in the middle of.
-        ForEachEntry(cache_path, [](const std::filesystem::directory_entry& entry) {
-            if (entry.path().extension() == ".tmp") {
-                std::error_code error;
-                std::filesystem::remove(entry.path(), error);
+        u32 removed = 0;
+        ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
+            std::error_code error;
+            if (PipelineCachePolicy::IsStaleTemp(entry.path()) &&
+                std::filesystem::remove(entry.path(), error)) {
+                ++removed;
             }
             return true;
         });
+        if (removed) {
+            LOG_INFO(Render, "Pipeline cache: removed {} unfinished writes", removed);
+        }
     }
 
     io_worker = std::jthread{ProcessIO};
@@ -168,76 +197,71 @@ void DataBase::Close() {
     }
 
     opened = false;
+    if (const u32 rejected = rejected_blobs.exchange(0)) {
+        LOG_WARNING(Render, "Pipeline cache: {} invalid entries were ignored", rejected);
+    }
     LOG_INFO(Render, "Cache dumped");
 }
 
 template <typename T>
 bool WriteVector(const BlobType type, std::filesystem::path&& path_, std::vector<T>&& v) {
-    {
-        auto request = std::packaged_task<void()>{[=]() {
-            auto path{path_};
-            path.replace_extension(GetBlobFileExtension(type));
-            if (EmulatorSettings.IsPipelineCacheArchived()) {
-                ASSERT_MSG(!ar_is_read_only,
-                           "The archive is read-only. Did you forget to call `FinishPreload`?");
-                if (!mz_zip_writer_add_mem(&zip_ar, path.string().c_str(), v.data(),
-                                           v.size() * sizeof(T), MZ_BEST_COMPRESSION)) {
-                    LOG_ERROR(Render, "Failed to add {} to the archive", path.string().c_str());
-                }
-            } else {
-                // sotb: write beside and rename into place, so a game that ends during the
-                // write (the queue is not drained at exit) never leaves a truncated blob that
-                // the next start would load.
-                using namespace Common::FS;
-                auto temp{path};
-                temp += ".tmp";
-                bool written{};
-                {
-                    const auto file = IOFile{temp, FileAccessMode::Create};
-                    written = file.IsOpen() && file.Write(v) == v.size();
-                }
-                std::error_code error;
-                if (!written) {
-                    std::filesystem::remove(temp, error);
-                    return;
-                }
-                // Windows refuses the rename while another thread reads the old blob (the
-                // background warm-up). Retried; when it keeps failing this write is dropped.
-                for (int attempt = 0; attempt < 20; ++attempt) {
-                    std::filesystem::rename(temp, path, error);
-                    if (!error) {
-                        return;
-                    }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                }
-                std::filesystem::remove(temp, error);
-            }
-        }};
-        Submit(std::move(request));
+    std::vector<u8> bytes(v.size() * sizeof(T));
+    std::memcpy(bytes.data(), v.data(), bytes.size());
+    if (!PipelineCachePolicy::Seal(bytes)) {
+        LOG_WARNING(Render, "Pipeline cache: {} is too large to store", path_.filename().string());
+        return false;
     }
+    Submit(std::packaged_task<void()>{[type, path_, bytes = std::move(bytes)]() {
+        auto path{path_};
+        path.replace_extension(GetBlobFileExtension(type));
+        if (EmulatorSettings.IsPipelineCacheArchived()) {
+            ASSERT_MSG(!ar_is_read_only,
+                       "The archive is read-only. Did you forget to call `FinishPreload`?");
+            if (!mz_zip_writer_add_mem(&zip_ar, path.string().c_str(), bytes.data(), bytes.size(),
+                                       MZ_BEST_COMPRESSION)) {
+                LOG_ERROR(Render, "Failed to add {} to the archive", path.string().c_str());
+            }
+        } else if (!PipelineCachePolicy::WriteFileAtomically(path, bytes)) {
+            LOG_WARNING(Render, "Pipeline cache: could not write {}", path.filename().string());
+        }
+    }});
     return true;
 }
 
 template <typename T>
 void LoadVector(BlobType type, std::filesystem::path& path, std::vector<T>& v) {
-    using namespace Common::FS;
+    v.clear();
     path.replace_extension(GetBlobFileExtension(type));
+    std::vector<u8> bytes;
     if (EmulatorSettings.IsPipelineCacheArchived()) {
-        int index{-1};
-        index = mz_zip_reader_locate_file(&zip_ar, path.string().c_str(), nullptr, 0);
+        const int index = mz_zip_reader_locate_file(&zip_ar, path.string().c_str(), nullptr, 0);
         if (index < 0) {
-            LOG_WARNING(Render, "File {} is not found in the archive", path.string().c_str());
             return;
         }
         mz_zip_archive_file_stat stat{};
-        mz_zip_reader_file_stat(&zip_ar, index, &stat);
-        v.resize(stat.m_uncomp_size / sizeof(T));
-        mz_zip_reader_extract_to_mem(&zip_ar, index, v.data(), stat.m_uncomp_size, 0);
+        if (!mz_zip_reader_file_stat(&zip_ar, index, &stat) ||
+            stat.m_uncomp_size > PipelineCachePolicy::MaxBlobBytes + PipelineCachePolicy::SealSize) {
+            NoteRejectedBlob(path);
+            return;
+        }
+        bytes.resize(stat.m_uncomp_size);
+        if (!mz_zip_reader_extract_to_mem(&zip_ar, index, bytes.data(), bytes.size(), 0)) {
+            NoteRejectedBlob(path);
+            return;
+        }
     } else {
-        const auto file = IOFile{path, FileAccessMode::Read};
-        v.resize(file.GetSize() / sizeof(T));
-        file.Read(v);
+        std::error_code error;
+        if (!std::filesystem::exists(path, error)) {
+            return;
+        }
+        bytes = ReadFileBytes(path);
     }
+    if (!PipelineCachePolicy::Unseal(bytes) || bytes.size() % sizeof(T) != 0) {
+        NoteRejectedBlob(path);
+        return;
+    }
+    v.resize(bytes.size() / sizeof(T));
+    std::memcpy(v.data(), bytes.data(), bytes.size());
 }
 
 bool DataBase::Save(BlobType type, const std::string& name, std::vector<u8>&& data) {
@@ -310,33 +334,52 @@ void DataBase::ForEachBlob(BlobType type, const std::function<void(std::vector<u
         const auto num_files = mz_zip_reader_get_num_files(&zip_ar);
         for (int index = 0; index < num_files; ++index) {
             std::array<char, MZ_ZIP_MAX_ARCHIVE_FILENAME_SIZE> file_name{};
-            file_name.fill(0);
             mz_zip_reader_get_filename(&zip_ar, index, file_name.data(), file_name.size());
-            if (std::string{file_name.data()}.ends_with(ext)) {
-                mz_zip_archive_file_stat stat{};
-                mz_zip_reader_file_stat(&zip_ar, index, &stat);
-                std::vector<u8> data(stat.m_uncomp_size);
-                mz_zip_reader_extract_to_mem(&zip_ar, index, data.data(), data.size(), 0);
-                func(std::move(data));
+            if (!std::string{file_name.data()}.ends_with(ext)) {
+                continue;
             }
-        }
-    } else {
-        ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
-            if (stop && stop()) {
-                return false;
-            }
-            if (entry.path().extension().string().ends_with(ext)) {
-                using namespace Common::FS;
-                const auto& file = IOFile{entry.path(), FileAccessMode::Read};
-                if (file.IsOpen()) {
-                    std::vector<u8> data(file.GetSize());
-                    file.Read(data);
-                    func(std::move(data));
+            mz_zip_archive_file_stat stat{};
+            std::vector<u8> data;
+            if (mz_zip_reader_file_stat(&zip_ar, index, &stat) &&
+                stat.m_uncomp_size <=
+                    PipelineCachePolicy::MaxBlobBytes + PipelineCachePolicy::SealSize) {
+                data.resize(stat.m_uncomp_size);
+                if (!mz_zip_reader_extract_to_mem(&zip_ar, index, data.data(), data.size(), 0)) {
+                    data.clear();
                 }
             }
-            return true;
-        });
+            if (PipelineCachePolicy::Unseal(data)) {
+                func(std::move(data));
+            } else {
+                NoteRejectedBlob(file_name.data());
+            }
+        }
+        return;
     }
+    ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
+        if (stop && stop()) {
+            return false;
+        }
+        const auto& path = entry.path();
+        if (!path.extension().string().ends_with(ext)) {
+            return true;
+        }
+        auto data = ReadFileBytes(path);
+        if (PipelineCachePolicy::Unseal(data)) {
+            func(std::move(data));
+            return true;
+        }
+        NoteRejectedBlob(path);
+        // Re-checked behind the pending saves: a save of this entry that is still queued wins.
+        Submit(std::packaged_task<void()>{[path] {
+            auto bytes = ReadFileBytes(path);
+            if (!PipelineCachePolicy::Unseal(bytes)) {
+                std::error_code error;
+                std::filesystem::remove(path, error);
+            }
+        }});
+        return true;
+    });
 }
 
 void DataBase::Clear() {
@@ -346,10 +389,13 @@ void DataBase::Clear() {
     u64 removed = 0;
     ForEachEntry(cache_path, [&](const std::filesystem::directory_entry& entry) {
         std::error_code ec;
-        removed += entry.is_regular_file(ec) && std::filesystem::remove(entry.path(), ec);
+        removed += entry.is_regular_file(ec) && PipelineCachePolicy::IsCacheArtifact(entry.path()) &&
+                   std::filesystem::remove(entry.path(), ec);
         return true;
     });
-    LOG_WARNING(Render, "Pipeline cache cleared ({} files): it is rebuilt for this build", removed);
+    if (removed) {
+        LOG_WARNING(Render, "Pipeline cache cleared ({} files): it is rebuilt", removed);
+    }
 }
 
 void DataBase::FinishPreload() {
