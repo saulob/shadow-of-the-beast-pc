@@ -35,18 +35,17 @@ static void make_directories(const char *dir) {
     CreateDirectoryA(path, NULL);
 }
 
+/* A crash dump keeps its number taken, so a new log never lands beside the dump of another session. */
 static unsigned last_number(const char *dir) {
     char pattern[4200];
-    snprintf(pattern, sizeof(pattern), "%s\\shadow_of_the_beast_*.log", dir);
+    snprintf(pattern, sizeof(pattern), "%s\\shadow_of_the_beast_*", dir);
     WIN32_FIND_DATAA found;
     HANDLE find = FindFirstFileA(pattern, &found);
     unsigned last = 0;
     if (find == INVALID_HANDLE_VALUE) return 0;
     do {
-        unsigned number = 0;
-        int used = 0;
-        if (sscanf(found.cFileName, "shadow_of_the_beast_%u.log%n", &number, &used) == 1 && used > 0 && !found.cFileName[used] && number > last)
-            last = number;
+        const unsigned number = runtime_log_session_number(found.cFileName);
+        if (number > last) last = number;
     } while (FindNextFileA(find, &found));
     FindClose(find);
     return last;

@@ -9,6 +9,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "crash_dump.h"
 #include "import_slots.h"
 #include "guest_display.h"
 #include "skip_intro.h"
@@ -313,6 +314,9 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
         rbp = frame[0];
     }
     runtime_log_flush();
+    char dump_line[160];
+    crash_dump_write(info, dump_line, sizeof(dump_line));
+    runtime_log_write_direct(dump_line);
     runtime_log_write_direct(fatal_line);
     TerminateProcess(GetCurrentProcess(), 3);
     return EXCEPTION_CONTINUE_SEARCH;
@@ -817,6 +821,7 @@ int main(int argc, char **argv) {
     signal(SIGABRT, abort_signal);
     _set_invalid_parameter_handler(invalid_parameter);
     _set_purecall_handler(purecall);
+    if (log_started) printf("Crash dump: %s\n", crash_dump_prepare() ? "written beside this log on a crash" : "unavailable");
 
     log_cpu();
     renderer_settings_file = settings_file;
@@ -1050,6 +1055,7 @@ int main(int argc, char **argv) {
         SotbGpuConfig gpu = {SOTB_WINDOW_TITLE, running, serial, user_dir, settings_file, (uint32_t)sdk, attributes,
                              1920, 1080, SOTB_GPU_FEATURE_RENDER_RESOLUTION};
         gpu_enabled = 1;
+        sotb_startup_phase("GPU initialization");
         if (sotbgpu_init(&gpu)) fail("GPU initialization failed");
         sotb_startup_phase("GPU initialized");
         printf("GPU: window and presenter ready; SDK 0x%08x, %u HLE symbols\n", (unsigned)sdk, sotbgpu_symbol_count());

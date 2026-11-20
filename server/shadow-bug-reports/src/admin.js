@@ -2,7 +2,7 @@
 // Bearer header; the page itself is static and holds nothing. No Cloudflare import, so Node runs it in the tests.
 import { ADMIN_CSS, ADMIN_HTML, ADMIN_JS } from './admin_page.js';
 import { RateLimiter, PROTECTION, ipGroup } from './limits.js';
-import { isTicket, logDownloadName, readStatusChange } from './reports.js';
+import { dumpDownloadName, isTicket, logDownloadName, readStatusChange } from './reports.js';
 import { sha256Hex } from './sha256.js';
 
 const MIN_TOKEN_CHARS = 24;
@@ -55,6 +55,7 @@ function adminApi(pathname) {
   if (more.length > 0) return null;
   if (rest === undefined) return { name: 'report', ticket };
   if (rest === 'log') return { name: 'report_log', ticket };
+  if (rest === 'dump') return { name: 'report_dump', ticket };
   if (rest === 'status') return { name: 'report_status', ticket };
   return null;
 }
@@ -89,7 +90,8 @@ export function resetAdminLimits() {
   failedSignIns.buckets.clear();
 }
 
-// source: { list(), get(ticket), setStatus(ticket, change), remove(ticket) } as promises, used only after the token matched.
+// source: { list(), get(ticket), dump(ticket), setStatus(ticket, change), remove(ticket) } as promises, used only after the
+// token matched.
 export async function handleAdmin(request, env, source, log = () => {}, now = Date.now()) {
   const url = new URL(request.url);
   const api = adminApi(url.pathname);
@@ -118,6 +120,11 @@ export async function handleAdmin(request, env, source, log = () => {}, now = Da
     const report = await source.get(api.ticket);
     if (!report) return json({ error: 'not_found' }, 404);
     if (api.name === 'report') return json(report);
+    if (api.name === 'report_dump') {
+      const bytes = await source.dump(api.ticket);
+      if (!bytes) return json({ error: 'not_found' }, 404);
+      return reply(bytes, 200, 'application/octet-stream', { 'Content-Disposition': `attachment; filename="${dumpDownloadName(report)}"` });
+    }
     return reply(report.log_text, 200, 'text/plain; charset=utf-8',
       { 'Content-Disposition': `attachment; filename="${logDownloadName(report)}"` });
   } catch (error) {

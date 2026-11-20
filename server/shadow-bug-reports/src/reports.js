@@ -1,7 +1,10 @@
 // Problem reports filed from the launcher's Bug Report page. A filed report holds only the fields below, all of them
 // shown to the player first. Who filed it stays apart: the quota keeps salted hashes of the connection's address for a
 // day, and ownership is a random receipt of which only a hash is kept.
-import { digestsMatch, sha256Hex } from './sha256.js';
+import { digestsMatch, sha256Hex, toHex } from './sha256.js';
+
+const HOUR_MS = 3600 * 1000;
+const DAY_MS = 24 * HOUR_MS;
 
 export const REPORT = {
   bodyBytes: 192 * 1024,
@@ -10,6 +13,7 @@ export const REPORT = {
   logBytes: 64 * 1024,
   metadataChars: 64,
   detailChars: 96,
+  sessionDetailChars: 400,
   previewChars: 140,
   perAddressPerHour: 3,
   perAddressPerDay: 10,
@@ -20,13 +24,25 @@ export const REPORT = {
   statusBatch: 30,
   statusKept: 5000,
   statusKeptDays: 365,
+  // A dump holds thread stacks and module lists, no heap (src/crash_dump.c); the launcher refuses more as well.
+  dumpBytes: 8 * 1024 * 1024,
+  dumpMinBytes: 1024,
+  dumpChunkBytes: 1024 * 1024,
+  dumpsKept: 100,
+  dumpPendingMs: DAY_MS,
+  submissionKeptMs: DAY_MS,
 };
 
 export const REPORT_STATUSES = ['new', 'investigating', 'fixed', 'cannot_reproduce', 'duplicate', 'not_a_bug', 'closed'];
+export const SESSION_ENDS = ['unknown', 'clean', 'crash', 'device_lost', 'stopped', 'startup_failure', 'unsupported_build'];
 
-const HOUR_MS = 3600 * 1000;
-const DAY_MS = 24 * HOUR_MS;
 const LOG_FILE = /^shadow_of_the_beast_[0-9]{3,10}\.log$/;
+const HEX64 = /^[0-9a-f]{64}$/;
+const DUMP_KEYS = ['dump_file', 'dump_bytes', 'dump_sha256'];
+const REQUEST_EXTRAS = new Set([...DUMP_KEYS, 'submission']);
+const CHUNK_KEYS = new Set(['ticket', 'receipt', 'offset', 'data']);
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+const MINIDUMP_MAGIC = [0x4d, 0x44, 0x4d, 0x50];
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/;
 const TICKET = /^SOB-[A-HJ-NP-Z2-9]{6}$/;
 const RECEIPT = /^[0-9a-f]{64}$/;
@@ -43,6 +59,16 @@ export function logDownloadName(report) {
   if (!isTicket(report.ticket)) return 'shadow-of-the-beast-report.log';
   return LOG_FILE.test(report.log_file) ? `${report.ticket}-${report.log_file}` : `${report.ticket}.log`;
 }
+
+// The dump of a log is named after it; the service never takes the launcher's word for the name.
+export const dumpNameOf = (logFile) => `${logFile.slice(0, -4)}.dmp`;
+
+export function dumpDownloadName(report) {
+  if (!isTicket(report.ticket)) return 'shadow-of-the-beast-report.dmp';
+  return LOG_FILE.test(report.log_file) ? `${report.ticket}-${dumpNameOf(report.log_file)}` : `${report.ticket}.dmp`;
+}
+
+export const isMinidump = (bytes) => bytes.length >= MINIDUMP_MAGIC.length && MINIDUMP_MAGIC.every((b, i) => bytes[i] === b);
 
 const utf8Bytes = (text) => new TextEncoder().encode(text).length;
 
@@ -93,6 +119,14 @@ function yesNo(msg, field) {
 const meta = (field, options) => (msg) => text(msg, field, REPORT.metadataChars, options);
 const detail = (field) => (msg) => text(msg, field, REPORT.detailChars, { optional: true });
 
+// A field newer launchers send: a launcher released before it existed leaves it out, and its reports are still taken.
+const newer = (field, fallback, read) => (msg) => (Object.hasOwn(msg, field) ? read(msg) : fallback);
+
+function sessionEnd(msg) {
+  if (!SESSION_ENDS.includes(msg.session_end)) throw new Refusal('bad_request', 'session_end');
+  return msg.session_end;
+}
+
 export const READERS = {
   description,
   launcher_version: meta('launcher_version', { pattern: VERSION }),
@@ -108,26 +142,72 @@ export const READERS = {
   gpu: detail('gpu'),
   driver: detail('driver'),
   render_resolution: meta('render_resolution', { optional: true }),
+  session_end: newer('session_end', 'unknown', sessionEnd),
+  session_detail: newer('session_detail', '', (msg) => text(msg, 'session_detail', REPORT.sessionDetailChars, { optional: true })),
+  session_stage: newer('session_stage', '', meta('session_stage', { optional: true })),
   log_file: meta('log_file', { pattern: LOG_FILE }),
   log_clipped: (msg) => yesNo(msg, 'log_clipped'),
   log_text: logText,
 };
+
+// The announced crash dump of a report, or null. Its name must be the selected log's, so it names nothing else.
+function readDump(msg, logFile) {
+  const given = DUMP_KEYS.filter((key) => Object.hasOwn(msg, key));
+  if (given.length === 0) return null;
+  if (given.length !== DUMP_KEYS.length) throw new Refusal('bad_request', 'dump_file, dump_bytes and dump_sha256 go together');
+  if (msg.dump_file !== dumpNameOf(logFile)) throw new Refusal('bad_request', 'dump_file');
+  const bytes = msg.dump_bytes;
+  if (!Number.isSafeInteger(bytes) || bytes < REPORT.dumpMinBytes) throw new Refusal('bad_request', 'dump_bytes');
+  if (bytes > REPORT.dumpBytes) throw new Refusal('too_large', 'dump_bytes');
+  if (typeof msg.dump_sha256 !== 'string' || !HEX64.test(msg.dump_sha256)) throw new Refusal('bad_request', 'dump_sha256');
+  return { file: dumpNameOf(logFile), bytes, sha256: msg.dump_sha256 };
+}
+
+function readSubmission(msg) {
+  if (!Object.hasOwn(msg, 'submission')) return null;
+  if (typeof msg.submission !== 'string' || !HEX64.test(msg.submission)) throw new Refusal('bad_request', 'submission');
+  return msg.submission;
+}
 
 // The stored fields of a request, or { code, detail } for the answer. Nothing here trusts a size the client states, and
 // a field the page could not have shown is refused rather than dropped.
 export function readReport(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { code: 'bad_request', detail: 'body' };
   for (const key of Object.keys(body)) {
-    if (!Object.hasOwn(READERS, key)) return { code: 'bad_request', detail: key };
+    if (!Object.hasOwn(READERS, key) && !REQUEST_EXTRAS.has(key)) return { code: 'bad_request', detail: key };
   }
   try {
     const report = {};
     for (const [field, read] of Object.entries(READERS)) report[field] = read(body);
-    return { report };
+    return { report, dump: readDump(body, report.log_file), submission: readSubmission(body) };
   } catch (error) {
     if (error instanceof Refusal) return { code: error.code, detail: error.message };
     throw error;
   }
+}
+
+function decodeBase64(text) {
+  const binary = atob(text);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+// One chunk of a crash dump: { claim, offset, bytes } or { code, detail }. The bytes must be standard base64 and fit one
+// chunk; where they go is decided against what is stored, never by the client alone.
+export function readDumpChunk(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { code: 'bad_request', detail: 'body' };
+  for (const key of Object.keys(body)) if (!CHUNK_KEYS.has(key)) return { code: 'bad_request', detail: key };
+  const claim = readClaim(body);
+  if (!claim) return { code: 'bad_request', detail: 'receipt' };
+  const { offset, data } = body;
+  if (!Number.isSafeInteger(offset) || offset < 0 || offset >= REPORT.dumpBytes) return { code: 'bad_request', detail: 'offset' };
+  if (typeof data !== 'string' || data.length === 0) return { code: 'bad_request', detail: 'data' };
+  if (data.length > Math.ceil(REPORT.dumpChunkBytes / 3) * 4) return { code: 'too_large', detail: 'data' };
+  if (!BASE64.test(data)) return { code: 'bad_request', detail: 'data' };
+  const bytes = decodeBase64(data);
+  if (bytes.length === 0 || bytes.length > REPORT.dumpChunkBytes) return { code: 'too_large', detail: 'data' };
+  return { claim, offset, bytes };
 }
 
 // One report's receipt from a lookup, or null. Nothing here says whether the report exists.
@@ -164,8 +244,13 @@ export function readStatusChange(body) {
 }
 
 const LIST_COLUMNS = `reports.ticket AS ticket, ms, launcher_version, game_build, region, game_version, operating_system, cpu,
-  renderer_selected, renderer, gpu, driver, render_resolution, log_file, log_clipped, substr(description, 1, ${REPORT.previewChars}) AS preview,
-  COALESCE(t.status, 'new') AS status, COALESCE(t.status_ms, ms) AS status_updated_at`;
+  renderer_selected, renderer, gpu, driver, render_resolution, session_end, log_file, log_clipped,
+  substr(description, 1, ${REPORT.previewChars}) AS preview, COALESCE(t.status, 'new') AS status,
+  COALESCE(t.status_ms, ms) AS status_updated_at,
+  COALESCE((SELECT CASE complete WHEN 1 THEN 'stored' ELSE 'uploading' END FROM report_dumps d WHERE d.ticket = reports.ticket),
+    'none') AS dump_status`;
+
+const SESSION_COLUMNS = ['session_end', 'session_detail', 'session_stage'];
 
 const statusOf = (row) => ({
   status: row.status,
@@ -188,10 +273,38 @@ export class ReportDesk {
     sql.run(`CREATE TABLE IF NOT EXISTS report_tracking (ticket TEXT PRIMARY KEY, receipt_hash TEXT NOT NULL,
       submitted_ms INTEGER NOT NULL, status TEXT NOT NULL, status_ms INTEGER NOT NULL, fixed_version TEXT NOT NULL,
       player_message TEXT NOT NULL)`);
+    // A database made before the session fields gains them; its older reports read as empty.
+    for (const column of SESSION_COLUMNS) {
+      try {
+        sql.get(`SELECT ${column} FROM reports LIMIT 0`);
+      } catch {
+        sql.run(`ALTER TABLE reports ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+      }
+    }
+    sql.run(`CREATE TABLE IF NOT EXISTS report_dumps (ticket TEXT PRIMARY KEY, file TEXT NOT NULL, bytes INTEGER NOT NULL,
+      sha256 TEXT NOT NULL, complete INTEGER NOT NULL, ms INTEGER NOT NULL)`);
+    sql.run(`CREATE TABLE IF NOT EXISTS report_dump_chunks (ticket TEXT NOT NULL, pos INTEGER NOT NULL, data BLOB NOT NULL,
+      PRIMARY KEY (ticket, pos))`);
+    sql.run('CREATE TABLE IF NOT EXISTS report_submissions (key TEXT PRIMARY KEY, ticket TEXT NOT NULL, ms INTEGER NOT NULL)');
   }
 
   key(kind, value) {
     return sha256Hex(`${this.salt}|${kind}|${value}`).slice(0, 32);
+  }
+
+  // The receipt of a report filed with a submission key: the same key always gives the same receipt, so a repeated
+  // request can be answered again although only a hash of the receipt is stored.
+  submissionReceipt(submission) {
+    return sha256Hex(`${this.salt}|submission-receipt|${submission}`);
+  }
+
+  submitted(submission, now) {
+    return this.sql.get(`SELECT s.ticket AS ticket, r.ms AS ms FROM report_submissions s JOIN reports r ON r.ticket = s.ticket
+      WHERE s.key = ? AND s.ms > ?`, this.key('submission', submission), now - REPORT.submissionKeptMs) ?? null;
+  }
+
+  rememberSubmission(submission, ticket, now) {
+    this.sql.run('INSERT INTO report_submissions (key, ticket, ms) VALUES (?, ?, ?)', this.key('submission', submission), ticket, now);
   }
 
   // The answer code that refuses a report now, or null. The windows roll: a report leaves them one hour and one day after
@@ -207,23 +320,97 @@ export class ReportDesk {
     return null;
   }
 
-  file(report, ticket, address, now) {
+  file(report, ticket, address, now, dump = null) {
     this.purge(now);
     this.sql.run(`INSERT INTO reports (ticket, ms, launcher_version, game_build, region, game_version, cusa, eboot_sha256,
       operating_system, cpu, renderer_selected, renderer, gpu, driver, render_resolution, description, log_file, log_clipped,
-      log_text) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, ticket, now, report.launcher_version,
-    report.game_build, report.region, report.game_version, report.cusa, report.eboot_sha256, report.operating_system, report.cpu,
-    report.renderer_selected, report.renderer, report.gpu, report.driver, report.render_resolution, report.description,
-    report.log_file, report.log_clipped, report.log_text);
+      log_text, session_end, session_detail, session_stage) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ticket, now, report.launcher_version, report.game_build, report.region, report.game_version, report.cusa, report.eboot_sha256,
+    report.operating_system, report.cpu, report.renderer_selected, report.renderer, report.gpu, report.driver,
+    report.render_resolution, report.description, report.log_file, report.log_clipped, report.log_text, report.session_end,
+    report.session_detail, report.session_stage);
     this.sql.run('INSERT INTO report_quota (address_key, ms) VALUES (?, ?)', this.key('address', address), now);
     this.sql.run(`DELETE FROM reports WHERE rowid IN
       (SELECT rowid FROM reports ORDER BY ms DESC, rowid DESC LIMIT -1 OFFSET ?)`, REPORT.kept);
+    if (dump) {
+      this.sql.run('INSERT INTO report_dumps (ticket, file, bytes, sha256, complete, ms) VALUES (?, ?, ?, ?, 0, ?)', ticket, dump.file,
+        dump.bytes, dump.sha256, now);
+    }
+    this.trimDumps(now);
   }
 
-  // Reports and their statuses leave after their own number of days, whatever the count limits say.
+  // Reports and their statuses leave after their own number of days, whatever the count limits say; a dump and a
+  // submission key never outlive their report.
   purge(now) {
     this.sql.run('DELETE FROM reports WHERE ms <= ?', now - REPORT.keptDays * DAY_MS);
     this.sql.run('DELETE FROM report_tracking WHERE submitted_ms <= ?', now - REPORT.statusKeptDays * DAY_MS);
+    this.sql.run('DELETE FROM report_submissions WHERE ms <= ? OR ticket NOT IN (SELECT ticket FROM reports)', now - REPORT.submissionKeptMs);
+    this.trimDumps(now);
+  }
+
+  trimDumps(now) {
+    this.sql.run('DELETE FROM report_dumps WHERE complete = 0 AND ms <= ?', now - REPORT.dumpPendingMs);
+    this.sql.run('DELETE FROM report_dumps WHERE ticket NOT IN (SELECT ticket FROM reports)');
+    this.sql.run(`DELETE FROM report_dumps WHERE rowid IN
+      (SELECT rowid FROM report_dumps ORDER BY ms DESC, rowid DESC LIMIT -1 OFFSET ?)`, REPORT.dumpsKept);
+    this.sql.run('DELETE FROM report_dump_chunks WHERE ticket NOT IN (SELECT ticket FROM report_dumps)');
+  }
+
+  dump(ticket) {
+    return this.sql.get('SELECT * FROM report_dumps WHERE ticket = ?', ticket) ?? null;
+  }
+
+  dumpStored(ticket) {
+    return this.sql.get('SELECT COALESCE(MAX(pos + LENGTH(data)), 0) AS n FROM report_dump_chunks WHERE ticket = ?', ticket).n;
+  }
+
+  // A chunk goes at the end of what is stored; a second writer to the same place fails on the key.
+  appendDump(ticket, pos, bytes) {
+    this.sql.run('INSERT INTO report_dump_chunks (ticket, pos, data) VALUES (?, ?, ?)', ticket, pos, bytes);
+  }
+
+  dropDump(ticket) {
+    this.sql.run('DELETE FROM report_dumps WHERE ticket = ?', ticket);
+    this.sql.run('DELETE FROM report_dump_chunks WHERE ticket = ?', ticket);
+  }
+
+  dumpBytes(ticket, partial = false) {
+    const dump = this.dump(ticket);
+    if (!dump || (!dump.complete && !partial)) return null;
+    const out = new Uint8Array(dump.bytes);
+    let at = 0;
+    for (const chunk of this.sql.all('SELECT pos, data FROM report_dump_chunks WHERE ticket = ? ORDER BY pos', ticket)) {
+      const data = new Uint8Array(chunk.data);
+      if (chunk.pos !== at || at + data.length > dump.bytes) return null;
+      out.set(data, at);
+      at += data.length;
+    }
+    return at === dump.bytes ? out : null;
+  }
+
+  // 'complete' once every announced byte arrived, begins like a minidump and has the announced SHA-256; anything else
+  // drops the dump. The digest is awaited, so the state is read again before it changes.
+  async completeDump(ticket) {
+    const dump = this.dump(ticket);
+    if (!dump) return 'missing';
+    if (dump.complete) return 'complete';
+    const bytes = this.dumpBytes(ticket, true);
+    if (!bytes) return 'incomplete';
+    const verdict = !isMinidump(bytes) ? 'not_minidump'
+      : toHex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))) !== dump.sha256 ? 'dump_sha256' : 'complete';
+    const now = this.dump(ticket);
+    if (!now || now.complete) return now ? 'complete' : 'missing';
+    if (verdict !== 'complete') {
+      this.dropDump(ticket);
+      return verdict;
+    }
+    this.sql.run('UPDATE report_dumps SET complete = 1 WHERE ticket = ?', ticket);
+    return 'complete';
+  }
+
+  dumpSummary(ticket) {
+    const dump = this.dump(ticket);
+    return { dump_status: dump ? (dump.complete ? 'stored' : 'uploading') : 'none', dump_file: dump?.file ?? '', dump_bytes: dump?.bytes ?? 0 };
   }
 
   receiptHash(receipt) {
@@ -293,6 +480,8 @@ export class ReportDesk {
       const existed = this.taken(ticket);
       this.sql.run('DELETE FROM reports WHERE ticket = ?', ticket);
       this.sql.run('DELETE FROM report_tracking WHERE ticket = ?', ticket);
+      this.sql.run('DELETE FROM report_submissions WHERE ticket = ?', ticket);
+      this.dropDump(ticket);
       return existed;
     });
   }

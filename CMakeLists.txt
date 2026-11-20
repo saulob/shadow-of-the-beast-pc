@@ -92,6 +92,7 @@ set(SOTB_RUNTIME_SOURCES
 
 set(SOTB_GAME_SOURCES
     src/loader.c
+    src/crash_dump.c
     src/import_slots.c
     src/guest_patches.c
     src/isa_emulate.c

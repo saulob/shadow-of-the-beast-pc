@@ -11,6 +11,7 @@ namespace Sotb::crypto {
 bool Sha1(const uint8_t* data, size_t size, uint8_t (&digest)[20]);
 bool Sha256(const uint8_t* data, size_t size, uint8_t (&digest)[32]);
 bool HmacSha256(const uint8_t* key, size_t key_size, const uint8_t* data, size_t size, uint8_t (&digest)[32]);
+bool RandomBytes(uint8_t* out, size_t size);
 
 class Sha256Stream {
 public:

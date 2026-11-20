@@ -45,6 +45,10 @@ ReportOutcome OutcomeOfAnswer(int status, std::string_view error_code);
 const char* OutcomeTitle(ReportOutcome outcome);
 const char* OutcomeAdvice(ReportOutcome outcome);
 
+// kNotAttached: the player asked for the dump but it failed the local check, so only the report went. kFailed: the report
+// was filed and its dump did not arrive; another try resumes under the same Report ID.
+enum class DumpUpload { kNotRequested, kNotAttached, kUploaded, kFailed };
+
 struct ReportReceipt {
     ReportOutcome outcome = ReportOutcome::kServiceError;
     std::string ticket;
@@ -52,13 +56,26 @@ struct ReportReceipt {
     std::string credential;
     int64_t submitted_at = 0;
     int retry_after_seconds = 0; // when the service refused with a limit and said when to try again
+    bool dump_expected = false;  // the service took the announced dump and waits for its bytes
+    DumpUpload dump = DumpUpload::kNotRequested;
 };
 
 // "Try again in about 5 minutes." for what the service asked; empty for 0.
 std::string RetryAfterText(int seconds);
 
+// 64 random lowercase hex digits; empty when the system has no random source. One per draft: a request repeated with it,
+// after an answer that never arrived, returns the report already filed instead of a second one.
+std::string NewSubmissionKey();
+
 // Sends the report and closes. Nothing is sent, and no connection opened, without a configured service.
-ReportReceipt FileReport(const ServiceConfig& config, const IncidentPackage& package);
+ReportReceipt FileReport(const ServiceConfig& config, const IncidentPackage& package, std::string_view submission = {});
+
+inline constexpr size_t kDumpChunkBytes = 1024 * 1024;
+inline constexpr int kDumpUploadAttempts = 3;
+
+// Sends the dump of a filed report in chunks read from the file, from the first byte the service does not hold yet. The
+// receipt is the only proof sent, so it never files a second report. Blocks.
+DumpUpload UploadCrashDump(const ServiceConfig& config, const std::string& ticket, const std::string& receipt, const CrashDump& dump);
 
 struct StatusCheck {
     bool reached = false;

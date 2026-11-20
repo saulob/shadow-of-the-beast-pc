@@ -1,15 +1,21 @@
 #include "incident_client.h"
 
 #include <algorithm>
+#include <fstream>
+#include <system_error>
 
+#include "crypto.h"
 #include "json_lite.h"
 
 namespace Sotb {
 namespace {
+namespace fs = std::filesystem;
 
 constexpr char kReportsPath[] = "/v1/reports";
 constexpr char kStatusPath[] = "/v1/reports/status";
 constexpr char kReadPath[] = "/v1/reports/read";
+constexpr char kDumpPath[] = "/v1/reports/dump";
+constexpr char kDumpChunkPath[] = "/v1/reports/dump/chunk";
 
 void Say(const ServiceConfig& config, const std::string& line) {
     if (config.log) config.log(line);
@@ -22,8 +28,26 @@ std::string TrimmedAscii(std::string_view text) {
     return std::string(text);
 }
 
-std::string ClaimJson(const TrackedReport& report) {
-    return "{\"ticket\":" + json::Quote(report.ticket) + ",\"receipt\":" + json::Quote(report.receipt) + "}";
+std::string ClaimJson(const std::string& ticket, const std::string& receipt) {
+    return "{\"ticket\":" + json::Quote(ticket) + ",\"receipt\":" + json::Quote(receipt) + "}";
+}
+
+std::string ClaimJson(const TrackedReport& report) { return ClaimJson(report.ticket, report.receipt); }
+
+std::string Base64(const char* data, size_t size) {
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string out;
+    out.reserve((size + 2) / 3 * 4);
+    for (size_t at = 0; at < size; at += 3) {
+        const size_t left = size - at;
+        const uint32_t word = uint32_t(uint8_t(data[at])) << 16 | (left > 1 ? uint32_t(uint8_t(data[at + 1])) << 8 : 0) |
+                              (left > 2 ? uint32_t(uint8_t(data[at + 2])) : 0);
+        out += kAlphabet[(word >> 18) & 63];
+        out += kAlphabet[(word >> 12) & 63];
+        out += left > 1 ? kAlphabet[(word >> 6) & 63] : '=';
+        out += left > 2 ? kAlphabet[word & 63] : '=';
+    }
+    return out;
 }
 
 struct Answer {
@@ -68,6 +92,85 @@ Answer Ask(const ServiceConfig& config, const char* path, const std::string& bod
 }
 
 bool Ok(const Answer& answer) { return answer.failure == ReportOutcome::kSent; }
+
+enum class DumpStep { kDone, kRetry, kStop };
+
+// A connection that failed or a service that faltered may do better on the next try; a refusal or a limit will not.
+DumpStep AfterFailure(const Answer& answer) {
+    const bool transient = answer.failure == ReportOutcome::kUnreachable || answer.failure == ReportOutcome::kTimedOut ||
+                           (answer.failure == ReportOutcome::kServiceError && (answer.status == 0 || answer.status >= 500));
+    return transient ? DumpStep::kRetry : DumpStep::kStop;
+}
+
+struct DumpProgress {
+    bool valid = false;
+    uint64_t stored = 0;
+    uint64_t bytes = 0;
+    bool complete = false;
+};
+
+DumpProgress ProgressOf(const Answer& answer, uint64_t expected_bytes) {
+    DumpProgress progress;
+    if (!answer.body || !answer.body->IsObject()) return progress;
+    const json::Value* stored = answer.body->Find("stored");
+    const json::Value* bytes = answer.body->Find("bytes");
+    if (!stored || !bytes || !stored->IsNumber() || !bytes->IsNumber() || stored->number < 0 || bytes->number < 0) return progress;
+    progress.stored = uint64_t(stored->number);
+    progress.bytes = uint64_t(bytes->number);
+    progress.complete = answer.body->BoolOr("complete");
+    progress.valid = progress.bytes == expected_bytes && progress.stored <= expected_bytes;
+    return progress;
+}
+
+HttpLimits ChunkLimits(HttpLimits limits) {
+    limits.send_ms = std::max(limits.send_ms, 60000);
+    limits.receive_ms = std::max(limits.receive_ms, 30000);
+    limits.total_ms = std::max(limits.total_ms, 90000);
+    return limits;
+}
+
+// A chunk the service already holds is answered with where its copy ends, and the upload continues from there.
+DumpStep SendDumpOnce(const ServiceConfig& config, const std::string& ticket, const std::string& receipt, const CrashDump& dump) {
+    std::error_code ec;
+    if (fs::file_size(dump.path, ec) != dump.bytes || ec) return DumpStep::kStop;
+    const Answer begun = Ask(config, kDumpPath, ClaimJson(ticket, receipt), "crash dump");
+    if (!Ok(begun)) return AfterFailure(begun);
+    const DumpProgress start = ProgressOf(begun, dump.bytes);
+    if (!start.valid) return DumpStep::kStop;
+    if (start.complete) return DumpStep::kDone;
+
+    std::ifstream in(dump.path, std::ios::binary);
+    if (!in) return DumpStep::kStop;
+    ServiceConfig chunks = config;
+    chunks.limits = ChunkLimits(config.limits);
+    std::vector<char> buffer(kDumpChunkBytes);
+    uint64_t offset = start.stored;
+    const uint64_t most_requests = dump.bytes / kDumpChunkBytes + 8;
+    for (uint64_t request = 0; request < most_requests; ++request) {
+        if (offset >= dump.bytes) return DumpStep::kStop;
+        const size_t want = size_t(std::min<uint64_t>(kDumpChunkBytes, dump.bytes - offset));
+        in.clear();
+        in.seekg(std::streamoff(offset));
+        in.read(buffer.data(), std::streamsize(want));
+        if (size_t(in.gcount()) != want) return DumpStep::kStop;
+        const std::string body = "{\"ticket\":" + json::Quote(ticket) + ",\"receipt\":" + json::Quote(receipt) +
+                                 ",\"offset\":" + std::to_string(offset) + ",\"data\":\"" + Base64(buffer.data(), want) + "\"}";
+        const Answer answer = Ask(chunks, kDumpChunkPath, body, "crash dump chunk");
+        const DumpProgress now = ProgressOf(answer, dump.bytes);
+        if (answer.status == 409 && now.valid) {
+            if (now.complete) return DumpStep::kDone;
+            if (now.stored == offset) return DumpStep::kStop;
+            offset = now.stored;
+            continue;
+        }
+        if (!Ok(answer)) return AfterFailure(answer);
+        if (!now.valid || now.stored <= offset) return DumpStep::kStop;
+        if (now.complete) return DumpStep::kDone;
+        if (now.stored == dump.bytes) return DumpStep::kStop;
+        offset = now.stored;
+    }
+    return DumpStep::kRetry;
+}
 
 } // namespace
 
@@ -158,9 +261,35 @@ std::string RetryAfterText(int seconds) {
     return "Try again in about " + std::to_string((minutes + 30) / 60) + " hours.";
 }
 
-ReportReceipt FileReport(const ServiceConfig& config, const IncidentPackage& package) {
+std::string NewSubmissionKey() {
+    uint8_t bytes[32];
+    if (!crypto::RandomBytes(bytes, sizeof(bytes))) return {};
+    static constexpr char kDigits[] = "0123456789abcdef";
+    std::string key;
+    for (const uint8_t byte : bytes) {
+        key += kDigits[byte >> 4];
+        key += kDigits[byte & 15];
+    }
+    return key;
+}
+
+DumpUpload UploadCrashDump(const ServiceConfig& config, const std::string& ticket, const std::string& receipt, const CrashDump& dump) {
+    if (!IsTicket(ticket) || !IsReceipt(receipt) || dump.sha256.empty()) return DumpUpload::kFailed;
+    for (int attempt = 0; attempt < kDumpUploadAttempts; ++attempt) {
+        const DumpStep step = SendDumpOnce(config, ticket, receipt, dump);
+        if (step == DumpStep::kDone) {
+            Say(config, "Bug report: crash dump " + dump.name + " uploaded for " + ticket);
+            return DumpUpload::kUploaded;
+        }
+        if (step == DumpStep::kStop) break;
+    }
+    Say(config, "Bug report: crash dump " + dump.name + " was not uploaded for " + ticket);
+    return DumpUpload::kFailed;
+}
+
+ReportReceipt FileReport(const ServiceConfig& config, const IncidentPackage& package, std::string_view submission) {
     ReportReceipt receipt;
-    const Answer answer = Ask(config, kReportsPath, IncidentRequestJson(package), "send");
+    const Answer answer = Ask(config, kReportsPath, IncidentRequestJson(package, submission), "send");
     if (!Ok(answer)) {
         receipt.outcome = answer.failure;
         receipt.retry_after_seconds = answer.retry_after_seconds;
@@ -177,6 +306,8 @@ ReportReceipt FileReport(const ServiceConfig& config, const IncidentPackage& pac
     receipt.ticket = ticket;
     receipt.credential = credential;
     receipt.submitted_at = answer.body->NumberOr("submitted_at");
+    receipt.dump_expected = package.crash_dump.has_value() && answer.body->StringOr("dump") == "expected";
+    if (package.crash_dump_requested && !package.crash_dump) receipt.dump = DumpUpload::kNotAttached;
     return receipt;
 }
 

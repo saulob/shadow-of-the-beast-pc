@@ -41,6 +41,13 @@ void runtime_log_mark_crash(void);
 
 /* Records the file this run writes; called by runtime_log_start. */
 void runtime_log_set_session_path(const char *path);
+const char *runtime_log_session_path(void);
+
+/* N of shadow_of_the_beast_N.log or shadow_of_the_beast_N.dmp (up to 10 digits), else 0. */
+unsigned runtime_log_session_number(const char *name);
+
+/* The crash dump of a session: its log's path with .dmp for .log. 0 without a .log suffix or when it does not fit. */
+int runtime_log_dump_path(const char *log_path, char *out, size_t size);
 
 /* Idempotent: discards this run's log when the decision above says so. Registered by
  * runtime_log_install_cleanup for normal exits and called explicitly before hard exits. */

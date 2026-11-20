@@ -128,6 +128,22 @@ target_compile_definitions(sotb-bug-report-tests PRIVATE SOTB_SOURCE_DIR="${PROJ
 set_target_properties(sotb-bug-report-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-bug-report-tests PRIVATE -Wall -Wextra)
 
+# Crash reports without a window or a network: dump pairing and checks, the resumable upload against a stand-in service,
+# device-lost sessions from the monitor's own lines, and the startup stage.
+add_executable(sotb-crash-dump-correlation-tests EXCLUDE_FROM_ALL ../tests/crash_dump_correlation_tests.cpp ../src/crash_dump.c
+    ../src/runtime_log.c ../src/runtime_session_log.c)
+add_executable(sotb-crash-dump-upload-tests EXCLUDE_FROM_ALL ../tests/crash_dump_upload_tests.cpp)
+add_executable(sotb-device-lost-reporting-tests EXCLUDE_FROM_ALL ../tests/device_lost_reporting_tests.cpp)
+target_include_directories(sotb-device-lost-reporting-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shadps4)
+add_executable(sotb-startup-diagnostics-tests EXCLUDE_FROM_ALL ../tests/startup_diagnostics_tests.cpp ../src/module_history.c)
+foreach (test IN ITEMS sotb-crash-dump-correlation-tests sotb-crash-dump-upload-tests sotb-device-lost-reporting-tests sotb-startup-diagnostics-tests)
+    target_link_libraries(${test} PRIVATE sotb_launcher_core)
+    target_include_directories(${test} PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+    target_compile_definitions(${test} PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}" _WIN32_WINNT=0x0A00)
+    set_target_properties(${test} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(${test} PRIVATE -Wall -Wextra)
+endforeach()
+
 add_executable(sotb-launcher-ui-tests EXCLUDE_FROM_ALL ../tests/launcher_ui_tests.cpp ${TRG_DIR}/src/launcher.cpp
     ${TRG_DIR}/src/headers.cpp ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
     ${IMGUI_DIR}/imgui_widgets.cpp)

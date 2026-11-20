@@ -16,3 +16,8 @@ void sotb_startup_phase(const char *phase) {
 const char *sotb_startup_phase_current(void) {
     return __atomic_load_n(&current_phase, __ATOMIC_ACQUIRE);
 }
+
+void sotb_startup_phase_once(int *reached, const char *phase) {
+    if (!reached || __atomic_load_n(reached, __ATOMIC_RELAXED) || __atomic_exchange_n(reached, 1, __ATOMIC_ACQ_REL)) return;
+    sotb_startup_phase(phase);
+}

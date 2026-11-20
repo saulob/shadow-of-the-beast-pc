@@ -1,7 +1,7 @@
 // The public report API, plain HTTPS and JSON. The launcher opens one short request when the player sends a report or
 // asks about one; nothing else reaches the service. No Cloudflare import, so Node runs it in the tests.
 import { ipGroup } from './limits.js';
-import { REPORT, readClaims, readReadClaim, readReport } from './reports.js';
+import { REPORT, readClaims, readDumpChunk, readReadClaim, readReport } from './reports.js';
 import { PROTOCOL, SERVICE, WORKER_BUILD } from './service.js';
 
 export const API_HEADERS = {
@@ -13,11 +13,13 @@ export const API_HEADERS = {
 
 const RETRY_AFTER_SECONDS = '60';
 const MAX_LOOKUP_BODY_BYTES = 8 * 1024;
+const MAX_CHUNK_BODY_BYTES = Math.ceil(REPORT.dumpChunkBytes / 3) * 4 + 1024;
 
 const STATUS_OF_CODE = {
   ok: 200,
   bad_request: 400,
   not_found: 404,
+  conflict: 409,
   too_large: 413,
   unsupported_media_type: 415,
   hourly_limit: 429,
@@ -76,22 +78,28 @@ export async function readBounded(request, maxBytes) {
 
 const isJson = (request) => /^application\/json(\s*;|$)/i.test(request.headers.get('Content-Type') ?? '');
 
+// A dump arrives in several requests in a row, so its requests are counted apart from reports and lookups at the edge.
 const ROUTES = {
-  '/v1/reports': { maxBytes: REPORT.bodyBytes, kind: 'submit' },
-  '/v1/reports/status': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'status' },
-  '/v1/reports/read': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'read' },
+  '/v1/reports': { maxBytes: REPORT.bodyBytes, kind: 'submit', edge: 'report' },
+  '/v1/reports/status': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'status', edge: 'report' },
+  '/v1/reports/read': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'read', edge: 'report' },
+  '/v1/reports/dump': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'dump', edge: 'dump' },
+  '/v1/reports/dump/chunk': { maxBytes: MAX_CHUNK_BODY_BYTES, kind: 'chunk', edge: 'dump' },
 };
 
-async function edgeAllows(limiter, address) {
+async function edgeAllows(limiter, key) {
   if (!limiter) return true;
   try {
-    return (await limiter.limit({ key: `report:${address}` })).success !== false;
+    return (await limiter.limit({ key })).success !== false;
   } catch {
     return true;
   }
 }
 
-// desk: { submit(report, address), statuses(claims, address), read(claim, address) } as promises.
+const dumpProgress = (answer) => ({ stored: answer.stored, bytes: answer.bytes, complete: answer.complete });
+
+// desk: { submit(report, address, dump, submission), statuses(claims, address), read(claim, address),
+// dumpStatus(claim, address), dumpChunk(claim, offset, bytes, address) } as promises.
 export async function handlePublic(request, env, desk, log = () => {}) {
   const url = new URL(request.url);
   if (url.pathname === '/' || url.pathname === '/health') {
@@ -104,7 +112,7 @@ export async function handlePublic(request, env, desk, log = () => {}) {
   if (request.headers.has('Origin')) return failure('origin_not_allowed');
   if (!isJson(request)) return failure('unsupported_media_type');
   const address = clientAddress(request);
-  if (!(await edgeAllows(env.REPORT_LIMITER, address))) return failure('limit');
+  if (!(await edgeAllows(env.REPORT_LIMITER, `${route.edge}:${address}`))) return failure('limit');
   const body = await readBounded(request, route.maxBytes);
   if (body.code) return failure(body.code, body.detail);
   let parsed;
@@ -115,11 +123,24 @@ export async function handlePublic(request, env, desk, log = () => {}) {
   }
   try {
     if (route.kind === 'submit') {
-      const { report, code, detail } = readReport(parsed);
+      const { report, dump, submission, code, detail } = readReport(parsed);
       if (!report) return failure(code, detail);
-      const filed = await desk.submit(report, address);
+      const filed = await desk.submit(report, address, dump, submission);
       if (filed.code !== 'ok') return failure(filed.code);
-      return reply({ ticket: filed.ticket, receipt: filed.receipt, submitted_at: filed.submitted_at }, 201);
+      return reply({
+        ticket: filed.ticket, receipt: filed.receipt, submitted_at: filed.submitted_at,
+        ...(filed.dump && { dump: 'expected', dump_chunk_bytes: REPORT.dumpChunkBytes }),
+      }, filed.repeated ? 200 : 201);
+    }
+    if (route.kind === 'dump' || route.kind === 'chunk') {
+      const chunk = route.kind === 'chunk' ? readDumpChunk(parsed) : null;
+      const claim = chunk ? chunk.claim : readReadClaim(parsed);
+      if (chunk?.code) return failure(chunk.code, chunk.detail);
+      if (!claim) return failure('bad_request', 'receipt');
+      const answer = chunk ? await desk.dumpChunk(claim, chunk.offset, chunk.bytes, address) : await desk.dumpStatus(claim, address);
+      if (answer.code === 'ok') return reply(dumpProgress(answer));
+      if (answer.code === 'conflict') return reply({ error: 'offset', ...dumpProgress(answer) }, 409);
+      return failure(answer.code, answer.detail);
     }
     if (route.kind === 'status') {
       const claims = readClaims(parsed);

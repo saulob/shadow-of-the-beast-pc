@@ -13,6 +13,9 @@
   "gpu": "NVIDIA GeForce RTX 4070",
   "driver": "NVIDIA 621.1.0.0, Vulkan 1.4.357",
   "render_resolution": "1440p 2560x1440",
+  "session_end": "crash",
+  "session_detail": "FATAL exception 0xc0000005 at 0000000801234567 (guest offset 0x1234567) thread 4242",
+  "session_stage": "first frame presented",
   "log_file": "shadow_of_the_beast_026.log",
   "log_clipped": "no",
   "log_text": "Renderer: selected vulkan, active Vulkan\nGPU: selected NVIDIA GeForce RTX 4070\nRuntime: guest thread 'main' started\n"

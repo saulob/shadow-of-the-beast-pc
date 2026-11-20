@@ -15,8 +15,9 @@ export class BugReportDesk extends DurableObject {
         sql: {
           all: (query, ...args) => sql.exec(query, ...args).toArray(),
           get: (query, ...args) => sql.exec(query, ...args).toArray()[0],
+          // Dump chunks are bytes; the runtime binds an ArrayBuffer, not a view.
           run: (query, ...args) => {
-            sql.exec(query, ...args);
+            sql.exec(query, ...args.map((arg) => (arg instanceof Uint8Array ? arg.buffer.slice(arg.byteOffset, arg.byteOffset + arg.byteLength) : arg)));
           },
           transaction: (work) => ctx.storage.transactionSync(work),
         },
@@ -27,8 +28,20 @@ export class BugReportDesk extends DurableObject {
     });
   }
 
-  submit(report, address) {
-    return this.service.submit(report, address);
+  submit(report, address, dump, submission) {
+    return this.service.submit(report, address, dump, submission);
+  }
+
+  dumpStatus(claim, address) {
+    return this.service.dumpStatus(claim, address);
+  }
+
+  dumpChunk(claim, offset, bytes, address) {
+    return this.service.dumpChunk(claim, offset, bytes, address);
+  }
+
+  dump(ticket) {
+    return this.service.dump(ticket);
   }
 
   statuses(claims, address) {

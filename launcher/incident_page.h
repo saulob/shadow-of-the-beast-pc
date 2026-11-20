@@ -43,20 +43,31 @@ private:
     // Shared with the sending thread, which may outlive the launcher window.
     struct Delivery {
         std::atomic<bool> done{false};
+        std::atomic<bool> uploading_dump{false};
         ReportReceipt receipt;
         std::shared_ptr<const IncidentPackage> package;
     };
+    struct DumpRetry {
+        std::atomic<bool> done{false};
+        DumpUpload outcome = DumpUpload::kFailed;
+    };
 
     void FindLogs();
+    void SelectLog(size_t index);
+    void DraftChanged();
     void ForgetPreview();
     bool AcceptDraft();
     void CollectDelivery();
+    void CollectDumpRetry();
+    void RetryDump();
     std::shared_ptr<const IncidentPackage> BuildPackage(const ReportFacts& facts);
     void TogglePreview(const ReportFacts& facts);
     void Send(const ReportFacts& facts);
     void Save(const ReportFacts& facts);
     void DrawDescription(trg::Ui& ui, bool sending);
     void DrawLogs(trg::Ui& ui, bool sending);
+    void DrawCrashDump(trg::Ui& ui, bool sending);
+    void DrawDumpResult(trg::Ui& ui);
     void DrawPreview(trg::Ui& ui, const ReportFacts& facts, bool sending);
     void DrawSend(trg::Ui& ui, const ReportFacts& facts, bool sending);
     void DrawOtherOptions(trg::Ui& ui, const ReportFacts& facts, bool sending);
@@ -80,6 +91,10 @@ private:
     std::string preview_text_;
     bool log_failed_ = false;
     std::shared_ptr<Delivery> delivery_;
+    std::shared_ptr<DumpRetry> dump_retry_;
+    bool attach_crash_dump_ = false;
+    std::string submission_; // one per draft, so a repeated send never files a second report
+    std::optional<CrashDump> sent_dump_;
     std::optional<ReportReceipt> result_;
     bool sent_report_remembered_ = true;
     std::filesystem::path saved_report_;

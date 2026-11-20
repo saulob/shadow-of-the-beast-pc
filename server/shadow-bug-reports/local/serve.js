@@ -12,9 +12,12 @@ const port = Number(process.env.PORT ?? 8787);
 const log = (text) => console.log(text);
 const { service } = localService({ db: process.env.SOTB_LOCAL_DB ?? ':memory:', log });
 const desk = {
-  submit: async (report, address) => service.submit(report, address),
+  submit: async (report, address, dump, submission) => service.submit(report, address, dump, submission),
   statuses: async (claims, address) => service.statuses(claims, address),
   read: async (claim, address) => service.read(claim, address),
+  dumpStatus: async (claim, address) => service.dumpStatus(claim, address),
+  dumpChunk: async (claim, offset, bytes, address) => service.dumpChunk(claim, offset, bytes, address),
+  dump: async (ticket) => service.dump(ticket),
   list: async () => service.list(),
   get: async (ticket) => service.get(ticket),
   setStatus: async (ticket, change) => service.setStatus(ticket, change),

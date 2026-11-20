@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, crash dump correlation and upload, device-lost reporting, startup diagnostics, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
@@ -10,7 +10,9 @@
   reports one, previous group) is printed at each step start and refreshed on a timer: one carriage-return line with a | / - \
   spinner every 500 ms in a terminal, a RUNNING text line every 15 s when output is redirected. A timing table and the slowest groups follow the last step.
 
-  Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
+  Steps: the launcher's Bug Report test (builds the request the Worker must accept), the crash dump correlation test, the
+  crash dump upload test against a stand-in service (builds the dump request and chunks the Worker must accept), the
+  device-lost reporting test, the startup diagnostics test, the Worker's tests in Node on a
   disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the pipeline warm-up test, the audio backlog recovery test, the controller rebinding test, the controller prompt test, the GPU command snapshot test, the Vulkan recording and synchronization test, the Vulkan device lost test, the GPU crash timeline test, the runtime thread cancellation test, the save mount diagnostics test, the GPU memory fallback test, the swapchain state test, the frame pacing and high frame rate test, the presentation hardening test and the shader interface hardening test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
@@ -25,6 +27,7 @@ param([int]$TimeoutSeconds = 300)
 $root = $script:RepoRoot
 $buildDir = Join-Path $root 'build\cmake\clang64'
 $requestFile = Join-Path $buildDir 'bin\bug-report-request.json'
+$dumpContractFiles = @('bug-report-dump-request.json', 'bug-report-dump-upload.json') | ForEach-Object { Join-Path $buildDir "bin\$_" }
 $workerDir = Join-Path $root 'server\shadow-bug-reports'
 
 function Result([string]$State, [string]$Reason = '') { [pscustomobject]@{ State = $State; Reason = $Reason } }
@@ -96,6 +99,14 @@ function Invoke-FocusedTest([string]$target, [string]$show = '') {
 
 function Invoke-LauncherBugReport { Invoke-FocusedTest 'sotb-bug-report-tests' }
 
+function Invoke-CrashDumpCorrelation { Invoke-FocusedTest 'sotb-crash-dump-correlation-tests' '^(  symbolic link|crash dump correlation tests)' }
+
+function Invoke-CrashDumpUpload { Invoke-FocusedTest 'sotb-crash-dump-upload-tests' '^crash dump upload tests' }
+
+function Invoke-DeviceLostReporting { Invoke-FocusedTest 'sotb-device-lost-reporting-tests' '^device lost reporting tests' }
+
+function Invoke-StartupDiagnostics { Invoke-FocusedTest 'sotb-startup-diagnostics-tests' '^startup diagnostics tests' }
+
 function Invoke-UpdateRules { Invoke-FocusedTest 'sotb-update-tests' }
 
 function Invoke-UpdateNetwork { Invoke-FocusedTest 'sotb-update-network-tests' }
@@ -159,6 +170,8 @@ function Invoke-WorkerService {
         Remove-Item Env:\SOTB_CPP_REQUEST -ErrorAction SilentlyContinue
     }
     $summary = @($run.Lines | Where-Object { $_ -match '^# (pass|fail|skipped) ' })
+    $passed = $summary | Where-Object { $_ -match '^# pass (\d+)' } | Select-Object -First 1
+    if ($passed -and $passed -match '^# pass (\d+)') { $script:Progress.Checks = [long]$Matches[1] }
     if ($run.Code -ne 0) {
         $run.Lines | Where-Object { $_ -match '^\s*not ok' } | Select-Object -First 12 | ForEach-Object { Write-Host "    $_" }
         return Result 'FAIL' "node exited with $($run.Code)"
@@ -192,7 +205,11 @@ function Invoke-ProgressReporter {
 
 $steps = @(
     @{ Name = 'bug-report-client'; Title = 'Launcher: Bug Report client (no window, no network: stand-in transport, synthetic logs)'; Block = { Invoke-LauncherBugReport } },
-    @{ Name = 'bug-report-service'; Title = 'Launcher: Bug Report service (Node, disposable database): submission, receipts, limits, retention, admin, dashboard, and the launcher''s own request'; Block = { Invoke-WorkerService } },
+    @{ Name = 'crash-dump-correlation'; Title = 'Crash dump correlation: dump numbers stay taken, exact session name and folder, named by its own log, written with it, size, MDMP signature, directories and links refused, local retention of the newest dumps, crash, device lost and normal sessions told apart, no local path sent (synthetic logs and dumps, no real crash)'; Block = { Invoke-CrashDumpCorrelation } },
+    @{ Name = 'crash-dump-upload'; Title = 'Crash dump upload: Crash detected and the optional attachment, report with and without a dump, chunks resumed from what the service holds, lost answers and already-stored chunks, refusals stop, failures keep the report, retry under the same Report ID, repeated send with the submission key files one report, no local path sent (stand-in service, no network)'; Block = { Invoke-CrashDumpUpload } },
+    @{ Name = 'device-lost-reporting'; Title = 'Device-lost reporting: the device-lost owner''s own lines classify the session (exit code 25 path), reason with operation, result, stage, GPU, driver and bounded fault text, timeline left in the log, missing fault data, first fault owns the session, last startup stage kept, with and without a dump (no Vulkan device)'; Block = { Invoke-DeviceLostReporting } },
+    @{ Name = 'startup-diagnostics'; Title = 'Startup diagnostics: one current stage printed once per change, GPU initialization and first frame presented stages, no per-frame growth, empty stages ignored, loader stage order unchanged, the stage a failure happened in reaches the report, module history keeps the stage (no game, no window)'; Block = { Invoke-StartupDiagnostics } },
+    @{ Name = 'bug-report-service'; Title = 'Launcher: Bug Report service (Node, disposable database): submission, receipts, limits, retention, admin, dashboard, crash dump announcement, resumable chunked upload, completion checks, minidump download and retention, submission key, and the launcher''s own report and dump requests'; Block = { Invoke-WorkerService } },
     @{ Name = 'worker-script'; Title = 'Launcher: worker.ps1 stand-in npx: placeholders, missing files, dry run, failures; nothing deployed'; Block = { Invoke-WorkerScript } },
     @{ Name = 'updater-rules'; Title = 'Updater: versions, release JSON, SHA-256, ZIP safety, staging, manifest, protected data, install, rollback and release contract (no network)'; Block = { Invoke-UpdateRules } },
     @{ Name = 'updater-network'; Title = 'Updater: loopback HTTP server only (no release yet, 5xx, dropped connection, stall, timeout, redirects, retries, production address); never contacts GitHub'; Block = { Invoke-UpdateNetwork } },
@@ -227,6 +244,7 @@ $tc = Resolve-Toolchain 'auto'
 $env:PATH = "$($tc.Bin);$env:PATH"
 if (-not (Test-Path -LiteralPath (Join-Path $buildDir 'build.ninja'))) { Stop-Tool 'Run tools\build.ps1 once first: the tests reuse its build folder.' }
 Remove-Item -LiteralPath $requestFile -ErrorAction SilentlyContinue
+$dumpContractFiles | ForEach-Object { Remove-Item -LiteralPath $_ -ErrorAction SilentlyContinue }
 
 $script:Clock = [System.Diagnostics.Stopwatch]::StartNew()
 $interactive = -not [Console]::IsOutputRedirected -and $Host.Name -eq 'ConsoleHost'

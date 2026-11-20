@@ -21,12 +21,39 @@ inline constexpr size_t kMostGameLogs = 5;
 inline constexpr size_t kFewestDescriptionCharacters = 10;
 inline constexpr size_t kMostDescriptionCharacters = 500;
 inline constexpr size_t kMostLogBytes = 64 * 1024;
+// A dump holds thread stacks and module lists, no heap (src/crash_dump.c); server/shadow-bug-reports refuses more.
+inline constexpr uintmax_t kMostDumpBytes = 8 * 1024 * 1024;
+// A minidump header and its stream directory alone are smaller; any dump the runtime writes is far larger.
+inline constexpr uintmax_t kFewestDumpBytes = 1024;
+// The runtime writes the dump, then names it in its log: both files end within this of each other.
+inline constexpr int kDumpPairingSeconds = 120;
+inline constexpr size_t kMostSessionDetailCharacters = 400;
 
 // How far a session got: kGameStarted left the launcher for the game, kGameplay reached the game's own code.
 enum class LogActivity { kLauncher, kGameStarted, kGameplay };
 
 // kNone is a session that started the game without reaching its own code.
 enum class LogRole { kNone, kCurrentLauncher, kCurrentGameplay, kLastGameplay, kOtherGameplay, kOtherLauncher };
+
+// How a finished session ended, from the lines its own exit path wrote. kUnknown: no such line (still running, killed,
+// power lost).
+enum class SessionEnd { kUnknown, kClean, kCrash, kDeviceLost, kStopped, kStartupFailure, kUnsupportedBuild };
+
+struct SessionOutcome {
+    SessionEnd end = SessionEnd::kUnknown;
+    std::string detail; // the line that names the failure, as written
+    std::string stage;  // the last startup stage the log names
+};
+
+// kNone: the dump can be sent. kMissing and kNotThisLog: no dump of this session exists.
+enum class DumpProblem { kNone, kMissing, kNotThisLog, kNotAFile, kEmpty, kTooSmall, kTooLarge, kNotADump, kUnreadable, kChanged };
+
+struct CrashDump {
+    std::filesystem::path path;
+    std::string name;
+    uintmax_t bytes = 0;
+    std::string sha256; // set once the dump is chosen for a report
+};
 
 struct GameLog {
     std::filesystem::path path;
@@ -35,12 +62,40 @@ struct GameLog {
     uintmax_t bytes = 0;
     LogActivity activity = LogActivity::kLauncher;
     LogRole role = LogRole::kNone;
+    SessionOutcome outcome;
+    std::optional<CrashDump> dump; // this session's own dump, sendable or not
+    DumpProblem dump_problem = DumpProblem::kMissing;
+
+    bool Crashed() const { return outcome.end == SessionEnd::kCrash || dump.has_value(); }
+    bool CanAttachDump() const { return dump.has_value() && dump_problem == DumpProblem::kNone; }
 };
 
 // The logs in `folder`: `running_log` (this launcher's own session) first, then newest first. Left out: other files and
-// sessions that closed in the launcher without starting the game.
+// sessions that closed in the launcher without starting the game. Finished sessions carry their outcome and dump.
 std::vector<GameLog> FindGameLogs(const std::filesystem::path& folder, const std::filesystem::path& running_log,
                                   size_t most = kMostGameLogs);
+
+// The outcome of a session from the start and the end of its log (the whole log when it is short).
+SessionOutcome ReadSessionOutcome(std::string_view log_head, std::string_view log_tail);
+
+// "crash", "device_lost", ...: the value the service stores.
+const char* SessionEndKey(SessionEnd end);
+// English, for Tr; nullptr when the session ended normally or its end is unknown.
+const char* SessionEndText(const GameLog& log);
+
+// "shadow_of_the_beast_012.dmp" for "shadow_of_the_beast_012.log"; empty for any other name.
+std::string DumpNameOf(std::string_view log_name);
+
+// Whether `dump` is this session's own dump and can be sent: exactly the log's name with .dmp, in the same folder, a
+// regular file that the log names as written, of a minidump's size and signature, written within kDumpPairingSeconds of the
+// log's last line. A dump of another run, a link and a directory are never sent.
+DumpProblem CheckCrashDump(const GameLog& log, const std::filesystem::path& dump);
+
+// English, for Tr: why the dump of a crashed session cannot be sent; nullptr for kNone.
+const char* DumpProblemText(DumpProblem problem);
+
+// The default of the "Attach crash dump" box for a selected log.
+bool DefaultAttachCrashDump(const GameLog& log);
 
 // The log a report is most likely about: the newest that started the game, not this launcher's own session.
 size_t DefaultGameLog(const std::vector<GameLog>& logs);
@@ -100,20 +155,26 @@ struct IncidentField {
 
 struct IncidentPackage {
     std::vector<IncidentField> fields;
+    // Announced in the request and sent as a file after it, when the player asked for it and it passed the check.
+    std::optional<CrashDump> crash_dump;
+    bool crash_dump_requested = false;
+    DumpProblem crash_dump_problem = DumpProblem::kMissing; // why a requested dump is not attached
     const std::string& Value(std::string_view key) const;
 };
 
 // The end of `text`, at most `most` bytes, starting on a whole line.
 std::string LastBytes(std::string_view text, size_t most);
 
-// Scrubs the log's text and bounds it. nullopt when the log cannot be read or holds nothing.
+// Scrubs the log's text and bounds it. nullopt when the log cannot be read or holds nothing. With `attach_crash_dump` the
+// session's own dump goes along when it passes CheckCrashDump; only its name, size and SHA-256 are kept, never its bytes.
 std::optional<IncidentPackage> BuildIncidentPackage(std::string_view description, const GameLog& log, const ReportFacts& facts,
-                                                    const PrivateFacts& private_facts);
+                                                    const PrivateFacts& private_facts, bool attach_crash_dump = false);
 
 std::string IncidentPreviewText(const IncidentPackage& package);
 
-// The request body for the report service: every field of the package under its key, in the package's order.
-std::string IncidentRequestJson(const IncidentPackage& package);
+// The request body for the report service: every field of the package under its key, in the package's order, then the
+// announced dump and, when given, the submission key that makes a repeated request return the same report.
+std::string IncidentRequestJson(const IncidentPackage& package, std::string_view submission = {});
 
 // The stored report the service returns to its owner, as the same fields a preview shows.
 IncidentPackage SentReportOf(const json::Value& report);

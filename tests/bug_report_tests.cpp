@@ -102,7 +102,7 @@ fs::path MakeLog(const fs::path& folder, int number, const std::string& text, in
 GameLog LogOf(const fs::path& file) {
     std::error_code ec;
     const uintmax_t size = fs::file_size(file, ec);
-    return {file, file.filename().string(), 0, ec ? 0 : size, LogActivity::kGameplay, LogRole::kNone};
+    return {file, file.filename().string(), 0, ec ? 0 : size, LogActivity::kGameplay, LogRole::kNone, {}, std::nullopt, DumpProblem::kMissing};
 }
 
 void TestJson() {
@@ -173,7 +173,13 @@ void TestDefaultEndpoint() {
     CHECK(preview_at != std::string::npos && send_at > preview_at);
     const std::string preview = page.substr(preview_at, send_at - preview_at);
     CHECK(!Has(preview, "FileReport") && !Has(preview, "std::thread") && !Has(preview, "delivery_"));
-    CHECK(Count(page, "std::thread") == 1 && !Has(page, "/health"));
+    // One thread sends the report (and its dump); the other only uploads the dump again, from Retry crash dump upload.
+    CHECK(Count(page, "std::thread") == 2 && !Has(page, "/health"));
+    const size_t retry_at = page.find("void IncidentPage::RetryDump()");
+    const size_t first_thread = page.find("std::thread");
+    const size_t second_thread = page.find("std::thread", first_thread + 1);
+    CHECK(retry_at != std::string::npos && retry_at < first_thread && first_thread < page.find("\n}\n", retry_at));
+    CHECK(send_at < second_thread && second_thread < page.find("\n}\n", send_at));
     CHECK(!Has(Source("launcher/incident_client.cpp"), "/health") && !Has(Source("launcher/my_reports_page.cpp"), "/health"));
 
     for (const char* name : {"launcher/incident_page.cpp", "launcher/incident_client.cpp", "launcher/incident_client.h", "launcher/game_profile.h",
@@ -326,6 +332,9 @@ void CheckAgainstServiceRules(const IncidentPackage& package) {
     CHECK(chars(package.Value("cpu")) <= 96 && chars(package.Value("renderer_selected")) <= 64);
     CHECK(chars(package.Value("renderer")) <= 64 && chars(package.Value("gpu")) <= 96 && chars(package.Value("driver")) <= 96);
     CHECK(chars(package.Value("render_resolution")) <= 64);
+    CHECK(matches(package.Value("session_end"), "unknown|clean|crash|device_lost|stopped|startup_failure|unsupported_build"));
+    CHECK(chars(package.Value("session_detail")) <= 400 && chars(package.Value("session_stage")) <= 64);
+    CHECK(clean(package.Value("session_detail")) && clean(package.Value("session_stage")));
     CHECK(matches(package.Value("log_file"), "shadow_of_the_beast_[0-9]{3,10}\\.log"));
     CHECK(package.Value("log_clipped") == "yes" || package.Value("log_clipped") == "no");
     CHECK(package.Value("log_text").size() <= kMostLogBytes && !package.Value("log_text").empty());
@@ -379,7 +388,7 @@ void TestReport(const fs::path& scratch) {
     for (const IncidentField& field : package.fields) ours.emplace_back(field.key);
     std::sort(theirs.begin(), theirs.end());
     std::sort(ours.begin(), ours.end());
-    CHECK(theirs == ours && theirs.size() == 17);
+    CHECK(theirs == ours && theirs.size() == 20);
 
     // The description is limited to 500 characters, the log to 64 KiB.
     const auto long_description = BuildIncidentPackage(std::string(900, 'x'), log, Report(), Facts());

@@ -97,7 +97,8 @@ test('a report keeps no address, token or identity, and its receipt only as a sa
   assert.ok(!stored.includes(filed.body.receipt));
   assert.deepEqual(env.store.all("SELECT name FROM pragma_table_info('reports')").map((r) => r.name).sort(),
     ['cpu', 'cusa', 'description', 'driver', 'eboot_sha256', 'game_build', 'game_version', 'gpu', 'launcher_version', 'log_clipped',
-      'log_file', 'log_text', 'ms', 'operating_system', 'region', 'render_resolution', 'renderer', 'renderer_selected', 'ticket']);
+      'log_file', 'log_text', 'ms', 'operating_system', 'region', 'render_resolution', 'renderer', 'renderer_selected', 'session_detail',
+      'session_end', 'session_stage', 'ticket']);
   const quota = env.rows('report_quota');
   assert.equal(quota.length, 1);
   assert.match(quota[0].address_key, /^[0-9a-f]{32}$/);

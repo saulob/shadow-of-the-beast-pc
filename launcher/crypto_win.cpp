@@ -34,6 +34,10 @@ bool HmacSha256(const uint8_t* key, size_t key_size, const uint8_t* data, size_t
                                      const_cast<PUCHAR>(data), ULONG(size), digest, 32));
 }
 
+bool RandomBytes(uint8_t* out, size_t size) {
+    return BCRYPT_SUCCESS(BCryptGenRandom(nullptr, out, ULONG(size), BCRYPT_USE_SYSTEM_PREFERRED_RNG));
+}
+
 struct Sha256Stream::Impl {
     BCRYPT_HASH_HANDLE hash = nullptr;
 };

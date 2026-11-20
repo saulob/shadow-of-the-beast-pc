@@ -6,6 +6,9 @@ export const PROTECTION = {
   lookupAll: { burst: 200, perSecond: 2 },
   statusAddress: { burst: 20, perSecond: 1 / 15 },
   readAddress: { burst: 10, perSecond: 1 / 30 },
+  // An 8 MiB dump is 8 chunks and a status request; three tries of it fit the burst.
+  dumpAll: { burst: 120, perSecond: 2 },
+  dumpAddress: { burst: 30, perSecond: 1 / 10 },
   adminFailures: { burst: 10, perSecond: 1 / 30 },
   trackedKeys: 4096,
 };

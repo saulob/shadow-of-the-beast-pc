@@ -31,22 +31,41 @@ else. Reports, statuses and receipt hashes live in its SQLite database.
 | Path | Method | Who | What |
 |---|---|---|---|
 | `/health` | GET | anyone | name, protocol and build; no counts |
-| `/v1/reports` | POST | launcher | file a report; answers `201 {ticket, receipt, submitted_at}` |
+| `/v1/reports` | POST | launcher | file a report; answers `201 {ticket, receipt, submitted_at}`, plus `dump: "expected"` when it announced a crash dump |
 | `/v1/reports/status` | POST | launcher | up to 30 `{ticket, receipt}` claims; answers the status of those that match |
 | `/v1/reports/read` | POST | launcher | `{ticket, receipt}`; answers the stored report to its owner |
+| `/v1/reports/dump` | POST | launcher | `{ticket, receipt}`; answers `{stored, bytes, complete}` for the report's announced dump |
+| `/v1/reports/dump/chunk` | POST | launcher | `{ticket, receipt, offset, data}`: up to 1 MiB of the dump in base64, exactly at `stored` |
 | `/admin` | GET | developer | the dashboard page (static; holds no data) |
-| `/admin/api/reports[/<ticket>[/log\|/status]]` | GET, POST, DELETE | developer | list, read, download the log, set the status, delete a report; Bearer token |
+| `/admin/api/reports[/<ticket>[/log\|/dump\|/status]]` | GET, POST, DELETE | developer | list, read, download the log or the minidump, set the status, delete a report; Bearer token |
 
 Requests are JSON over HTTPS (`Content-Type: application/json`). A request that carries an `Origin` header (a web page) is
 refused, there are no CORS headers, bodies are cut at 192 KiB while read, and fields are validated before the Durable
 Object is touched. A field the page could not have shown is refused, not dropped. Answers: `400 bad_request`,
-`403 origin_not_allowed`, `404 not_found`, `405`, `413 too_large`, `415 unsupported_media_type`,
-`429 hourly_limit | daily_limit | limit` (with `Retry-After`), `502 unavailable`. A stack trace is never returned.
+`403 origin_not_allowed`, `404 not_found`, `405`, `409 offset` (a dump chunk not at `stored`, with `{stored, bytes, complete}`),
+`413 too_large`, `415 unsupported_media_type`, `429 hourly_limit | daily_limit | limit` (with `Retry-After`), `502 unavailable`.
+A stack trace is never returned.
 
 A ticket is `SOB-` and six characters from a 32-letter alphabet; a receipt is 32 random bytes as 64 lowercase hex
 characters. The fields of a report are those of `READERS` in `src/reports.js`: description, launcher version, game build,
 region, game version, title id (CUSA), executable hash, operating system, CPU, selected and active renderer, GPU, driver,
-render resolution, log file name (`shadow_of_the_beast_NNN.log`), whether the log was clipped, and the log text.
+render resolution, how the session ended (`session_end`: `unknown`, `clean`, `crash`, `device_lost`, `stopped`,
+`startup_failure`, `unsupported_build`), the line that names the failure (`session_detail`, up to 400 characters), the last
+startup stage (`session_stage`), log file name (`shadow_of_the_beast_NNN.log`), whether the log was clipped, and the log
+text. The three session fields may be absent (launchers released before them); they are then stored as `unknown` and empty.
+
+A report may also carry `submission` (64 lowercase hex characters, one per draft in the launcher): the same request repeated
+within a day, after an answer that was lost, answers `200` with the report already filed and its receipt, and files nothing.
+
+### Crash dumps
+
+A report may announce its session's minidump with `dump_file` (exactly the log's name with `.dmp`), `dump_bytes` (1 KiB to
+8 MiB) and `dump_sha256`. The bytes follow under the report's receipt: `/v1/reports/dump` says how many are stored, and each
+chunk must start exactly there; a chunk already stored, a gap or anything past the announced size is refused, so nothing is
+appended twice. The first chunk must begin with `MDMP`. When the last byte arrives the whole dump must begin with `MDMP` and
+have the announced SHA-256; otherwise the announcement and its bytes are dropped. Only a complete dump is shown as attached
+and can be downloaded (`application/octet-stream`, `<ticket>-shadow_of_the_beast_NNN.dmp` from validated names only). There
+is no other file upload.
 
 ## Admin
 
@@ -77,14 +96,19 @@ changed message makes it show **New reply**.
 | status checks (memory) | 200 in all, 20 per address |
 | reads (memory) | 10 per address |
 | status request | 30 reports |
-| edge limit (`REPORT_LIMITER`) | 20 requests a minute per address, before the Durable Object |
+| dump requests (memory) | 120 in all, 30 per address, then one every 10 seconds |
+| edge limit (`REPORT_LIMITER`) | 20 requests a minute per address, before the Durable Object; dump requests are counted apart from the others |
 
 ## Retention
 
 - The newest 500 reports are kept, for at most 180 days.
 - A report's status and the hash that lets its owner ask for it are kept up to 5000 entries and 365 days.
 - Quota rows (a salted hash of the address and a time) are deleted after one day.
-- A report can be deleted at any time from the dashboard: its row, log, status and receipt hash go together.
+- At most the newest 100 crash dumps are kept, each only as long as its report; an upload nobody finished is deleted after
+  one day.
+- A submission key is kept only as a salted hash, for one day and never longer than its report.
+- A report can be deleted at any time from the dashboard: its row, log, status, receipt hash, submission key and dump go
+  together.
 
 ## Privacy
 
@@ -148,6 +172,10 @@ Before the first deploy:
    `npx wrangler secret put SOTB_BUG_REPORT_ADMIN_TOKEN` in `server\shadow-bug-reports`. Until the secret exists `/admin/api` answers `503`.
 5. Open `/health`, then `/admin`, and send one report from the launcher. The launcher needs no setting for the production
    address; `SOTB_BUG_REPORT_URL` is only an override for development and tests.
+
+Protocol 2 (session fields, crash dumps, submission keys) must be deployed before a launcher that sends them is released:
+an older Worker refuses their keys. The existing database gains the session columns and the dump tables on its own when the
+object starts.
 
 To rotate the token, run the secret command again; nothing else needs deploying. `npx wrangler tail shadow-bug-reports`
 shows the Worker's log.

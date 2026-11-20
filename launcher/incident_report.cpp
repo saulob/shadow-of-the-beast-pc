@@ -7,6 +7,7 @@
 #include <iterator>
 #include <system_error>
 
+#include "crypto.h"
 #include "json_lite.h"
 #include "localization/ui_text.h"
 #include "utf8.h"
@@ -24,6 +25,9 @@ namespace {
 
 constexpr std::string_view kLogPrefix = "shadow_of_the_beast_";
 constexpr std::string_view kLogSuffix = ".log";
+constexpr std::string_view kDumpSuffix = ".dmp";
+constexpr char kMinidumpSignature[] = {'M', 'D', 'M', 'P'};
+constexpr size_t kDumpNoteBytes = 64 * 1024;
 constexpr size_t kFewestLogDigits = 3, kMostLogDigits = 10;
 constexpr size_t kLogsLookedAt = 200;
 constexpr size_t kMostMetadataCharacters = 64, kMostDetailCharacters = 96;
@@ -38,6 +42,19 @@ constexpr size_t kLogTailBytes = 256 * 1024;
 constexpr std::string_view kGameStartMarks[] = {"Launcher: closed, starting the game", "Build fingerprint: "};
 constexpr std::string_view kLauncherClosedMark = "Launcher: closed";
 constexpr std::string_view kGuestCodeMark = "Runtime: guest thread '";
+
+// How each exit path ends its log: src/loader.c, src/runtime*.c, gpu/shim/sotbgpu.cpp and the device-lost owner in
+// gpu/shadps4/video_core/renderer_vulkan/vk_device_lost.h.
+constexpr std::string_view kDeviceLostFirstMark = "GPU device lost: first detected in ";
+constexpr std::string_view kDeviceLostReasonMark = "GPU device lost: vk";
+constexpr std::string_view kFatalMark = "FATAL exception 0x";
+constexpr std::string_view kCrashMarks[] = {"Fault: ", "STOP: abort() was called", "STOP: pure virtual call", kFatalMark};
+constexpr std::string_view kStopMarks[] = {"STOP: ", "Controlled stop: "};
+constexpr std::string_view kErrorMark = "ERROR: ";
+constexpr std::string_view kUnsupportedBuildMark = "ERROR: unsupported build: ";
+constexpr std::string_view kCleanMarks[] = {"Runtime: window closed by user", "Runtime: guest requested exit(0)"};
+constexpr std::string_view kStageMarks[] = {"Stage: ", "Crash: startup phase: "};
+constexpr std::string_view kDumpWrittenMark = "Crash: minidump ";
 
 constexpr char kDescriptionKey[] = "description";
 constexpr char kLogTextKey[] = "log_text";
@@ -61,6 +78,9 @@ constexpr FieldName kFieldNames[] = {
     {"gpu", "Graphics card"},
     {"driver", "Driver"},
     {"render_resolution", "Render resolution"},
+    {"session_end", "Session end"},
+    {"session_detail", "Failure"},
+    {"session_stage", "Last stage"},
     {"log_file", "Selected log"},
     {"log_clipped", "Log shortened to its end"},
     {kLogTextKey, "Log after privacy filtering"},
@@ -83,6 +103,125 @@ std::string ReadPart(const fs::path& file, uintmax_t offset, size_t size) {
     in.read(text.data(), std::streamsize(size));
     text.resize(size_t(std::max<std::streamsize>(in.gcount(), 0)));
     return text;
+}
+
+std::string ReadTail(const fs::path& file, size_t most) {
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(file, ec);
+    if (ec) return {};
+    const uintmax_t offset = size > most ? size - most : 0;
+    return ReadPart(file, offset, size_t(size - offset));
+}
+
+template <typename Visit>
+void ForEachLine(std::string_view text, Visit&& visit) {
+    for (size_t at = 0; at < text.size();) {
+        const size_t end = std::min(text.find('\n', at), text.size());
+        std::string_view line = text.substr(at, end - at);
+        if (line.ends_with('\r')) line.remove_suffix(1);
+        visit(at, line);
+        at = end + 1;
+    }
+}
+
+template <size_t N>
+bool StartsWithAny(std::string_view line, const std::string_view (&marks)[N]) {
+    return std::any_of(std::begin(marks), std::end(marks), [&](std::string_view mark) { return line.starts_with(mark); });
+}
+
+struct FirstLine {
+    size_t at = std::string_view::npos;
+    std::string_view line;
+    void Note(size_t where, std::string_view text) {
+        if (at == std::string_view::npos) {
+            at = where;
+            line = text;
+        }
+    }
+};
+
+std::string_view LastStage(std::string_view text) {
+    std::string_view stage;
+    ForEachLine(text, [&](size_t, std::string_view line) {
+        for (const std::string_view mark : kStageMarks) {
+            if (line.starts_with(mark)) stage = line.substr(mark.size());
+        }
+    });
+    return stage;
+}
+
+// The runtime names the dump in its own log once the dump is complete (src/crash_dump.c), on a line of its own.
+bool LogNamesDump(const fs::path& log, std::string_view name) {
+    const std::string tail = ReadTail(log, kDumpNoteBytes);
+    const std::string line = std::string(kDumpWrittenMark) + std::string(name) + " written";
+    for (size_t at = tail.find(line); at != std::string::npos; at = tail.find(line, at + 1)) {
+        const size_t end = at + line.size();
+        if ((at == 0 || tail[at - 1] == '\n') && (end == tail.size() || tail[end] == '\n' || tail[end] == '\r')) return true;
+    }
+    return false;
+}
+
+DumpProblem ReadMinidumpSignature(const fs::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return DumpProblem::kUnreadable;
+    char head[sizeof(kMinidumpSignature)] = {};
+    in.read(head, sizeof(head));
+    const bool whole = size_t(in.gcount()) == sizeof(head);
+    return whole && std::equal(std::begin(head), std::end(head), std::begin(kMinidumpSignature)) ? DumpProblem::kNone
+                                                                                                   : DumpProblem::kNotADump;
+}
+
+std::string HexOf(const uint8_t (&digest)[32]) {
+    static constexpr char kDigits[] = "0123456789abcdef";
+    std::string hex;
+    for (const uint8_t byte : digest) {
+        hex += kDigits[byte >> 4];
+        hex += kDigits[byte & 15];
+    }
+    return hex;
+}
+
+std::optional<CrashDump> HashedDump(const fs::path& path, uintmax_t expected_bytes, DumpProblem& problem) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        problem = DumpProblem::kUnreadable;
+        return std::nullopt;
+    }
+    crypto::Sha256Stream hash;
+    std::vector<char> buffer(64 * 1024);
+    uintmax_t total = 0;
+    while (in && total <= expected_bytes) {
+        in.read(buffer.data(), std::streamsize(buffer.size()));
+        const size_t got = size_t(std::max<std::streamsize>(in.gcount(), 0));
+        if (got && !hash.Update(buffer.data(), got)) break;
+        total += got;
+    }
+    uint8_t digest[32];
+    std::error_code ec;
+    if (total != expected_bytes || fs::file_size(path, ec) != expected_bytes || ec) {
+        problem = DumpProblem::kChanged;
+        return std::nullopt;
+    }
+    if (!in.eof() || !hash.Finish(digest)) {
+        problem = DumpProblem::kUnreadable;
+        return std::nullopt;
+    }
+    problem = DumpProblem::kNone;
+    return CrashDump{path, Utf8(path.filename()), total, HexOf(digest)};
+}
+
+void NoteDump(GameLog& log) {
+    const std::string name = DumpNameOf(log.name);
+    if (name.empty()) return;
+    const fs::path path = log.path.parent_path() / name;
+    log.dump_problem = CheckCrashDump(log, path);
+    if (log.dump_problem == DumpProblem::kMissing || log.dump_problem == DumpProblem::kNotThisLog ||
+        log.dump_problem == DumpProblem::kNotAFile) {
+        return;
+    }
+    std::error_code ec;
+    const uintmax_t size = fs::file_size(path, ec);
+    log.dump = CrashDump{path, name, ec ? 0 : size, {}};
 }
 
 struct Session {
@@ -260,7 +399,8 @@ std::vector<GameLog> FindGameLogs(const fs::path& folder, const fs::path& runnin
         if (candidate.running) {
             role = session.activity == LogActivity::kGameplay ? LogRole::kCurrentGameplay : LogRole::kCurrentLauncher;
         }
-        GameLog log{candidate.path, candidate.name, SystemTimeOf(candidate.written), candidate.bytes, session.activity, role};
+        GameLog log{candidate.path, candidate.name, SystemTimeOf(candidate.written), candidate.bytes, session.activity, role, {}, std::nullopt,
+                    DumpProblem::kMissing};
         if (!candidate.running && session.activity == LogActivity::kGameplay && !last_gameplay) last_gameplay = log;
         if (logs.size() < most) logs.push_back(std::move(log));
     }
@@ -270,8 +410,123 @@ std::vector<GameLog> FindGameLogs(const fs::path& folder, const fs::path& runnin
         logs.back() = std::move(*last_gameplay);
     }
     MarkLastGameplay(logs);
+    for (GameLog& log : logs) {
+        if (log.role == LogRole::kCurrentLauncher || log.role == LogRole::kCurrentGameplay) continue;
+        log.outcome = ReadSessionOutcome(ReadPart(log.path, 0, kSessionHeadBytes), ReadTail(log.path, kLogTailBytes));
+        NoteDump(log);
+    }
     return logs;
 }
+
+SessionOutcome ReadSessionOutcome(std::string_view log_head, std::string_view log_tail) {
+    FirstLine device_lost, crash, stop, error, clean;
+    std::string_view reason, fatal;
+    ForEachLine(log_tail, [&](size_t at, std::string_view line) {
+        if (const size_t mark = line.find(kDeviceLostFirstMark); mark != std::string_view::npos) device_lost.Note(at, line.substr(mark));
+        if (const size_t mark = line.find(kDeviceLostReasonMark); mark != std::string_view::npos && reason.empty()) reason = line.substr(mark);
+        if (line.starts_with(kFatalMark) && fatal.empty()) fatal = line;
+        if (StartsWithAny(line, kCrashMarks)) crash.Note(at, line);
+        else if (StartsWithAny(line, kStopMarks)) stop.Note(at, line);
+        if (line.starts_with(kErrorMark)) error.Note(at, line);
+        if (StartsWithAny(line, kCleanMarks)) clean.Note(at, line);
+    });
+    SessionOutcome outcome;
+    const std::string_view stage = LastStage(log_tail);
+    outcome.stage = std::string(stage.empty() ? LastStage(log_head) : stage);
+
+    // The first failure owns the session: a later stop or assertion is its consequence.
+    const FirstLine* first = nullptr;
+    for (const FirstLine* found : {&device_lost, &crash, &stop, &error}) {
+        if (found->at != std::string_view::npos && (!first || found->at < first->at)) first = found;
+    }
+    if (!first) {
+        outcome.end = clean.at != std::string_view::npos ? SessionEnd::kClean : SessionEnd::kUnknown;
+    } else if (first == &device_lost) {
+        outcome.end = SessionEnd::kDeviceLost;
+        outcome.detail = std::string(reason.empty() ? device_lost.line : reason);
+    } else if (first == &crash) {
+        outcome.end = SessionEnd::kCrash;
+        outcome.detail = std::string(fatal.empty() ? crash.line : fatal);
+    } else if (first == &stop) {
+        outcome.end = SessionEnd::kStopped;
+        outcome.detail = std::string(stop.line);
+    } else {
+        outcome.end = error.line.starts_with(kUnsupportedBuildMark) ? SessionEnd::kUnsupportedBuild : SessionEnd::kStartupFailure;
+        outcome.detail = std::string(error.line);
+    }
+    return outcome;
+}
+
+const char* SessionEndKey(SessionEnd end) {
+    switch (end) {
+    case SessionEnd::kClean: return "clean";
+    case SessionEnd::kCrash: return "crash";
+    case SessionEnd::kDeviceLost: return "device_lost";
+    case SessionEnd::kStopped: return "stopped";
+    case SessionEnd::kStartupFailure: return "startup_failure";
+    case SessionEnd::kUnsupportedBuild: return "unsupported_build";
+    case SessionEnd::kUnknown: break;
+    }
+    return "unknown";
+}
+
+const char* SessionEndText(const GameLog& log) {
+    if (log.outcome.end == SessionEnd::kDeviceLost) return "GPU device lost";
+    if (log.Crashed()) return "Crash detected";
+    switch (log.outcome.end) {
+    case SessionEnd::kStopped: return "Stopped by an error";
+    case SessionEnd::kStartupFailure: return "Could not start";
+    case SessionEnd::kUnsupportedBuild: return "Unsupported game build";
+    default: break;
+    }
+    return nullptr;
+}
+
+std::string DumpNameOf(std::string_view log_name) {
+    if (!IsGameLogName(log_name)) return {};
+    return std::string(log_name.substr(0, log_name.size() - kLogSuffix.size())) + std::string(kDumpSuffix);
+}
+
+DumpProblem CheckCrashDump(const GameLog& log, const fs::path& dump) {
+    const std::string expected = DumpNameOf(log.name);
+    if (expected.empty() || Utf8(dump.filename()) != expected || Utf8(log.path.filename()) != log.name) return DumpProblem::kNotThisLog;
+    if (dump.lexically_normal().parent_path() != log.path.lexically_normal().parent_path()) return DumpProblem::kNotThisLog;
+    std::error_code ec;
+    const fs::file_status status = fs::symlink_status(dump, ec);
+    if (ec || !fs::exists(status)) return DumpProblem::kMissing;
+    if (!fs::is_regular_file(status)) return DumpProblem::kNotAFile;
+    if (!LogNamesDump(log.path, expected)) return DumpProblem::kNotThisLog;
+    const fs::file_time_type dump_written = fs::last_write_time(dump, ec);
+    if (ec) return DumpProblem::kUnreadable;
+    const fs::file_time_type log_written = fs::last_write_time(log.path, ec);
+    if (ec) return DumpProblem::kNotThisLog;
+    const auto apart = dump_written > log_written ? dump_written - log_written : log_written - dump_written;
+    if (apart > std::chrono::seconds(kDumpPairingSeconds)) return DumpProblem::kNotThisLog;
+    const uintmax_t size = fs::file_size(dump, ec);
+    if (ec) return DumpProblem::kUnreadable;
+    if (size == 0) return DumpProblem::kEmpty;
+    if (size < kFewestDumpBytes) return DumpProblem::kTooSmall;
+    if (size > kMostDumpBytes) return DumpProblem::kTooLarge;
+    return ReadMinidumpSignature(dump);
+}
+
+const char* DumpProblemText(DumpProblem problem) {
+    switch (problem) {
+    case DumpProblem::kNone: break;
+    case DumpProblem::kMissing: return "The crash dump of this session was not found.";
+    case DumpProblem::kNotThisLog: return "The crash dump does not belong to this session.";
+    case DumpProblem::kNotAFile: return "The crash dump is not a regular file.";
+    case DumpProblem::kEmpty: return "The crash dump is empty.";
+    case DumpProblem::kTooSmall: return "The crash dump is too small to be valid.";
+    case DumpProblem::kTooLarge: return "The crash dump is larger than 8 MB.";
+    case DumpProblem::kNotADump: return "The file is not a valid crash dump.";
+    case DumpProblem::kUnreadable: return "The crash dump could not be read.";
+    case DumpProblem::kChanged: return "The crash dump changed while it was being read.";
+    }
+    return nullptr;
+}
+
+bool DefaultAttachCrashDump(const GameLog& log) { return log.CanAttachDump(); }
 
 size_t DefaultGameLog(const std::vector<GameLog>& logs) {
     const auto running = [](const GameLog& log) {
@@ -370,7 +625,7 @@ std::string LastBytes(std::string_view text, size_t most) {
 }
 
 std::optional<IncidentPackage> BuildIncidentPackage(std::string_view description, const GameLog& log, const ReportFacts& facts,
-                                                    const PrivateFacts& private_facts) {
+                                                    const PrivateFacts& private_facts, bool attach_crash_dump) {
     std::error_code ec;
     const uintmax_t size = fs::file_size(log.path, ec);
     if (ec || size == 0) return std::nullopt;
@@ -406,12 +661,25 @@ std::optional<IncidentPackage> BuildIncidentPackage(std::string_view description
                             Clamped(graphics.gpu, kMostDetailCharacters),
                             Clamped(graphics.driver, kMostDetailCharacters),
                             Clamped(graphics.render_resolution, kMostMetadataCharacters),
+                            SessionEndKey(log.outcome.end),
+                            Clamped(ScrubText(log.outcome.detail, private_facts), kMostSessionDetailCharacters),
+                            Clamped(ScrubText(log.outcome.stage, private_facts), kMostMetadataCharacters),
                             log.name,
                             clipped ? "yes" : "no",
                             std::move(text)};
     static_assert(std::size(values) == std::size(kFieldNames), "one value per field");
     IncidentPackage package;
     for (size_t i = 0; i < std::size(kFieldNames); ++i) package.fields.push_back({kFieldNames[i].key, kFieldNames[i].label, std::move(values[i])});
+    package.crash_dump_requested = attach_crash_dump;
+    if (attach_crash_dump) {
+        const std::string name = DumpNameOf(log.name);
+        const fs::path dump = log.path.parent_path() / name;
+        package.crash_dump_problem = name.empty() ? DumpProblem::kMissing : CheckCrashDump(log, dump);
+        if (package.crash_dump_problem == DumpProblem::kNone) {
+            std::error_code size_error;
+            package.crash_dump = HashedDump(dump, fs::file_size(dump, size_error), package.crash_dump_problem);
+        }
+    }
     return package;
 }
 
@@ -426,15 +694,27 @@ std::string IncidentPreviewText(const IncidentPackage& package) {
             out += label + ": " + (field.value.empty() ? "-" : field.value) + "\n";
         }
     }
+    if (package.crash_dump) {
+        out += "\n" + std::string(Tr("Crash dump")) + ": " + package.crash_dump->name + " (" + LogSizeText(package.crash_dump->bytes) + ", " +
+               Tr("sent as a file after the report, not shown here") + ")\n";
+    } else if (package.crash_dump_requested) {
+        const char* why = DumpProblemText(package.crash_dump_problem);
+        out += "\n" + std::string(Tr("Crash dump")) + ": " + Tr("not attached") + "." + (why ? std::string(" ") + Tr(why) : "") + "\n";
+    }
     return out;
 }
 
-std::string IncidentRequestJson(const IncidentPackage& package) {
+std::string IncidentRequestJson(const IncidentPackage& package, std::string_view submission) {
     std::string out = "{";
     for (const IncidentField& field : package.fields) {
         if (out.size() > 1) out += ',';
         out += json::Quote(field.key) + ':' + json::Quote(field.value);
     }
+    if (package.crash_dump) {
+        out += ",\"dump_file\":" + json::Quote(package.crash_dump->name) + ",\"dump_bytes\":" + std::to_string(package.crash_dump->bytes) +
+               ",\"dump_sha256\":" + json::Quote(package.crash_dump->sha256);
+    }
+    if (!submission.empty()) out += ",\"submission\":" + json::Quote(submission);
     return out + '}';
 }
 

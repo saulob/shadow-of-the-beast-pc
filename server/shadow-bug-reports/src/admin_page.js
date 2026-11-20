@@ -74,6 +74,7 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <div class="toolbar header">
         <h2 id="title"></h2>
         <button id="download" type="button">Download log</button>
+        <button id="download-dump" type="button" hidden>Download minidump</button>
         <button id="copy" type="button" class="quiet">Copy log</button>
         <span id="note" class="muted" role="status"></span>
         <button id="close" type="button" class="quiet push">Close report</button>
@@ -424,6 +425,15 @@ export const ADMIN_JS = String.raw`(function () {
     showStatusMeaning();
   }
 
+  var SESSION_ENDS = { clean: 'Normal exit', crash: 'Crash', device_lost: 'GPU device lost', stopped: 'Stopped by an error',
+    startup_failure: 'Could not start', unsupported_build: 'Unsupported game build', unknown: 'Unknown' };
+
+  function dumpLabel(r) {
+    if (r.dump_status === 'stored') return 'Attached, ' + r.dump_file + ' (' + fmt(r.dump_bytes) + ' bytes)';
+    if (r.dump_status === 'uploading') return 'Announced, upload not finished (' + r.dump_file + ')';
+    return 'None';
+  }
+
   function showDetail(r) {
     openTicket = r.ticket;
     loadingTicket = '';
@@ -448,8 +458,13 @@ export const ADMIN_JS = String.raw`(function () {
     fact(facts, 'GPU', r.gpu);
     fact(facts, 'Driver', r.driver);
     fact(facts, 'Render resolution', r.render_resolution);
+    fact(facts, 'Session end', SESSION_ENDS[r.session_end] || '');
+    fact(facts, 'Failure', r.session_detail);
+    fact(facts, 'Last stage', r.session_stage);
     fact(facts, 'Original log file', r.log_file);
     fact(facts, 'Log clipped', r.log_clipped === 'yes' ? 'Yes, only its end was sent' : 'No');
+    fact(facts, 'Crash dump', dumpLabel(r));
+    $('download-dump').hidden = r.dump_status !== 'stored';
     $('log-name').textContent = 'Sanitized log';
     $('log').textContent = logText;
     $('note').textContent = '';
@@ -485,22 +500,30 @@ export const ADMIN_JS = String.raw`(function () {
   }
 
   function downloadLog() {
+    return downloadFile('log', '.log', 'the log');
+  }
+
+  function downloadDump() {
+    return downloadFile('dump', '.dmp', 'the minidump');
+  }
+
+  function downloadFile(path, extension, what) {
     var ticket = openTicket;
     if (!ticket) return Promise.resolve();
-    return request('/admin/api/reports/' + encodeURIComponent(ticket) + '/log').then(function (r) {
-      if (!r.ok) throw new Error('log');
+    return request('/admin/api/reports/' + encodeURIComponent(ticket) + '/' + path).then(function (r) {
+      if (!r.ok) throw new Error(path);
       var named = /filename="([^"]+)"/.exec(r.headers.get('Content-Disposition') || '');
       return r.blob().then(function (blob) {
         var object = URL[OBJECT_MAKE](blob);
         var link = el('a');
         link.href = object;
-        link.download = named ? named[1] : ticket + '.log';
+        link.download = named ? named[1] : ticket + extension;
         link.click();
         setTimeout(function () { URL[OBJECT_DROP](object); }, 1000);
       });
     }).catch(function (error) {
       if (error instanceof AuthError) { signOut('The token was not accepted.'); return; }
-      $('note').textContent = 'Could not download the log.';
+      $('note').textContent = 'Could not download ' + what + '.';
     });
   }
 
@@ -701,6 +724,7 @@ export const ADMIN_JS = String.raw`(function () {
   $('status').addEventListener('change', showStatusMeaning);
   $('status-save').addEventListener('click', saveStatus);
   $('download').addEventListener('click', downloadLog);
+  $('download-dump').addEventListener('click', downloadDump);
   $('copy').addEventListener('click', copyLog);
   $('close').addEventListener('click', closeReport);
   $('menu-button').addEventListener('click', function () {

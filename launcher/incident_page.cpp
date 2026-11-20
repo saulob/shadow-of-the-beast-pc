@@ -25,6 +25,10 @@ constexpr float kPreviewHeight = 300.0f;
 constexpr float kAlertTint = 0.16f, kAlertFlashTint = 0.5f;
 constexpr float kAlertFlashSeconds = 0.9f;
 
+const char* kCrashDumpHelp =
+    "Sends this session's crash dump after the report to help find the cause. A crash dump holds the program's threads and "
+    "loaded modules at the moment of the crash, and may contain some of its memory.";
+
 const char* kPrivacyHeadline = "No personal user data is intentionally included.";
 const char* kPrivacyNote =
     "Before anything is sent, the launcher takes addresses, user and computer names, private folders, passwords, secrets and "
@@ -39,11 +43,16 @@ int KeepDescriptionShort(ImGuiInputTextCallbackData* data) {
 
 std::string LogDetails(const GameLog& log) { return LogDateText(log.written) + kMiddleDot + LogSizeText(log.bytes); }
 
-void LogRoleLine(trg::Ui& ui, LogRole role) {
-    const char* text = LogRoleText(role);
-    if (!text) return;
+void LogStatusLine(trg::Ui& ui, const GameLog& log) {
+    const char* role = LogRoleText(log.role);
+    const char* ended = SessionEndText(log);
+    if (!role && !ended) return;
     ImGui::PushFont(nullptr, trg::layout::kTextHelp);
-    AccentText(ui, text);
+    if (role) AccentText(ui, role);
+    if (ended) {
+        if (role) ImGui::SameLine(0.0f, ImGui::GetStyle().ItemSpacing.x * 2.0f);
+        ImGui::TextColored(ui.theme().warn_dot, "%s", Tr(ended));
+    }
     ImGui::PopFont();
 }
 
@@ -146,8 +155,9 @@ IncidentPage::~IncidentPage() {
 void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
     if (!logs_found_) FindLogs();
     CollectDelivery();
+    CollectDumpRetry();
     my_reports_.RefreshIfStale(service_);
-    const bool sending = delivery_ != nullptr;
+    const bool sending = delivery_ != nullptr || dump_retry_ != nullptr;
     if (CheckDraft(description_, !logs_.empty()) != problem_) problem_ = DraftProblem::kNone;
     KeepClearOfScrollbar(std::floor(trg::layout::kContentPadding * ui.scale()));
     AccentText(ui, kPrivacyHeadline);
@@ -176,7 +186,18 @@ void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
 void IncidentPage::FindLogs() {
     logs_ = FindGameLogs(places_.logs_dir, places_.running_log);
     logs_found_ = true;
-    selected_ = DefaultGameLog(logs_);
+    SelectLog(DefaultGameLog(logs_));
+}
+
+// Choosing a log chooses its crash dump too: attached unless the player says otherwise, and only when it can be sent.
+void IncidentPage::SelectLog(size_t index) {
+    selected_ = index;
+    attach_crash_dump_ = selected_ < logs_.size() && DefaultAttachCrashDump(logs_[selected_]);
+}
+
+void IncidentPage::DraftChanged() {
+    ForgetPreview();
+    submission_.clear();
 }
 
 void IncidentPage::ForgetPreview() {
@@ -195,11 +216,12 @@ bool IncidentPage::AcceptDraft() {
 void IncidentPage::CollectDelivery() {
     if (!delivery_ || !delivery_->done) return;
     result_ = delivery_->receipt;
+    sent_dump_ = delivery_->package->crash_dump;
     if (result_->outcome == ReportOutcome::kSent) {
         Log("Bug report: sent as " + result_->ticket);
         sent_report_remembered_ = my_reports_.Remember(*delivery_->package, *result_);
         description_[0] = '\0';
-        ForgetPreview();
+        DraftChanged();
     } else {
         Log(std::string("Bug report: not sent (") + OutcomeTitle(result_->outcome) + ")");
     }
@@ -207,15 +229,38 @@ void IncidentPage::CollectDelivery() {
     bring_result_into_view_ = true;
 }
 
+void IncidentPage::CollectDumpRetry() {
+    if (!dump_retry_ || !dump_retry_->done) return;
+    if (result_) result_->dump = dump_retry_->outcome;
+    dump_retry_.reset();
+    bring_result_into_view_ = true;
+}
+
+// Only the dump goes again, under the Report ID the service already gave: the report itself is never filed twice.
+void IncidentPage::RetryDump() {
+    if (!result_ || !sent_dump_ || result_->credential.empty() || delivery_ || dump_retry_) return;
+    dump_retry_ = std::make_shared<DumpRetry>();
+    bring_result_into_view_ = true;
+    std::thread([retry = dump_retry_, service = service_, ticket = result_->ticket, receipt = result_->credential, dump = *sent_dump_] {
+        retry->outcome = UploadCrashDump(service, ticket, receipt, dump);
+        retry->done = true;
+    }).detach();
+}
+
 std::shared_ptr<const IncidentPackage> IncidentPage::BuildPackage(const ReportFacts& facts) {
     log_failed_ = false;
     const PrivateFacts private_facts = GatherPrivateFacts(places_.install_folders);
-    std::optional<IncidentPackage> package = BuildIncidentPackage(description_, logs_[selected_], facts, private_facts);
+    const GameLog& log = logs_[selected_];
+    std::optional<IncidentPackage> package =
+        BuildIncidentPackage(description_, log, facts, private_facts, attach_crash_dump_ && log.CanAttachDump());
     if (!package) {
         log_failed_ = true;
         bring_problem_into_view_ = true;
         FindLogs();
         return nullptr;
+    }
+    if (package->crash_dump_requested && !package->crash_dump) {
+        Log(std::string("Bug report: crash dump not attached (") + DumpProblemText(package->crash_dump_problem) + ")");
     }
     return std::make_shared<const IncidentPackage>(std::move(*package));
 }
@@ -231,15 +276,25 @@ void IncidentPage::TogglePreview(const ReportFacts& facts) {
 }
 
 void IncidentPage::Send(const ReportFacts& facts) {
+    if (dump_retry_) return;
     if (delivery_ || !service_.endpoint.configured() || !AcceptDraft()) return;
     std::shared_ptr<const IncidentPackage> package = previewed_ ? previewed_ : BuildPackage(facts);
     if (!package) return;
+    if (submission_.empty()) submission_ = NewSubmissionKey();
     result_.reset();
+    sent_dump_.reset();
     delivery_ = std::make_shared<Delivery>();
     delivery_->package = std::move(package);
     bring_result_into_view_ = true;
-    std::thread([delivery = delivery_, service = service_] {
-        delivery->receipt = FileReport(service, *delivery->package);
+    std::thread([delivery = delivery_, service = service_, submission = submission_] {
+        delivery->receipt = FileReport(service, *delivery->package, submission);
+        const ReportReceipt& filed = delivery->receipt;
+        if (filed.outcome == ReportOutcome::kSent && delivery->package->crash_dump) {
+            delivery->uploading_dump = true;
+            delivery->receipt.dump = filed.dump_expected
+                                         ? UploadCrashDump(service, filed.ticket, filed.credential, *delivery->package->crash_dump)
+                                         : DumpUpload::kFailed;
+        }
         delivery->done = true;
     }).detach();
 }
@@ -253,7 +308,7 @@ void IncidentPage::Save(const ReportFacts& facts) {
     bring_saved_into_view_ = true;
     if (!save_failed_) {
         description_[0] = '\0';
-        ForgetPreview();
+        DraftChanged();
     }
 }
 
@@ -267,7 +322,7 @@ void IncidentPage::DrawDescription(trg::Ui& ui, bool sending) {
     const ImGuiInputTextFlags flags = ImGuiInputTextFlags_WordWrap | ImGuiInputTextFlags_CallbackEdit;
     if (ImGui::InputTextMultiline("##description", description_, sizeof(description_), ImVec2(-FLT_MIN, kDescriptionHeight * ui.scale()),
                                   flags, KeepDescriptionShort)) {
-        ForgetPreview();
+        DraftChanged();
     }
     ImGui::PopStyleColor();
     ImGui::EndDisabled();
@@ -297,14 +352,14 @@ void IncidentPage::DrawLogs(trg::Ui& ui, bool sending) {
     for (size_t i = 0; i < logs_.size(); ++i) {
         const std::string details = LogDetails(logs_[i]);
         ui.RowLeft(logs_[i].name.c_str(), details.c_str());
-        LogRoleLine(ui, logs_[i].role);
+        LogStatusLine(ui, logs_[i]);
         ui.RowControl();
         ImGui::PushID(int(i));
         ImGui::BeginDisabled(sending);
         ImGui::AlignTextToFramePadding();
         if (ImGui::RadioButton(Tr("Send this log"), selected_ == i) && selected_ != i) {
-            selected_ = i;
-            ForgetPreview();
+            SelectLog(i);
+            DraftChanged();
         }
         ImGui::EndDisabled();
         ImGui::PopID();
@@ -316,6 +371,28 @@ void IncidentPage::DrawLogs(trg::Ui& ui, bool sending) {
     }
     const GameLog& log = logs_[selected_];
     if (DrawLogFacts(ui, log)) trg::OpenUrl(Utf8(log.path));
+    DrawCrashDump(ui, sending);
+}
+
+void IncidentPage::DrawCrashDump(trg::Ui& ui, bool sending) {
+    const GameLog& log = logs_[selected_];
+    if (!log.dump) return;
+    const bool attachable = log.CanAttachDump();
+    ui.Spacer(4);
+    ImGui::BeginDisabled(sending || !attachable);
+    bool attach = attach_crash_dump_ && attachable;
+    if (ImGui::Checkbox(Tr("Attach crash dump"), &attach)) {
+        attach_crash_dump_ = attach;
+        DraftChanged();
+    }
+    ImGui::EndDisabled();
+    if (attachable) {
+        const std::string help = std::string(Tr(kCrashDumpHelp)) + " " + log.dump->name + kMiddleDot + LogSizeText(log.dump->bytes);
+        ui.Help(help.c_str());
+    } else {
+        const std::string why = std::string(Tr(DumpProblemText(log.dump_problem))) + " " + Tr("Only the log is sent.");
+        ui.Help(why.c_str());
+    }
 }
 
 void IncidentPage::DrawPreview(trg::Ui& ui, const ReportFacts& facts, bool sending) {
@@ -357,6 +434,11 @@ void IncidentPage::DrawOtherOptions(trg::Ui& ui, const ReportFacts& facts, bool 
 }
 
 void IncidentPage::DrawResult(trg::Ui& ui) {
+    if (dump_retry_ || (delivery_ && delivery_->uploading_dump)) {
+        ui.Spacer(4);
+        ui.StatusCard(trg::Status::kBusy, "Uploading the crash dump...", "The report is already sent; the dump can take a little longer.");
+        return;
+    }
     if (delivery_) {
         ui.Spacer(4);
         ui.StatusCard(trg::Status::kBusy, "Sending your report...", "This takes a few seconds.");
@@ -378,7 +460,20 @@ void IncidentPage::DrawResult(trg::Ui& ui) {
         ImGui::SetClipboardText(result_->ticket.c_str());
         ui.SetStatus("Report ID copied.");
     }
+    DrawDumpResult(ui);
     if (!sent_report_remembered_) ui.Help("The report was sent, but it could not be added to My Reports on this PC.");
+}
+
+void IncidentPage::DrawDumpResult(trg::Ui& ui) {
+    switch (result_->dump) {
+    case DumpUpload::kNotRequested: break;
+    case DumpUpload::kUploaded: ui.Help("The crash dump was uploaded with it."); break;
+    case DumpUpload::kNotAttached: ui.Help("The crash dump could not be attached, so only the log was sent."); break;
+    case DumpUpload::kFailed:
+        WarningText(ui, "The report was sent, but its crash dump could not be uploaded.");
+        if (sent_dump_ && !result_->credential.empty() && ImGui::Button(Tr("Retry crash dump upload"))) RetryDump();
+        break;
+    }
 }
 
 void IncidentPage::DrawSaved(trg::Ui& ui) {

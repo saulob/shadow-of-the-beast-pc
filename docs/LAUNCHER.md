@@ -100,7 +100,25 @@ cannot promise to catch everything, which is why the page offers the preview.
 
 The service answers a report with a ticket (`SOB-XXXXXX`) and a private receipt (32 random bytes in hex). The receipt is kept
 only in `user\bug_reports.json` and is sent only to ask about that one report; it is never logged or shown. A limit answer
-(`429`) shows its `Retry-After` when the service sends one.
+(`429`) shows its `Retry-After` when the service sends one. Each draft carries a random submission key, so pressing **Send
+report** again after an answer that never arrived returns the report already filed instead of a second one.
+
+### Crashes, GPU device loss and crash dumps
+
+Each finished session in the list says how it ended, from the lines its own exit path wrote: **Crash detected** (the crash
+handler's report), **GPU device lost** (the first device-lost report, which ends the game with exit code 25), **Stopped by
+an error**, **Could not start** or **Unsupported game build**. A normal exit, a quit in the launcher and an update restart are
+never shown as a failure. The report sends how the session ended, the line that names the failure (for a device loss: the
+Vulkan operation, result, stage, GPU, driver and fault summary) and the last startup stage; the GPU timeline stays in the log.
+
+When the game crashes it writes `logs\shadow_of_the_beast_NNN.dmp` beside the session's log (thread stacks and module lists,
+no heap and no environment block) and names it in that log; the newest five dumps are kept. For the selected log the page
+offers **Attach crash dump**, on by default, only for that session's own dump: exactly that name in the same folder, a
+regular file the log names, written within two minutes of the log's end, 1 KiB to 8 MiB and starting with `MDMP`. A dump
+that fails a check is never sent and the page says why; the report goes without it. The dump is uploaded after the report in
+1 MiB chunks under the report's receipt and resumes from what the service already holds. If it does not arrive, the report
+stays sent and **Retry crash dump upload** sends only the dump again, under the same Report ID. Only the dump's file name,
+size and SHA-256 are in the report; no folder of the PC is sent.
 
 ### My Reports
 

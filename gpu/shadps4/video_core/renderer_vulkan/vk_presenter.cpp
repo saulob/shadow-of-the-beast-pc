@@ -17,6 +17,7 @@
 #include "sotb_pipeline_startup.h"
 #include "sotb_settings.h"
 #include "sotb_graphics.h"
+#include "startup_phase.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 #include "video_core/texture_cache/image.h"
@@ -749,6 +750,9 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
     if (!presented) {
         swapchain.RecreateForWindow();
+    } else if (is_game_frame && !is_reusing_frame) {
+        static int first_game_frame;
+        sotb_startup_phase_once(&first_game_frame, "first frame presented");
     }
 
     free_frame();

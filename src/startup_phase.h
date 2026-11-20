@@ -10,6 +10,9 @@ extern "C" {
 void sotb_startup_phase(const char *phase);
 const char *sotb_startup_phase_current(void);
 
+/* For a milestone reached from a per-frame path: only the first call for `reached` changes the stage. */
+void sotb_startup_phase_once(int *reached, const char *phase);
+
 #ifdef __cplusplus
 }
 #endif
