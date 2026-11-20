@@ -583,6 +583,19 @@ void TestLauncherUsesBindings() {
     CHECK(Contains(settings, "sotb_pad_actions"));
 }
 
+void TestUserGamepadDatabaseKeepsBindingLayer() {
+    // A pad recognized through user/gamecontrollerdb.txt reaches the same SDL gamepad path and binding layer.
+    const std::string runtime = ReadSource("src/runtime_pad.c");
+    const size_t load = runtime.find("static void load_user_gamepad_mappings");
+    const size_t refresh = runtime.find("static void refresh_gamepads");
+    CHECK(load != std::string::npos && refresh != std::string::npos && load < refresh);
+    const std::string loader = runtime.substr(load, refresh - load);
+    CHECK(!Contains(loader, "&pad_map") && !Contains(loader, "sotb_pad_") && !Contains(loader, "SDL_SetGamepadMapping"));
+    CHECK(Contains(runtime, "SDL_OpenGamepad(ids[j])") && Contains(runtime, "SDL_GetGamepads(&count)"));
+    CHECK(Contains(runtime, "sotb_pad_load(keys_file,&pad_map)"));
+    CHECK(Contains(runtime, "runtime_user_login(slot+1)"));
+}
+
 } // namespace
 
 int main() {
@@ -607,6 +620,7 @@ int main() {
     TestMappingAppliesAfterReconnect(base);
     TestRuntimeStaysInSync();
     TestLauncherUsesBindings();
+    TestUserGamepadDatabaseKeepsBindingLayer();
     std::error_code ignored;
     fs::remove_all(base, ignored);
     std::printf("pad binding tests: %d checks, %d failures\n", g_checks, g_failures);

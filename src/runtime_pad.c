@@ -9,6 +9,7 @@
 #include "sotb_keys.h"
 #include "sotb_pad.h"
 #include "sotb_pad_prompts.h"
+#include "sotb_pad_mapping.h"
 #include "sotb_sdl_compat.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -100,30 +101,35 @@ static int free_slot(void) {
     return -1;
 }
 static char keys_file[4200];
+static int64_t mapping_file_size(const char *path, void *user) {
+    (void)user;
+    SDL_PathInfo info;
+    return SDL_GetPathInfo(path,&info) && info.type==SDL_PATHTYPE_FILE ? (int64_t)info.size : -1;
+}
+static int mapping_add_file(const char *path, void *user) { (void)user; return SDL_AddGamepadMappingsFromFile(path); }
+static const char *mapping_error(void *user) { (void)user; return SDL_GetError(); }
 /* The player's own mappings. SDL_GAMECONTROLLERCONFIG, which SDL reads itself, keeps priority over them. */
 static void load_user_gamepad_mappings(void) {
-    char path[4300];
-    if (!sotb_gamepad_db_path(keys_file,path,sizeof(path)) || !SDL_GetPathInfo(path,NULL)) return;
-    const int added=SDL_AddGamepadMappingsFromFile(path);
-    if (added<0) printf("Runtime: gamepad mappings not read from %s: %s\n",path,SDL_GetError());
-    else printf("Runtime: %d gamepad mappings read from %s\n",added,path);
+    char path[4300], line[256];
+    if (!sotb_gamepad_db_path(keys_file,path,sizeof(path))) return;
+    const SotbMappingLoader loader={mapping_file_size,mapping_add_file,mapping_error,NULL};
+    if (sotb_load_user_mappings(path,&loader,line,sizeof(line))!=SOTB_MAPPING_ABSENT) puts(line);
 }
-/* SDL lists a joystick as a gamepad only when it has a mapping: says once per connection which ones have none. */
+/* SDL lists a joystick as a gamepad only when it has a mapping: says once per device identity which ones have none. */
 static void log_unmapped_joysticks(void) {
-    static SDL_JoystickID logged[16];
-    static size_t next;
+    static SotbUnmappedSeen seen;
     int count=0;
     SDL_JoystickID *ids=SDL_GetJoysticks(&count);
     for (int j=0;ids && j<count;++j) {
-        bool seen=SDL_IsGamepad(ids[j]);
-        for (size_t i=0;i<sizeof(logged)/sizeof(*logged);++i) if (logged[i]==ids[j]) seen=true;
-        if (seen) continue;
-        logged[next++%(sizeof(logged)/sizeof(*logged))]=ids[j];
-        char guid[33];
+        if (SDL_IsGamepad(ids[j])) continue;
+        char guid[33], key[SOTB_UNMAPPED_KEY], line[384];
         SDL_GUIDToString(SDL_GetJoystickGUIDForID(ids[j]),guid,sizeof(guid));
         const char *name=SDL_GetJoystickNameForID(ids[j]);
-        printf("Runtime: joystick without a gamepad mapping: %s (guid %s, %04x:%04x); add a line for this GUID to gamecontrollerdb.txt in the user folder\n",
-               name?name:"unknown",guid,SDL_GetJoystickVendorForID(ids[j]),SDL_GetJoystickProductForID(ids[j]));
+        const unsigned vendor=SDL_GetJoystickVendorForID(ids[j]), product=SDL_GetJoystickProductForID(ids[j]);
+        sotb_unmapped_key(name,guid,vendor,product,key,sizeof(key));
+        if (!sotb_unmapped_first_sight(&seen,key)) continue;
+        sotb_unmapped_line(name,guid,vendor,product,line,sizeof(line));
+        puts(line);
     }
     SDL_free(ids);
 }
@@ -144,9 +150,10 @@ static void refresh_gamepads(void) {
     }
     static uint64_t last_scan;
     const uint64_t now=now_us();
-    if (free_slot()<0 || (last_scan && now-last_scan<250000)) return;
+    if (last_scan && now-last_scan<250000) return;
     last_scan=now;
     log_unmapped_joysticks();
+    if (free_slot()<0) return;
     int count=0;
     SDL_JoystickID *ids=SDL_GetGamepads(&count);
     for (int j=0;ids && j<count && free_slot()>=0;++j) {

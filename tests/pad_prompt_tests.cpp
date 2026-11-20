@@ -323,6 +323,20 @@ void TestLimitationIsDocumented() {
     CHECK(Contains(audit, "no prompt atlas or glyph textures"));
 }
 
+void TestUserMappedPadKeepsPromptLayer() {
+    // A pad recognized through user/gamecontrollerdb.txt is classified and tracked like a built-in one.
+    const std::string runtime = ReadAll(fs::path(SOTB_SOURCE_DIR) / "src/runtime_pad.c");
+    CHECK(Contains(runtime, "sotb_pad_classify((int)SDL_GetGamepadType(g),(int)SDL_GetRealGamepadType(g),SDL_GetGamepadVendor(g),SDL_GetGamepadProduct(g))"));
+    CHECK(Contains(runtime, "track_prompt_family(SDL_GetGamepadID(g))"));
+    CHECK(Contains(runtime, "Steam Input virtual gamepad"));
+    const size_t load = runtime.find("static void load_user_gamepad_mappings");
+    const size_t refresh = runtime.find("static void refresh_gamepads");
+    const std::string loader = runtime.substr(load, refresh - load);
+    CHECK(!Contains(loader, "prompt") && !Contains(loader, "active"));
+    // Classification is by SDL's type and USB ids only, so mapping never changes the guest buttons.
+    CHECK(Classify(SDL_GAMEPAD_TYPE_STANDARD, SDL_GAMEPAD_TYPE_STANDARD, 0x1209, 0x0001) == SOTB_PAD_KIND_UNKNOWN);
+}
+
 } // namespace
 
 int main() {
@@ -338,6 +352,7 @@ int main() {
     TestRegionalConfirmBack();
     TestLabels(base);
     TestLimitationIsDocumented();
+    TestUserMappedPadKeepsPromptLayer();
     std::error_code ignored;
     fs::remove_all(base, ignored);
     std::printf("pad prompt tests: %d checks, %d failures\n", g_checks, g_failures);

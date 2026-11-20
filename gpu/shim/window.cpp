@@ -269,34 +269,55 @@ bool WindowSDL::TrackControllerEvent(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_GAMEPAD_ADDED:
     case SDL_EVENT_GAMEPAD_REMOVED:
-        pad_activity.erase(event.gdevice.which);
+        pad_activity.Forget(event.gdevice.which);
         return false;
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
-    case SDL_EVENT_GAMEPAD_BUTTON_UP: {
-        PadActivity& pad = pad_activity[event.gbutton.which];
-        const u32 bit = event.gbutton.button < 32 ? 1u << event.gbutton.button : 0u;
-        if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
-            pad.state.buttons |= bit;
-        } else {
-            pad.state.buttons &= ~bit;
-        }
-        return pad.filter.Update(pad.state);
-    }
+    case SDL_EVENT_GAMEPAD_BUTTON_UP:
+        return pad_activity.ButtonChanged(event.gbutton.which, event.gbutton.button, event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN);
     case SDL_EVENT_GAMEPAD_AXIS_MOTION: {
-        PadActivity& pad = pad_activity[event.gaxis.which];
+        using SotbCursor::Axis;
+        Axis axis;
         switch (event.gaxis.axis) {
-        case SDL_GAMEPAD_AXIS_LEFTX: pad.state.left_x = event.gaxis.value; break;
-        case SDL_GAMEPAD_AXIS_LEFTY: pad.state.left_y = event.gaxis.value; break;
-        case SDL_GAMEPAD_AXIS_RIGHTX: pad.state.right_x = event.gaxis.value; break;
-        case SDL_GAMEPAD_AXIS_RIGHTY: pad.state.right_y = event.gaxis.value; break;
-        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: pad.state.left_trigger = event.gaxis.value; break;
-        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: pad.state.right_trigger = event.gaxis.value; break;
+        case SDL_GAMEPAD_AXIS_LEFTX: axis = Axis::LeftX; break;
+        case SDL_GAMEPAD_AXIS_LEFTY: axis = Axis::LeftY; break;
+        case SDL_GAMEPAD_AXIS_RIGHTX: axis = Axis::RightX; break;
+        case SDL_GAMEPAD_AXIS_RIGHTY: axis = Axis::RightY; break;
+        case SDL_GAMEPAD_AXIS_LEFT_TRIGGER: axis = Axis::LeftTrigger; break;
+        case SDL_GAMEPAD_AXIS_RIGHT_TRIGGER: axis = Axis::RightTrigger; break;
         default: return false;
         }
-        return pad.filter.Update(pad.state);
+        return pad_activity.AxisMoved(event.gaxis.which, axis, event.gaxis.value);
     }
     default:
         return false;
+    }
+}
+
+// Window thread. Runs before the overlay sees the event, so input used inside an overlay still counts.
+void WindowSDL::TrackCursorActivity(const SDL_Event& event, bool controller_activity) {
+    if (controller_activity) {
+        cursor.ControllerActivity();
+    }
+    switch (event.type) {
+    case SDL_EVENT_MOUSE_MOTION:
+        cursor.MouseMoved(static_cast<int>(event.motion.xrel), static_cast<int>(event.motion.yrel));
+        break;
+    case SDL_EVENT_MOUSE_BUTTON_DOWN:
+        cursor.MouseButtonPressed();
+        break;
+    case SDL_EVENT_MOUSE_WHEEL:
+        cursor.MouseWheelMoved();
+        break;
+    case SDL_EVENT_KEY_DOWN: {
+        const bool host_shortcut = event.key.scancode == SotbSettings::Get().window_mode_key ||
+                                   event.key.scancode == SotbSettings::kFrameCounterKey;
+        if (SotbCursor::IsGameplayKey(event.key.repeat, host_shortcut)) {
+            cursor.KeyboardActivity();
+        }
+        break;
+    }
+    default:
+        break;
     }
 }
 
@@ -324,7 +345,6 @@ bool WindowSDL::PollEvents() {
         if (SotbLatencyTrace::enabled) {
             TracePress(event);
         }
-        const bool ui = SotbOverlay::CapturesInput();
         const bool controller_activity = TrackControllerEvent(event);
         if (text_active && (event.type == SDL_EVENT_TEXT_INPUT || event.type == SDL_EVENT_KEY_DOWN)) {
             std::scoped_lock lock{text_mutex};
@@ -353,39 +373,19 @@ bool WindowSDL::PollEvents() {
             UpdateTextTitle();
             continue;
         }
+        TrackCursorActivity(event, controller_activity);
         if (SotbOverlay::HandleEvent(event)) {
             continue;
         }
-        if (controller_activity && !ui) {
-            cursor.ControllerActivity();
-        }
         switch (event.type) {
-        case SDL_EVENT_MOUSE_MOTION:
-            if (!ui) {
-                cursor.MouseMoved();
-            }
-            break;
-        case SDL_EVENT_MOUSE_BUTTON_DOWN:
-            if (!ui) {
-                cursor.MouseButtonPressed();
-            }
-            break;
-        case SDL_EVENT_MOUSE_WHEEL:
-            if (!ui) {
-                cursor.MouseWheelMoved();
-            }
-            break;
         case SDL_EVENT_KEY_DOWN: {
             const bool window_shortcut = event.key.scancode == SotbSettings::Get().window_mode_key;
             const bool frame_counter_key = event.key.scancode == SotbSettings::kFrameCounterKey;
-            const bool host_shortcut = window_shortcut || frame_counter_key;
             auto& settings = SotbSettings::Get();
             if (window_shortcut && !event.key.repeat) {
                 ToggleBorderless();
             } else if (frame_counter_key && !event.key.repeat) {
                 settings.show_fps = !settings.show_fps;
-            } else if (SotbCursor::IsGameplayKey(event.key.repeat, host_shortcut) && !ui) {
-                cursor.KeyboardActivity();
             }
             break;
         }

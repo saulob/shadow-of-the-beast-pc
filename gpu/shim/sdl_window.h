@@ -65,17 +65,14 @@ private:
     std::mutex text_mutex;
     bool text_requested{}, text_active{};
     int display_mode = -1; ///< applied SotbSettings display mode (window thread)
-    struct PadActivity {
-        SotbCursor::ControllerState state;
-        SotbCursor::ControllerActivityFilter filter;
-    };
     void ApplyDisplayMode(int mode);
     void ToggleBorderless();
     void UpdateFpsTitle();
     void UpdateDisplayRefresh();
     void UpdateCursor();
     bool TrackControllerEvent(const SDL_Event& event);
-    std::unordered_map<u32, PadActivity> pad_activity; ///< window thread
+    void TrackCursorActivity(const SDL_Event& event, bool controller_activity);
+    SotbCursor::ControllerActivityTracker pad_activity; ///< window thread
     SotbCursor::State cursor; ///< window thread
     void RefreshTitle();
     std::chrono::steady_clock::time_point fps_started{};

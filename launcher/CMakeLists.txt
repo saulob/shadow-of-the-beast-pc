@@ -116,6 +116,24 @@ target_compile_definitions(sotb-pad-prompt-tests PRIVATE SOTB_SOURCE_DIR="${PROJ
 set_target_properties(sotb-pad-prompt-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-pad-prompt-tests PRIVATE -Wall -Wextra)
 
+add_executable(sotb-gamepad-database-tests EXCLUDE_FROM_ALL ../tests/gamepad_database_tests.cpp)
+target_link_libraries(sotb-gamepad-database-tests PRIVATE SDL3::SDL3)
+target_include_directories(sotb-gamepad-database-tests PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_definitions(sotb-gamepad-database-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-gamepad-database-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-gamepad-database-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-input-device-tests EXCLUDE_FROM_ALL ../tests/input_device_tests.cpp)
+target_include_directories(sotb-input-device-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
+set_target_properties(sotb-input-device-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-input-device-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-cursor-policy-tests EXCLUDE_FROM_ALL ../tests/cursor_policy_tests.cpp)
+target_include_directories(sotb-cursor-policy-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
+target_compile_definitions(sotb-cursor-policy-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-cursor-policy-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-cursor-policy-tests PRIVATE -Wall -Wextra)
+
 add_executable(sotb-build-identity-tests EXCLUDE_FROM_ALL ../tests/build_identity_tests.cpp)
 target_link_libraries(sotb-build-identity-tests PRIVATE sotb_launcher_core)
 target_compile_definitions(sotb-build-identity-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

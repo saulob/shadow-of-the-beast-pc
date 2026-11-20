@@ -137,6 +137,12 @@ function Invoke-PadBinding { Invoke-FocusedTest 'sotb-pad-binding-tests' '^pad b
 
 function Invoke-PadPrompt { Invoke-FocusedTest 'sotb-pad-prompt-tests' '^pad prompt tests' }
 
+function Invoke-GamepadDatabase { Invoke-FocusedTest 'sotb-gamepad-database-tests' '^gamepad database tests' }
+
+function Invoke-InputDevice { Invoke-FocusedTest 'sotb-input-device-tests' '^input device tests' }
+
+function Invoke-CursorPolicy { Invoke-FocusedTest 'sotb-cursor-policy-tests' '^cursor policy tests' }
+
 function Invoke-CommandSnapshot { Invoke-FocusedTest 'sotb-command-snapshot-tests' '^command snapshot tests' }
 
 function Invoke-GpuRecording { Invoke-FocusedTest 'sotb-gpu-recording-tests' '^gpu recording tests' }
@@ -228,6 +234,9 @@ $steps = @(
     @{ Name = 'audio-backlog'; Title = 'Audio backlog recovery: format-aware queue duration, 100 ms threshold and boundary, invalid formats and overflow, steady playback never recovers, device stall and endpoint reset recover, repeated recoveries, log rate limit (pure queue model, no audio device)'; Block = { Invoke-AudioBacklog } },
     @{ Name = 'pad-binding'; Title = 'Controller rebinding: default layout, every action and source, triggers, shoulders, stick clicks, Options and touchpad, persistence and reset in the settings file, invalid and older configs, duplicate policy, capture rules, hotplug (synthetic gamepad samples, no controller, no window)'; Block = { Invoke-PadBinding } },
     @{ Name = 'pad-prompt'; Title = 'Controller prompts: Xbox, DualShock, DualSense, generic and Steam Input detection, Auto/Xbox/PlayStation policy, active controller tracking without flapping, persisted mode, labels, regional Confirm/Back, prompts never change the guest buttons (synthetic metadata, no controller)'; Block = { Invoke-PadPrompt } },
+    @{ Name = 'gamepad-database'; Title = 'Gamepad database: user/gamecontrollerdb.txt beside the settings file (never a configured path), missing file silent, one bounded summary line, malformed and unreadable files harmless, size cap, loaded once before the first gamepad enumeration, mappings reach later joysticks through SDL, recognized pads unchanged; unmapped joysticks logged once per device identity (name, GUID, VID:PID, no pointer or path), reconnects and hotplug, bounded memory (fake loader and SDL virtual joysticks, no controller, no window)'; Block = { Invoke-GamepadDatabase } },
+    @{ Name = 'input-device'; Title = 'Controller activity: button and D-pad onset, stick and trigger thresholds with hysteresis, held input and drift never repeat, rearm after release, independent axes, extreme and zero values, per-controller state with hotplug and disconnect (pure policy, no controller)'; Block = { Invoke-InputDevice } },
+    @{ Name = 'cursor-policy'; Title = 'Cursor visibility: last meaningful device (mouse, keyboard, controller), overlay forces the cursor visible, device kept while the overlay is open, overlay close follows the current device, no flapping, launcher and focus rules, window wiring (pure policy, no window, no cursor)'; Block = { Invoke-CursorPolicy } },
     @{ Name = 'command-snapshot'; Title = 'GPU command snapshot: owned copy at submission, isolation from guest rewrites, ordering, size bounds and overflow, lifetime until the last consumer, release, shutdown drain (synthetic command buffers, no GPU)'; Block = { Invoke-CommandSnapshot } },
     @{ Name = 'gpu-recording'; Title = 'Vulkan recording and synchronization: replay rendering scope, staging size, alignment and reuse rules, recording chunk bounds, bounded device fault report, device lost reporting paths (no Vulkan device)'; Block = { Invoke-GpuRecording } },
     @{ Name = 'device-lost'; Title = 'Vulkan device lost: first fault owns the incident, repeated and competing losses, refused submissions and sparse binds, waits that end, GPU worker exit, stop token and shutdown, optional bounded device fault query, deterministic reason, opt-in simulation (fake callbacks, no Vulkan device)'; Block = { Invoke-DeviceLost } },
