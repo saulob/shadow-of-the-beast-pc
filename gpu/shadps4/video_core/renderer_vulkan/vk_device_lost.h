@@ -18,6 +18,7 @@
 #include <utility>
 
 #include "video_core/renderer_vulkan/vk_fault_report.h"
+#include "video_core/renderer_vulkan/vk_gpu_timeline.h"
 
 namespace Vulkan::DeviceLost {
 
@@ -127,6 +128,19 @@ inline std::string FormatReason(const Incident& incident) {
     return reason;
 }
 
+// One line of the GPU timeline dump, without allocation.
+inline void FormatTimelineEntry(char* out, std::size_t size, const TimelineEntry& entry) noexcept {
+    char tick[48] = "";
+    if (entry.timeline != Timeline::None) {
+        std::snprintf(tick, sizeof(tick), ", %s tick %llu", TimelineName(entry.timeline),
+                      static_cast<unsigned long long>(entry.tick));
+    }
+    std::snprintf(out, size, "GPU timeline: #%llu thread %u %s (%s)%s, result %d%s",
+                  static_cast<unsigned long long>(entry.sequence), entry.thread,
+                  OperationName(Operation(entry.kind)), entry.stage, tick, entry.result,
+                  entry.result == DeviceLostResult ? " DEVICE LOST" : "");
+}
+
 struct Hooks {
     void* context{};
     FaultReport (*query_fault)(void* context){};
@@ -166,8 +180,14 @@ public:
         driver = std::move(driver_name);
     }
 
-    // Only VK_ERROR_DEVICE_LOST changes state; any other result is the caller's to handle.
-    Outcome Report(Operation operation, const char* stage, std::int32_t result, std::uint64_t tick) {
+    // Only VK_ERROR_DEVICE_LOST changes state; any other result is the caller's to handle. Every result is recorded in
+    // the timeline first, so the owner's own failing call is part of the history it dumps. A successful counter poll
+    // is not: it would push the submissions out of the ring.
+    Outcome Report(Operation operation, const char* stage, std::int32_t result, std::uint64_t tick,
+                   Timeline timeline = Timeline::None) {
+        if (operation != Operation::GetSemaphoreCounterValue || result != Success) {
+            events.Record(std::uint32_t(operation), stage, result, tick, timeline);
+        }
         if (result != DeviceLostResult) {
             return Outcome::NotLost;
         }
@@ -231,14 +251,67 @@ public:
     [[nodiscard]] std::uint32_t StopRequests() const noexcept {
         return stop_requests.load(std::memory_order_relaxed);
     }
+    [[nodiscard]] const EventRing& Events() const noexcept {
+        return events;
+    }
+    [[nodiscard]] std::uint32_t TimelineDumps() const noexcept {
+        return timeline_dumps.load(std::memory_order_relaxed);
+    }
 
 private:
-    void Print(const Hooks& snapshot, const std::string& line) const {
+    void Print(const Hooks& snapshot, const char* line) const {
         if (snapshot.print) {
-            snapshot.print(line.c_str());
+            snapshot.print(line);
         } else {
-            std::fprintf(stderr, "%s\n", line.c_str());
+            std::fprintf(stderr, "%s\n", line);
             std::fflush(stderr);
+        }
+    }
+    void Print(const Hooks& snapshot, const std::string& line) const {
+        Print(snapshot, line.c_str());
+    }
+
+    // The owner's one dump of the recent GPU history; fixed buffers only.
+    void PrintTimeline(const Hooks& snapshot) {
+        timeline_dumps.fetch_add(1, std::memory_order_relaxed);
+        TimelineEntry history[TimelineCapacity];
+        const std::size_t count = events.Snapshot(history, TimelineCapacity);
+        char line[256];
+        std::snprintf(line, sizeof(line), "GPU timeline: latest %zu of %llu GPU operations before the loss", count,
+                      static_cast<unsigned long long>(events.Recorded()));
+        Print(snapshot, line);
+        const TimelineEntry* last_success = nullptr;
+        const TimelineEntry* last_submit[std::size_t(Timeline::Count)]{};
+        for (std::size_t i = 0; i < count; ++i) {
+            const TimelineEntry& entry = history[i];
+            if (entry.result != Success) {
+                continue;
+            }
+            last_success = &entry;
+            if ((entry.kind == std::uint32_t(Operation::QueueSubmit) ||
+                 entry.kind == std::uint32_t(Operation::QueueBindSparse)) &&
+                std::size_t(entry.timeline) < std::size_t(Timeline::Count)) {
+                last_submit[std::size_t(entry.timeline)] = &entry;
+            }
+        }
+        if (last_success) {
+            FormatTimelineEntry(line, sizeof(line), *last_success);
+            Print(snapshot, "GPU timeline: last successful operation:");
+            Print(snapshot, line);
+        } else {
+            Print(snapshot, "GPU timeline: no successful operation recorded");
+        }
+        for (std::size_t i = 1; i < std::size_t(Timeline::Count); ++i) {
+            if (last_submit[i]) {
+                std::snprintf(line, sizeof(line), "GPU timeline: %s timeline last submitted tick %llu (#%llu)",
+                              TimelineName(Timeline(i)), static_cast<unsigned long long>(last_submit[i]->tick),
+                              static_cast<unsigned long long>(last_submit[i]->sequence));
+                Print(snapshot, line);
+            }
+        }
+        for (std::size_t i = 0; i < count; ++i) {
+            FormatTimelineEntry(line, sizeof(line), history[i]);
+            Print(snapshot, line);
         }
     }
 
@@ -272,6 +345,7 @@ private:
         incident.simulated = simulated_hit.load(std::memory_order_relaxed);
         Print(snapshot, "GPU device lost: first detected in " + std::string(OperationName(operation)) + " (" +
                             incident.stage + ")");
+        PrintTimeline(snapshot);
         if (snapshot.log_state && !incident.simulated) {
             snapshot.log_state(snapshot.context);
         }
@@ -295,6 +369,8 @@ private:
     std::atomic<std::uint32_t> refused{};
     std::atomic<std::uint32_t> fault_queries{};
     std::atomic<std::uint32_t> stop_requests{};
+    std::atomic<std::uint32_t> timeline_dumps{};
+    EventRing events;
     std::atomic<std::uint32_t> simulated_operation{std::uint32_t(Operation::Count)};
     std::atomic<std::uint64_t> simulated_calls{};
     std::atomic<bool> simulated_hit{};
@@ -365,13 +441,13 @@ inline bool ArmSimulationFromValue(Monitor& monitor, const char* value) {
 // A Vulkan call that must not reach a lost device. Returns VK_ERROR_DEVICE_LOST without calling once the device is lost.
 template <typename Call>
 std::int32_t CallWhileHealthy(Monitor& monitor, Operation operation, const char* stage, std::uint64_t tick,
-                              Call&& call) {
+                              Call&& call, Timeline timeline = Timeline::None) {
     if (monitor.IsLost()) {
         monitor.NoteRefused();
         return DeviceLostResult;
     }
     const std::int32_t result = monitor.Simulate(operation) ? DeviceLostResult : static_cast<std::int32_t>(call());
-    monitor.Report(operation, stage, result, tick);
+    monitor.Report(operation, stage, result, tick, timeline);
     return result;
 }
 
@@ -379,7 +455,7 @@ std::int32_t CallWhileHealthy(Monitor& monitor, Operation operation, const char*
 // lost instead of waiting for a signal that cannot come.
 template <typename WaitOnce>
 std::int32_t WaitWhileHealthy(Monitor& monitor, Operation operation, const char* stage, std::uint64_t tick,
-                              WaitOnce&& wait_once) {
+                              WaitOnce&& wait_once, Timeline timeline = Timeline::None) {
     for (;;) {
         if (monitor.IsLost()) {
             monitor.NoteRefused();
@@ -388,7 +464,7 @@ std::int32_t WaitWhileHealthy(Monitor& monitor, Operation operation, const char*
         const std::int32_t result =
             monitor.Simulate(operation) ? DeviceLostResult : static_cast<std::int32_t>(wait_once());
         if (result != Timeout) {
-            monitor.Report(operation, stage, result, tick);
+            monitor.Report(operation, stage, result, tick, timeline);
             return result;
         }
     }

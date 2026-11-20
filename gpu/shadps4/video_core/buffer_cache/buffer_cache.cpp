@@ -84,7 +84,7 @@ BufferCache::BufferCache(const Vulkan::Instance& instance_, Vulkan::Scheduler& s
       memory_tracker{std::make_unique<MemoryTracker>(tracker)},
       stream_buffer{instance, scheduler, MemoryType::Stream, STREAM_BUFFER_SIZE},
       gds_buffer{instance, 0, GDS_BUFFER_SIZE, MemoryType::Stream, "GDS Buffer"},
-      memory_semaphore{instance} {
+      memory_semaphore{instance, DeviceLost::Timeline::Memory} {
     const auto decision = ArenaLayout::DecideArenaMode(instance.GetSparseCapabilities());
     sparse_supported = decision.mode == ArenaLayout::ArenaMode::Sparse;
     arena_page_bits = ArenaLayout::PageBits(sparse_supported, instance.GetMaxBufferSize(),
@@ -968,7 +968,7 @@ void BufferCache::SubmitPendingArenaBinds(Vulkan::SubmitInfo& info) {
     info.AddWait(signal_sema, signal_tick);
     const s32 submit_result = DeviceLost::CallWhileHealthy(
         DeviceLost::Global(), DeviceLost::Operation::QueueBindSparse, "sparse", signal_tick,
-        [&] { return instance.GetGraphicsQueue().bindSparse(sparse_info); });
+        [&] { return instance.GetGraphicsQueue().bindSparse(sparse_info); }, DeviceLost::Timeline::Memory);
     if (submit_result != DeviceLost::DeviceLostResult) {
         ASSERT_MSG(submit_result == DeviceLost::Success, "Sparse bind failed: {}",
                    vk::to_string(vk::Result(submit_result)));

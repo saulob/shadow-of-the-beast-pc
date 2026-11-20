@@ -425,6 +425,122 @@ static void test_transferring_mount(void) {
     CHECK(transfer(NULL, &r) == ERR_PARAMETER);
 }
 
+static char captured[4096];
+static int saved_stdout = -1, path_leaks;
+static void capture_begin(void) {
+    char path[800]; snprintf(path, sizeof(path), "%s/capture.txt", test_root);
+    fflush(stdout);
+    saved_stdout = dup(1);
+    const int file = open(path, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+    dup2(file, 1);
+    close(file);
+}
+static void capture_end(void) {
+    char path[800]; snprintf(path, sizeof(path), "%s/capture.txt", test_root);
+    fflush(stdout);
+    dup2(saved_stdout, 1);
+    close(saved_stdout);
+    FILE *f = fopen(path, "rb");
+    size_t n = f ? fread(captured, 1, sizeof(captured) - 1, f) : 0;
+    captured[n] = 0;
+    if (f) fclose(f);
+    if (strstr(captured, test_root) || strstr(captured, "/user") || strstr(captured, "CUSA19610")) ++path_leaks;
+}
+static int count_of(const char *text, const char *needle) {
+    int n = 0;
+    for (const char *p = text; (p = strstr(p, needle)); p += strlen(needle)) ++n;
+    return n;
+}
+
+/* A failed mount leaves one bounded, printable line naming the call, directory, error and mode; no host path. */
+static void test_mount_diagnostics(void) {
+    typedef int32_t (ABI *Mount1Fn)(const Mount1 *, MountResult *);
+    const Mount1Fn mount1 = (Mount1Fn)save_export("sceSaveDataMount");
+    MountResult r;
+
+    capture_begin();
+    const int32_t created = mount_dir("DIAGOK", MODE_CREATE | MOUNT_RDWR, &r);
+    capture_end();
+    CHECK(created == 0 && !strstr(captured, "failed") && strstr(captured, "'DIAGOK' mounted"));
+    CHECK(api.umount(&r.point) == 0);
+
+    capture_begin();
+    int32_t code = mount_dir("NODIAGSAVE", MODE_RDONLY, &r);
+    capture_end();
+    CHECK(code == ERR_NOT_FOUND);
+    CHECK(count_of(captured, "\n") == 1 && count_of(captured, "failed") == 1);
+    CHECK(strstr(captured, "sceSaveDataMount2 failed") && strstr(captured, "dir 'NODIAGSAVE'"));
+    CHECK(strstr(captured, "0x809f0008") && strstr(captured, "(not found)"));
+    CHECK(strstr(captured, "mode 0x1 (read-only)") && strstr(captured, "user 1"));
+
+    capture_begin();
+    code = mount_dir("DIAGOK", MODE_CREATE | MOUNT_RDWR, &r);
+    capture_end();
+    CHECK(code == ERR_EXISTS && count_of(captured, "failed") == 1);
+    CHECK(strstr(captured, "0x809f0007") && strstr(captured, "mode 0x6 (read-write, create)"));
+
+    DirName dir = dir_name("NODIAGONE");
+    Mount1 first; memset(&first, 0, sizeof(first));
+    first.user = 1; first.dir = &dir; first.mode = MOUNT_RDWR;
+    capture_begin();
+    code = mount1(&first, &r);
+    capture_end();
+    CHECK(code == ERR_NOT_FOUND && count_of(captured, "\n") == 1);
+    CHECK(strstr(captured, "sceSaveDataMount failed") && !strstr(captured, "sceSaveDataMount2"));
+    CHECK(strstr(captured, "dir 'NODIAGONE'") && strstr(captured, "(read-write)"));
+
+    capture_begin();
+    code = mount1(NULL, &r);
+    capture_end();
+    CHECK(code == ERR_PARAMETER && count_of(captured, "\n") == 1 && strstr(captured, "dir '(none)'"));
+
+    Mount2 second; memset(&second, 0, sizeof(second));
+    second.user = -1; second.dir = &dir; second.mode = MODE_CREATE;
+    capture_begin();
+    code = api.mount2(&second, &r);
+    capture_end();
+    CHECK(code == ERR_INVALID_USER && strstr(captured, "(invalid user)") && strstr(captured, "user -1"));
+
+    struct { DirName name; char guard[24]; } hostile;
+    memset(&hostile, 'Z', sizeof(hostile));
+    memcpy(hostile.name.data, "bad\n\x1b[31m\rname", 14);
+    memset(hostile.name.data + 14, 'Q', sizeof(hostile.name.data) - 14);
+    second.user = 1; second.dir = &hostile.name; second.mode = MOUNT_RDWR;
+    capture_begin();
+    code = api.mount2(&second, &r);
+    capture_end();
+    CHECK(code == ERR_PARAMETER && count_of(captured, "\n") == 1 && strlen(captured) < 200);
+    CHECK(strstr(captured, "dir 'bad??[31m?name") && !strchr(captured, 'Z') && !strchr(captured, '\x1b'));
+
+    DirName traversal = dir_name("../escape");
+    second.dir = &traversal;
+    capture_begin();
+    code = api.mount2(&second, &r);
+    capture_end();
+    CHECK(code == ERR_PARAMETER && count_of(captured, "failed") == 1 && strstr(captured, "(parameter)"));
+
+    capture_begin();
+    code = api.mount2(NULL, &r);
+    capture_end();
+    CHECK(code == ERR_PARAMETER && count_of(captured, "\n") == 1);
+
+    typedef int32_t (ABI *TransferFn)(const TransferringMount *, MountResult *);
+    const TransferFn transfer = (TransferFn)save_export("sceSaveDataTransferringMount");
+    TitleId missing; memset(&missing, 0, sizeof(missing)); memcpy(missing.data, "CUSA00001", 9);
+    TransferringMount moved; memset(&moved, 0, sizeof(moved));
+    moved.user = 1; moved.title = &missing; moved.dir = &dir;
+    capture_begin();
+    code = transfer(&moved, &r);
+    capture_end();
+    CHECK(code == ERR_NOT_FOUND && count_of(captured, "\n") == 1);
+    CHECK(strstr(captured, "sceSaveDataTransferringMount failed") && strstr(captured, "mode 0x1 (read-only)"));
+
+    CHECK(path_leaks == 0);
+    char leftover[900];
+    snprintf(leftover, sizeof(leftover), "%s/DIAGOK", save_root); wipe(leftover);
+    snprintf(leftover, sizeof(leftover), "%s/DIAGOK.sce_sys", save_root); wipe(leftover);
+}
+
 /* The user's save, copied: mounted read-only, opened and read the way the game loads it. */
 static void test_user_save_copy(const char *repo) {
     char original[1100], original_meta[1100];
@@ -494,6 +610,7 @@ int main(void) {
 
     test_requires_initialize();
     test_missing_and_invalid();
+    test_mount_diagnostics();
     test_create_write_and_reload();
     test_directory_listing();
     test_repeated_mounts();

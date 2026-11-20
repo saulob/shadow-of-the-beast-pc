@@ -13,7 +13,8 @@ namespace Vulkan {
 // Long enough to cost nothing while waiting, short enough to notice a device lost on another thread.
 constexpr u64 WAIT_SLICE_NS = 100'000'000;
 
-Semaphore::Semaphore(const Instance& instance_) : instance{instance_} {
+Semaphore::Semaphore(const Instance& instance_, DeviceLost::Timeline timeline_)
+    : instance{instance_}, timeline{timeline_} {
     const vk::StructureChain semaphore_chain = {
         vk::SemaphoreCreateInfo{},
         vk::SemaphoreTypeCreateInfo{
@@ -42,7 +43,8 @@ void Semaphore::Refresh() {
                 std::tie(counter_result, counter) =
                     instance.GetDevice().getSemaphoreCounterValue(*semaphore);
                 return counter_result;
-            });
+            },
+            timeline);
         if (result == DeviceLost::DeviceLostResult) {
             return;
         }
@@ -76,7 +78,8 @@ void Semaphore::Wait(u64 tick) {
     const s32 result = DeviceLost::WaitWhileHealthy(
         DeviceLost::Global(), DeviceLost::Operation::WaitSemaphores, "semwait", tick, [&] {
             return instance.GetDevice().waitSemaphores(&wait_info, WAIT_SLICE_NS);
-        });
+        },
+        timeline);
     if (result == DeviceLost::DeviceLostResult) {
         return;
     }

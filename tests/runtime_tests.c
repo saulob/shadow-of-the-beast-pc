@@ -194,6 +194,152 @@ static void test_cancellation(void) {
     CHECK(cancel_thread(runtime_thread_current()) == KERR(1));
 }
 
+static HandleFn cancel_handle;
+static atomic_int gate, entered;
+static GuestThread *join_target;
+static ABI void *spin_until_gate(void *argument) {
+    (void)argument;
+    atomic_store(&entered, 1);
+    while (!atomic_load(&gate)) nap_ns(500000);
+    return (void *)5;
+}
+static ABI void *sleep_long(void *argument) {
+    (void)argument;
+    atomic_store(&entered, 1);
+    runtime_thread_sleep_ns(UINT64_C(30000000000));
+    return (void *)5;
+}
+static ABI void *join_other(void *argument) {
+    (void)argument;
+    void *value = NULL;
+    const int32_t status = join_thread(join_target, &value);
+    return status == 0 ? (void *)((uintptr_t)value + 100) : (void *)1000;
+}
+static ABI void *cancel_storm(void *argument) {
+    for (int i = 0; i < 200; ++i) {
+        const int32_t status = cancel_handle((GuestThread *)argument);
+        if (status != 0 && status != KERR(3)) return (void *)1;
+    }
+    return NULL;
+}
+static int thread_finished(GuestThread *t) {
+    pthread_mutex_lock(&lock);
+    const int finished = t->finished;
+    pthread_mutex_unlock(&lock);
+    return finished;
+}
+static GuestThread *start(GuestEntry entry, void *argument, const char *name) {
+    GuestThread *t = NULL;
+    CHECK(create_thread(&t, NULL, entry, argument, name) == 0);
+    return t;
+}
+
+/* Cancellation never waits for, stops or kills a thread outside a cancellation point: the request is recorded, the
+ * thread finishes by itself, and join, detach and the guest error codes behave as without a cancel. */
+static void test_cancellation_edges(void) {
+    cancel_handle = thread_export("qBDmpCyGssE#libkernel");
+    void *result = NULL;
+    int stack_value = 0;
+    CHECK(cancel_handle(NULL) == KERR(3));
+    CHECK(cancel_handle((GuestThread *)&stack_value) == KERR(3));
+    CHECK(cancel_handle((GuestThread *)(uintptr_t)0xdeadbeef) == KERR(3));
+
+    GuestThread *done = start(return_argument, (void *)4, "finished");
+    for (int i = 0; i < 2000 && !thread_finished(done); ++i) nap_ns(1000000);
+    CHECK(thread_finished(done));
+    CHECK(cancel_handle(done) == KERR(3));
+    CHECK(join_thread(done, &result) == 0 && (uintptr_t)result == 8);
+    CHECK(cancel_handle(done) == KERR(3));
+
+    atomic_store(&gate, 0);
+    atomic_store(&entered, 0);
+    GuestThread *running = start(spin_until_gate, NULL, "running");
+    wait_until(&entered, 1);
+    const uint64_t begin = monotonic_us();
+    CHECK(cancel_handle(running) == 0);
+    CHECK(cancel_handle(running) == 0);
+    CHECK(monotonic_us() - begin < 500000);
+    CHECK(!thread_finished(running) && cancel_requested(running));
+    atomic_store(&gate, 1);
+    CHECK(join_thread(running, &result) == 0 && (uintptr_t)result == 5);
+    CHECK(cancel_handle(running) == KERR(3));
+
+    /* A cancelled joiner leaves its wait and the target stays joinable. */
+    atomic_store(&gate, 0);
+    atomic_store(&entered, 0);
+    join_target = start(spin_until_gate, NULL, "target");
+    wait_until(&entered, 1);
+    GuestThread *joiner = start(join_other, NULL, "joiner");
+    CHECK(wait_state_after(joiner, "join") != NULL);
+    CHECK(cancel_handle(joiner) == 0);
+    CHECK(join_thread(joiner, &result) == 0 && (uintptr_t)result == 1);
+    CHECK(!thread_finished(join_target) && !join_target->joined);
+    atomic_store(&gate, 1);
+    CHECK(join_thread(join_target, &result) == 0 && (uintptr_t)result == 5);
+
+    /* Cancelling the thread a joiner waits for ends both, with the canceled result. */
+    const uint64_t slept = monotonic_us();
+    atomic_store(&entered, 0);
+    join_target = start(sleep_long, NULL, "sleeper");
+    wait_until(&entered, 1);
+    joiner = start(join_other, NULL, "joiner");
+    CHECK(wait_state_after(joiner, "join") != NULL);
+    CHECK(cancel_handle(join_target) == 0);
+    CHECK(join_thread(joiner, &result) == 0 && (uintptr_t)result == 101);
+    CHECK(monotonic_us() - slept < 10000000);
+
+    /* Cancel then detach, and detach then cancel: the thread ends and is reaped. */
+    const size_t before = live_threads();
+    for (int order = 0; order < 2; ++order) {
+        atomic_store(&entered, 0);
+        GuestThread *t = start(sleep_long, NULL, "detached-sleeper");
+        wait_until(&entered, 1);
+        if (order) CHECK(detach_thread(t) == 0);
+        CHECK(cancel_handle(t) == 0);
+        if (!order) CHECK(detach_thread(t) == 0);
+        CHECK(join_thread(t, &result) == KERR(22));
+    }
+    for (int i = 0; i < 2000 && live_threads() != before; ++i) nap_ns(1000000);
+    CHECK(live_threads() == before);
+
+    /* Cancels racing a thread that exits by itself: each is accepted or reports a finished thread, join always works. */
+    for (int i = 0; i < 100; ++i) {
+        GuestThread *t = start(return_argument, (void *)(uintptr_t)i, "racing");
+        const int32_t status = cancel_handle(t);
+        CHECK(status == 0 || status == KERR(3));
+        CHECK(join_thread(t, &result) == 0 && (uintptr_t)result == (uintptr_t)i * 2);
+    }
+    GuestThread *storm_target = start(return_argument, (void *)3, "storm-target");
+    GuestThread *storms[4];
+    for (int i = 0; i < 4; ++i) storms[i] = start(cancel_storm, storm_target, "storm");
+    for (int i = 0; i < 4; ++i) CHECK(join_thread(storms[i], &result) == 0 && result == NULL);
+    CHECK(join_thread(storm_target, &result) == 0 && (uintptr_t)result == 6);
+}
+
+/* Structure of the cancel path: no host cancellation or exit, no timed wait and no polling loop. */
+static void test_cancellation_source(void) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/src/runtime_thread.c", SOTB_SOURCE_DIR);
+    FILE *f = fopen(path, "rb");
+    CHECK(f != NULL);
+    if (!f) return;
+    static char text[80000];
+    const size_t size = fread(text, 1, sizeof(text) - 1, f);
+    fclose(f);
+    text[size] = 0;
+    CHECK(!strstr(text, "pthread_cancel(") && !strstr(text, "pthread_cond_timedwait"));
+    const char *begin = strstr(text, "static ABI int32_t thread_cancel(");
+    const char *end = begin ? strstr(begin, "static ABI __attribute__((noreturn)) void thread_exit") : NULL;
+    CHECK(begin && end);
+    if (!begin || !end) return;
+    char body[4096];
+    const size_t length = (size_t)(end - begin) < sizeof(body) - 1 ? (size_t)(end - begin) : sizeof(body) - 1;
+    memcpy(body, begin, length);
+    body[length] = 0;
+    CHECK(!strstr(body, "exit(") && !strstr(body, "sleep") && !strstr(body, "yield") && !strstr(body, "while") &&
+          !strstr(body, "for ("));
+}
+
 static void test_mutexes_and_wait_states(void) {
     void *attr = NULL, *recursive = NULL;
     CHECK(mutex_create(&shared_mutex, NULL, "shared") == 0);
@@ -283,6 +429,8 @@ int main(void) {
 
     test_create_join_exit();
     test_detached_threads();
+    test_cancellation_edges();
+    test_cancellation_source();
     test_mutexes_and_wait_states();
     test_report();
     printf("runtime: %d checks, %d failed\n", checks, failures);

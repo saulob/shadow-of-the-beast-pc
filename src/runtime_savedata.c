@@ -169,6 +169,33 @@ static int32_t traced(const char *operation,const char *subject,int32_t result) 
     return result;
 }
 static const char *point_name(const MountPoint *point) { return point ? point->data : "null"; }
+static const char *error_name(int32_t error) {
+    switch (error) {
+    case ERR_PARAMETER: return "parameter";
+    case ERR_NOT_INITIALIZED: return "not initialized";
+    case ERR_NO_PERMISSION: return "no permission";
+    case ERR_EXISTS: return "exists";
+    case ERR_NOT_FOUND: return "not found";
+    case ERR_INTERNAL: return "internal";
+    case ERR_MOUNT_FULL: return "mount full";
+    case ERR_BAD_MOUNTED: return "bad mounted";
+    case ERR_INVALID_USER: return "invalid user";
+    default: return "other";
+    }
+}
+/* The one failed-mount line. The guest's name is a fixed buffer that need not end in a terminator or be printable. */
+static int32_t mount_failed(const char *operation, int32_t user, const DirName *dir, uint32_t mode, int32_t error) {
+    char name[sizeof(dir->data)+1]="(none)";
+    if (dir) {
+        size_t n=0;
+        for (;n<sizeof(dir->data) && dir->data[n];++n) name[n]=dir->data[n]>=0x20 && dir->data[n]<0x7f ? dir->data[n] : '?';
+        name[n]=0;
+    }
+    printf("Runtime: %s failed: dir '%s', error 0x%08x (%s), mode 0x%x (%s%s), user %d\n",operation,name,(uint32_t)error,
+           error_name(error),mode,(mode & MODE_RDONLY) ? "read-only" : "read-write",
+           (mode & (MODE_CREATE|MODE_CREATE2)) ? ", create" : "",user);
+    return error;
+}
 static ABI int32_t save_initialize(const void *param) { (void)param; initialized=1; return 0; }
 static ABI int32_t save_terminate(void) {
     if (!initialized) return ERR_NOT_INITIALIZED;
@@ -212,14 +239,20 @@ static int32_t mount(int32_t user, const char *title, const DirName *dir, uint64
            exists ? "existing" : "created",(mode & MODE_RDONLY) ? ", read-only" : "");
     return 0;
 }
+static int32_t mount_logged(const char *operation, const Mount1 *m1, const Mount2 *m2, MountResult *result) {
+    const int32_t user=m1 ? m1->user : m2->user;
+    const DirName *dir=m1 ? m1->dir : m2->dir;
+    const uint32_t mode=m1 ? m1->mode : m2->mode;
+    const int32_t error=mount(user,m1 && m1->title ? m1->title->data : NULL,dir,m1 ? m1->blocks : m2->blocks,mode,result);
+    return error ? mount_failed(operation,user,dir,mode,error) : 0;
+}
 static ABI int32_t save_mount(const Mount1 *m, MountResult *result) {
-    if (!m) return traced("sceSaveDataMount","null",ERR_PARAMETER);
-    return traced("sceSaveDataMount",m->dir ? m->dir->data : "null",
-                  mount(m->user,m->title ? m->title->data : NULL,m->dir,m->blocks,m->mode,result));
+    if (!m) return mount_failed("sceSaveDataMount",0,NULL,0,ERR_PARAMETER);
+    return mount_logged("sceSaveDataMount",m,NULL,result);
 }
 static ABI int32_t save_mount2(const Mount2 *m, MountResult *result) {
-    if (!m) return traced("sceSaveDataMount2","null",ERR_PARAMETER);
-    return traced("sceSaveDataMount2",m->dir ? m->dir->data : "null",mount(m->user,NULL,m->dir,m->blocks,m->mode,result));
+    if (!m) return mount_failed("sceSaveDataMount2",0,NULL,0,ERR_PARAMETER);
+    return mount_logged("sceSaveDataMount2",NULL,m,result);
 }
 static int slot_of(const MountPoint *point) {
     if (!point || strncmp(point->data,"/savedata",9)) return -1;
@@ -229,11 +262,11 @@ static int slot_of(const MountPoint *point) {
 /* Another title's save, read-only: the Japanese and Asian games offer to carry over their prologue demo's (param.sfo
  * SAVE_DATA_TRANSFER_TITLE_ID_LIST). Without such a save in the user folder it is not found, as on a console. */
 static ABI int32_t save_transferring_mount(const TransferringMount *m, MountResult *result) {
-    if (!m || !m->title) return traced("sceSaveDataTransferringMount","null",ERR_PARAMETER);
+    if (!m || !m->title) return mount_failed("sceSaveDataTransferringMount",m ? m->user : 0,m ? m->dir : NULL,MODE_RDONLY,ERR_PARAMETER);
     char title[sizeof(m->title->data)+1];
     memcpy(title,m->title->data,sizeof(m->title->data));
     title[sizeof(m->title->data)]=0;
-    if (!valid_name(title,sizeof(title))) return traced("sceSaveDataTransferringMount","bad title",ERR_PARAMETER);
+    if (!valid_name(title,sizeof(title))) return mount_failed("sceSaveDataTransferringMount",m->user,m->dir,MODE_RDONLY,ERR_PARAMETER);
     const int32_t status=mount(m->user,title,m->dir,0,MODE_RDONLY,result);
     const int slot=status ? -1 : slot_of(&result->point);
     if (slot>=0) {
@@ -242,7 +275,7 @@ static ABI int32_t save_transferring_mount(const TransferringMount *m, MountResu
         pthread_mutex_unlock(&lock);
         runtime_file_mount_read_only(result->point.data,slots[slot].host);
     }
-    return traced("sceSaveDataTransferringMount",m->dir ? m->dir->data : "null",status);
+    return status ? mount_failed("sceSaveDataTransferringMount",m->user,m->dir,MODE_RDONLY,status) : 0;
 }
 static int32_t umount(const MountPoint *point) {
     if (!initialized) return ERR_NOT_INITIALIZED;

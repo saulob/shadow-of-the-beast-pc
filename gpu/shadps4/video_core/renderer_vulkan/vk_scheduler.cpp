@@ -562,7 +562,8 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     ImGui::Core::TextureManager::Submit();
     const s32 submit_result = DeviceLost::CallWhileHealthy(
         DeviceLost::Global(), DeviceLost::Operation::QueueSubmit, "submit", signal_value,
-        [&] { return instance.GetGraphicsQueue().submit(submit_info, info.fence); });
+        [&] { return instance.GetGraphicsQueue().submit(submit_info, info.fence); },
+        DeviceLost::Timeline::Work);
     if (submit_result == DeviceLost::DeviceLostResult) {
         return;
     }

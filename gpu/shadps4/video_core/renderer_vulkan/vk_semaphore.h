@@ -9,6 +9,7 @@
 #include <queue>
 #include "common/types.h"
 #include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_gpu_timeline.h"
 
 namespace Vulkan {
 
@@ -17,7 +18,8 @@ class Scheduler;
 
 class Semaphore {
 public:
-    explicit Semaphore(const Instance& instance_);
+    explicit Semaphore(const Instance& instance_,
+                       DeviceLost::Timeline timeline_ = DeviceLost::Timeline::Work);
     ~Semaphore();
 
     [[nodiscard]] u64 CurrentTick() const noexcept {
@@ -48,6 +50,7 @@ public:
 
 protected:
     const Instance& instance;
+    DeviceLost::Timeline timeline; ///< Names this semaphore's ticks in the GPU timeline.
     vk::UniqueSemaphore semaphore;    ///< Timeline semaphore.
     std::atomic<u64> gpu_tick{0};     ///< Current known GPU tick.
     std::atomic<u64> current_tick{1}; ///< Current logical tick.

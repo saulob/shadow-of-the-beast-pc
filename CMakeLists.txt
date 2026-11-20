@@ -145,6 +145,7 @@ target_link_libraries(memory_windows_test PRIVATE onecore -pthread)
 
 set(SOTB_TEST_DEFINITIONS _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
 add_executable(runtime_sync_test EXCLUDE_FROM_ALL tests/runtime_tests.c tests/runtime_lookup_stub.c src/runtime_mutex.c src/compat_win.c)
+target_compile_definitions(runtime_sync_test PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_executable(savedata_test EXCLUDE_FROM_ALL tests/savedata_tests.c src/runtime_file.c src/compat_win.c)
 target_compile_definitions(savedata_test PRIVATE SOTB_SAVEDATA_TEST_ROOT="${CMAKE_BINARY_DIR}/savedata-tests"
     SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
@@ -268,6 +269,13 @@ target_include_directories(sotb-device-lost-tests PRIVATE gpu/shadps4)
 target_compile_definitions(sotb-device-lost-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(sotb-device-lost-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sotb-device-lost-tests PRIVATE -pthread)
+
+add_executable(sotb-gpu-crash-timeline-tests EXCLUDE_FROM_ALL tests/gpu_crash_timeline_tests.cpp)
+set_target_properties(sotb-gpu-crash-timeline-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-gpu-crash-timeline-tests PRIVATE gpu/shadps4)
+target_compile_definitions(sotb-gpu-crash-timeline-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-gpu-crash-timeline-tests PRIVATE -Wall -Wextra -Werror)
+target_link_libraries(sotb-gpu-crash-timeline-tests PRIVATE -pthread)
 
 add_executable(sotb-gpu-memory-fallback-tests EXCLUDE_FROM_ALL tests/gpu_memory_fallback_tests.cpp)
 set_target_properties(sotb-gpu-memory-fallback-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
