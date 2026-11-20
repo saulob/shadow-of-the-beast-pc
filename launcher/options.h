@@ -24,10 +24,10 @@ inline constexpr WindowSize kGamePictureSize{1920, 1080};
 
 std::vector<WindowSize> WindowSizes();
 
-enum class PageId { kPlay, kDisplay, kGraphics, kGameplay, kControls, kTrophies, kAbout };
+enum class PageId { kPlay, kDisplay, kGraphics, kGameplay, kControls, kTrophies, kBugReport, kAbout };
 
 inline constexpr PageId kPageOrder[] = {PageId::kPlay,     PageId::kDisplay,  PageId::kGraphics, PageId::kGameplay,
-                                        PageId::kControls, PageId::kTrophies, PageId::kAbout};
+                                        PageId::kControls, PageId::kTrophies, PageId::kBugReport, PageId::kAbout};
 
 const char* PageName(PageId page);
 

@@ -1,7 +1,7 @@
 # Launcher
 
-The launcher is TRG Launcher 1.1.0 with seven pages, in this order: **Play**, **Display**, **Graphics**, **Gameplay**,
-**Controls**, **Trophies** and **About**. Every option on a page has a key in `user\sotb.ini` and a reader in the
+The launcher is TRG Launcher 1.1.0 with eight pages, in this order: **Play**, **Display**, **Graphics**, **Gameplay**,
+**Controls**, **Trophies**, **Bug Report** and **About**. Every option on a page has a key in `user\sotb.ini` and a reader in the
 runtime or the video core; `docs/LAUNCHER_PARITY_AUDIT.md` lists each one with its reader and how it was checked.
 
 Settings are saved when you press Play (or Save). Options that need a restart say so. Lines of `sotb.ini` the launcher does
@@ -65,6 +65,64 @@ keeps priority and an unmapped joystick is logged once per connection with its G
 
 See `docs/TROPHIES.md`.
 
+## Bug Report
+
+The page reports a problem with one privacy-filtered game log, with a description. Nothing is sent until **Send report**
+is pressed: opening the page, **Preview**, **View selected log**, **Play** and the launcher's start send nothing. The report
+service is a Cloudflare Worker of its own, [server/shadow-bug-reports](../server/shadow-bug-reports/README.md), shared with no
+other project and independent of the game's offline online-service stubs.
+
+1. **Report the problem**: 10 to 500 characters, with a counter.
+2. **Choose one game log**: the newest five `logs\shadow_of_the_beast_NNN.log`. Each is labelled **Current launcher session**,
+   **Last gameplay**, **Gameplay session** or **Launcher session**. A session that closed in the launcher without starting the
+   game is left out. The default is the newest session that started the game, not the launcher's own log, and the last
+   gameplay stays in the list when newer launcher sessions fill it. **View selected log** opens the file in the system's viewer
+   and changes nothing.
+3. **Preview**: the exact report that **Send report** builds.
+4. **Send**: **Save report** writes the same text to `logs\reports\`; the GitHub issue tracker stays available.
+
+What is sent is exactly the preview: description, port version, game build, region, game version, title ID, executable
+SHA-256, operating system, CPU, selected and active renderer, graphics card, driver, render resolution, the log's file name,
+whether the log was clipped, and the log text. The renderer, CPU, graphics card, driver and resolution are read from the start
+of the selected log. The log is read from its last 256 KiB, filtered, cut to its last 64 KiB starting on a whole line, and
+sent as UTF-8. No saves, trophies, game files, settings files, screenshots or other logs are sent.
+
+The filter removes or masks Windows and POSIX user names, computer names, home and profile folders, other local folders,
+network shares, IPv4 and IPv6 addresses, email addresses, account numbers, tokens, passwords and other labelled secrets,
+authorization and cookie values, and control characters. It keeps versions, the renderer, graphics card and driver, guest
+addresses, offsets, RVAs, exceptions, stack traces, the build fingerprint, graphics warnings and file names. Automatic filtering
+cannot promise to catch everything, which is why the page offers the preview.
+
+The service answers a report with a ticket (`SOB-XXXXXX`) and a private receipt (32 random bytes in hex). The receipt is kept
+only in `user\bug_reports.json` and is sent only to ask about that one report; it is never logged or shown. A limit answer
+(`429`) shows its `Retry-After` when the service sends one.
+
+### My Reports
+
+The reports sent from this PC (the newest 30) are listed under the form. The launcher asks the service about them off the UI
+thread when it starts, while the page is open once the last check is thirty seconds old, and on **Refresh**; nothing is asked when
+the list is empty.
+
+- A changed status marks the report **Updated**. A developer message that is new or changed is a **New reply**: the row shows a
+  New reply marker, the Bug Report item in the sidebar shows its dot, and the page shows "A report has a new reply" with
+  **Show**. A reply comes before a plain update.
+- Opening the page clears nothing. A report counts as seen only when it is opened, which also shows the **Message from
+  developer** panel.
+- When the service answers a status check without a report that was asked about, the report is marked **No longer available**.
+  Its last known status and message stay, it stops counting as an update, and **Refresh** asks again. **Remove from this PC**
+  deletes only the local entry; a damaged `bug_reports.json` is set aside as `bug_reports.json.damaged`.
+
+Failures never block the launcher or **Play**: requests run on their own threads with timeouts of 8 s to connect, 15 s to send,
+20 s to receive and 30 s in all, are cancelled between steps when the launcher closes, and end in a plain message.
+
+### Service address
+
+A normal launcher sends to `https://shadow-bug-reports.saulobenigno.workers.dev` (`kBugReportServiceUrl` in
+`launcher/game_profile.h`) with no setting. `SOTB_BUG_REPORT_URL` is only an override for development and tests, for one run
+(`https://host[:port]`, https only); an invalid value disables sending for that run instead of falling back. Opening the
+page contacts nothing. The developer dashboard is `https://shadow-bug-reports.saulobenigno.workers.dev/admin`, protected by the Worker secret
+`SOTB_BUG_REPORT_ADMIN_TOKEN`; see the service's README for its endpoints, limits and retention. `.\tools\worker.ps1 -DryRun` validates and bundles the Worker without uploading, `.\tools\worker.ps1` deploys it, and `namespace_id` in `wrangler.toml` and the admin secret are set by hand first.
+
 ## About
 
 Port version, installed build, renderer, folders, the logs folder, **Detailed logging** (`detailed_logging`), the settings
@@ -79,6 +137,7 @@ launcher window's placement, saves, scores, trophies, the installed game, logs a
 | `game\image\CUSA03762-1.00\` | boot image built from the installed game |
 | `user\sotb.ini` | launcher and runtime settings |
 | `user\keys.json`, `user\trophy\` | Trophy Key and trophy progress |
+| `user\bug_reports.json` | the reports sent from this PC, with their receipts |
 | `user\gamecontrollerdb.txt` | optional controller mappings |
 | `user\savedata\` | save data (created by the runtime when the game writes) |
 | `logs\shadow_of_the_beast_NNN.log` | one log per run; the log opens with `Settings:` lines |

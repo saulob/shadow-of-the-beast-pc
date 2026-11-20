@@ -11,6 +11,9 @@ inline constexpr char kGameTitle[] = "Shadow of the Beast";
 inline constexpr char kPortRepository[] = "github.com/saulob/shadow-of-the-beast-pc";
 inline constexpr char kAuthorUrl[] = "https://github.com/saulob";
 inline constexpr char kSponsorUrl[] = "https://github.com/sponsors/saulob";
+inline constexpr char kIssuesUrl[] = "https://github.com/saulob/shadow-of-the-beast-pc/issues";
+// The production bug report service; SOTB_BUG_REPORT_URL overrides it for development and tests.
+inline constexpr char kBugReportServiceUrl[] = "https://shadow-bug-reports.saulobenigno.workers.dev";
 
 // A package of a build, by its param.sfo APP_VER and VERSION.
 struct PackageLayer {

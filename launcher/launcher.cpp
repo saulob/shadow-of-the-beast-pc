@@ -23,6 +23,7 @@
 #include "gameplay_rows.h"
 #include "guest_display.h"
 #include "header_art.h"
+#include "incident_page.h"
 #include "launcher_quit.h"
 #include "host.h"
 #include "options.h"
@@ -213,6 +214,8 @@ private:
         }
 
         trophy_page_ = std::make_unique<TrophyPage>(host_, user_dir_);
+        incident_page_ = std::make_unique<IncidentPage>(IncidentPlaces());
+        incident_page_->CheckReports();
         launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
         host_.BeginFrame();
         host_.EndFrame(LauncherTheme().bg);
@@ -249,6 +252,8 @@ private:
                 break;
             }
         }
+        incident_page_.reset();
+        std::printf("Launcher: closed%s\n", outcome == SOTB_LAUNCHER_PLAY ? ", starting the game" : "");
         SavePlacement(placement_.Flush());
         const bool saved = settings_.Save();
         std::printf("Launcher: settings %s, Skip Intro %s\n", saved ? "saved" : "NOT SAVED",
@@ -312,6 +317,9 @@ private:
             return {name, "Controller and keyboard.", [this](trg::Ui& ui) { DrawControls(ui); }, nullptr, nullptr};
         case PageId::kTrophies:
             return {name, "Your trophies on this PC.", [this](trg::Ui& ui) { DrawTrophies(ui); }, nullptr, nullptr};
+        case PageId::kBugReport:
+            return {name, "Report a problem and send it with one game log.", [this](trg::Ui& ui) { DrawBugReport(ui); },
+                    [this] { return incident_page_ && incident_page_->HasReportUpdates(); }, nullptr};
         case PageId::kAbout:
             return {name, "This port, and where your files and settings live.",
                     [this](trg::Ui& ui) { DrawAbout(ui); }, nullptr, nullptr};
@@ -462,6 +470,28 @@ private:
         trophy_page_->SetGame(state_ == GameFileState::kValid ? app0_ : std::filesystem::path());
         trophy_page_->Draw(ui);
     }
+
+    IncidentPage::Places IncidentPlaces() const {
+        return {logs_dir_,
+                config_.log_file ? PathFromUtf8(config_.log_file) : std::filesystem::path(),
+                user_dir_,
+                {app0_, user_dir_.parent_path(), logs_dir_.parent_path()},
+                [](const std::string& line) { std::printf("%s\n", line.c_str()); }};
+    }
+
+    ReportFacts CurrentReportFacts() const {
+        static const std::string operating_system = OperatingSystemText();
+        const bool known = build_ && state_ == GameFileState::kValid;
+        return {SOTB_PORT_VERSION,
+                known ? build_->label : "Not installed",
+                known ? build_->version : "",
+                known ? build_->region : "",
+                known ? build_->title_id : "",
+                known ? build_->eboot_sha256 : "",
+                operating_system};
+    }
+
+    void DrawBugReport(trg::Ui& ui) { incident_page_->Draw(ui, CurrentReportFacts()); }
 
     void DrawAbout(trg::Ui& ui) {
         ui.SponsorCard(
@@ -703,6 +733,7 @@ private:
     std::vector<std::string> gpu_names_;
     std::unique_ptr<trg::Launcher> launcher_;
     std::unique_ptr<TrophyPage> trophy_page_;
+    std::unique_ptr<IncidentPage> incident_page_;
     GameFileState state_ = GameFileState::kMissing;
     const GameBuild* build_ = nullptr;
     std::string eboot_sha256_;

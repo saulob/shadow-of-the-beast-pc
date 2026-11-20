@@ -57,10 +57,10 @@ bool Contains(const std::string& text, const std::string& part) {
 
 void TestPages() {
     const PageId expected[] = {PageId::kPlay,   PageId::kDisplay,  PageId::kGraphics, PageId::kGameplay,
-                               PageId::kControls, PageId::kTrophies, PageId::kAbout};
+                               PageId::kControls, PageId::kTrophies, PageId::kBugReport, PageId::kAbout};
     CHECK(std::size(kPageOrder) == std::size(expected));
     CHECK(std::equal(std::begin(expected), std::end(expected), std::begin(kPageOrder)));
-    const char* names[] = {"Play", "Display", "Graphics", "Gameplay", "Controls", "Trophies", "About"};
+    const char* names[] = {"Play", "Display", "Graphics", "Gameplay", "Controls", "Trophies", "Bug Report", "About"};
     for (size_t i = 0; i < std::size(expected); ++i) {
         CHECK(std::string(PageName(expected[i])) == names[i]);
     }
@@ -154,7 +154,7 @@ void TestSidebarIcons() {
     const Expected expected[] = {{PageId::kPlay, "play.svg", 0.84f},         {PageId::kDisplay, "display.svg", 0.90f},
                                  {PageId::kGraphics, "graphics.svg", 0.84f}, {PageId::kGameplay, "gameplay.svg", 0.92f},
                                  {PageId::kControls, "controls.svg", 0.94f}, {PageId::kTrophies, "trophies.svg", 0.86f},
-                                 {PageId::kAbout, "about.svg", 0.88f}};
+                                 {PageId::kBugReport, "bug-report.svg", 0.90f}, {PageId::kAbout, "about.svg", 0.88f}};
     CHECK(PageIconAssets().size() == std::size(expected));
     for (const Expected& e : expected) {
         const PageIconAsset* asset = FindPageIcon(e.page);

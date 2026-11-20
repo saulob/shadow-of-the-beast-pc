@@ -30,10 +30,16 @@ add_library(sotb_launcher_core STATIC
     game_install.cpp
     game_profile.cpp
     header_art.cpp
+    http_post.cpp
+    incident_client.cpp
+    incident_report.cpp
+    json_lite.cpp
+    log_scrubber.cpp
     options.cpp
     page_icons.cpp
     paths.cpp
     pkg_extract.cpp
+    report_history.cpp
     settings.cpp
     text_languages.cpp
     trophy_content.cpp
@@ -48,7 +54,8 @@ add_library(sotb_launcher_core STATIC
     crypto_win.cpp)
 target_include_directories(sotb_launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(sotb_launcher_core PUBLIC trg_core SDL3::SDL3 sotb_startup_phase sotb_guest_display
-    PRIVATE ZLIB::ZLIB bcrypt)
+    PRIVATE ZLIB::ZLIB bcrypt winhttp)
+target_compile_definitions(sotb_launcher_core PRIVATE SOTB_PORT_VERSION="${PROJECT_VERSION}")
 
 # The sidebar's page icons (assets/launcher/icons/*.svg) as a table of byte arrays, page_icon_data.cpp.
 file(GLOB SOTB_PAGE_ICONS CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/assets/launcher/icons/*.svg)
@@ -63,7 +70,7 @@ add_custom_command(OUTPUT ${SOTB_PAGE_ICON_SOURCE}
     COMMENT "Embedding the page icons")
 target_sources(sotb_launcher_core PRIVATE ${SOTB_PAGE_ICON_SOURCE})
 
-add_library(sotb_launcher STATIC host.cpp launcher.cpp trophy_page.cpp)
+add_library(sotb_launcher STATIC host.cpp incident_page.cpp launcher.cpp my_reports_page.cpp trophy_page.cpp)
 target_compile_definitions(sotb_launcher PRIVATE SOTB_PORT_VERSION="${PROJECT_VERSION}")
 target_include_directories(sotb_launcher PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
 target_link_libraries(sotb_launcher PUBLIC sotb_launcher_core trg_launcher sotb_imgui_sdl ${CMAKE_DL_LIBS})
@@ -90,6 +97,12 @@ target_compile_definitions(sotb-launcher-tests PRIVATE SOTB_BOOT_IMAGE="${PROJEC
     SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 set_target_properties(sotb-launcher-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-launcher-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-bug-report-tests EXCLUDE_FROM_ALL ../tests/bug_report_tests.cpp)
+target_link_libraries(sotb-bug-report-tests PRIVATE sotb_launcher_core)
+target_compile_definitions(sotb-bug-report-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-bug-report-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-bug-report-tests PRIVATE -Wall -Wextra)
 
 add_executable(sotb-launcher-ui-tests EXCLUDE_FROM_ALL ../tests/launcher_ui_tests.cpp ${TRG_DIR}/src/launcher.cpp
     ${TRG_DIR}/src/headers.cpp ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp

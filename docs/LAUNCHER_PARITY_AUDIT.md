@@ -31,6 +31,7 @@ not on every path), PLACEBO (saved or shown, nothing reads it), MISSING. Test cl
 | Xbox mapping | n/a | `runtime_pad.c` table | MISSING | read-only mapping table on Controls | H table |
 | Menu & Subtitles | `text_language` | `runtime_set_language` (system language) | MISSING | added, 19 languages | H table, parse, fallback; U |
 | Detailed logging | `detailed_logging` | `runtime_session_log.c` | MISSING (always on) | added | H parse; U |
+| Bug Report page, My Reports | `user\bug_reports.json`, `server/shadow-bug-reports` | launcher only (no game code) | MISSING | ported from Odin (the service, the filter, the history); Shadow log format | H `sotb-bug-report-tests`, Worker `npm test`; U |
 | Trophies | `user\trophy`, `user\keys.json` | `sceNpTrophy*` in `runtime_services.c` | MISSING (calls returned unavailable) | ported from Dragon | H 388 checks; U |
 | Reset all settings | n/a | `LauncherSettings::ResetToDefaults` | PARTIAL (cleared every line, placement included) | managed keys only, placement kept | H |
 
@@ -39,7 +40,6 @@ not on every path), PLACEBO (saved or shown, nothing reads it), MISSING. Test cl
 | Item | Reason |
 | --- | --- |
 | Controller prompts | the paks hold no prompt atlas or glyph textures, only a button-icon font and Blueprint |
-| Bug Report page, incident Worker, Admin | the Dragon implementation sits on its online stack (`src/net`, lobby Worker, Durable Objects); a Shadow-specific service was not written |
 | Updater, overlay programs, install changes | not ported |
 | Mouse controls | `runtime_pad.c` has no mouse consumer |
 

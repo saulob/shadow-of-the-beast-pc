@@ -1,0 +1,19 @@
+{
+  "description": "The game freezes on the loading screen after I pick a save.",
+  "launcher_version": "0.1.0",
+  "game_build": "CUSA03762 1.00 Korea",
+  "region": "Korea",
+  "game_version": "1.00",
+  "cusa": "CUSA03762",
+  "eboot_sha256": "ebf1d2fa6f44f05ab141e9b06fd8e60179db3be8b0b57b794ce79448ed133023",
+  "operating_system": "Windows 11 (build 26200)",
+  "cpu": "Intel(R) Core(TM) i9-14900",
+  "renderer_selected": "auto",
+  "renderer": "Vulkan",
+  "gpu": "NVIDIA GeForce RTX 4070",
+  "driver": "NVIDIA 621.1.0.0, Vulkan 1.4.357",
+  "render_resolution": "1440p 2560x1440",
+  "log_file": "shadow_of_the_beast_026.log",
+  "log_clipped": "no",
+  "log_text": "Renderer: selected vulkan, active Vulkan\nGPU: selected NVIDIA GeForce RTX 4070\nRuntime: guest thread 'main' started\n"
+}

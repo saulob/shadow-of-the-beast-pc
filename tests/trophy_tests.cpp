@@ -905,7 +905,7 @@ void TestKeyManagementFlow(const fs::path& base) {
 }
 
 void TestLauncherPieces(const fs::path& base) {
-    CHECK(std::size(kPageOrder) == 7 && kPageOrder[5] == PageId::kTrophies && kPageOrder[6] == PageId::kAbout &&
+    CHECK(std::size(kPageOrder) == 8 && kPageOrder[5] == PageId::kTrophies && kPageOrder[6] == PageId::kBugReport && kPageOrder[7] == PageId::kAbout &&
           kPageOrder[4] == PageId::kControls);
     CHECK(std::string(PageName(PageId::kTrophies)) == "Trophies");
     SotbPng::Image image;
