@@ -200,6 +200,7 @@ void TrophyPage::ImportKey() {
         return;
     }
 #endif
+    host_.NoteDialogInFrame();
     const std::string chosen = trg::BrowseForFile(Tr("Select a shadPS4 keys.json or config.toml"),
                                                   {{Tr("shadPS4 key files"), "*.json;*.toml"}});
     if (chosen.empty()) {

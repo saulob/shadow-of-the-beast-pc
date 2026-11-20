@@ -9,6 +9,9 @@ namespace Sotb {
 // Room the title bar takes at 100% scaling, used when the window system cannot report real borders.
 inline constexpr int kEstimatedTitleBarHeight = 40;
 
+// The launcher window stays within this share of the display's usable area, in pixels.
+inline constexpr double kWindowDisplayShare = 0.9;
+
 struct WindowBorders {
     int top = 0, left = 0, bottom = 0, right = 0;
 };

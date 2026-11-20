@@ -225,13 +225,11 @@ private:
         launcher_ = std::make_unique<trg::Launcher>(MakeConfig());
         updater_ = std::make_unique<trg::update::UpdateController>(MakeUpdateConfig(InstallDir()));
         updater_->StartCheck();
-        host_.BeginFrame();
-        host_.EndFrame(LauncherTheme().bg);
-        host_.Show();
-        sotb_startup_phase("launcher running");
+        sotb_startup_phase("launcher first frame");
 
         SotbLauncherResult outcome = SOTB_LAUNCHER_QUIT;
         bool first = true;
+        bool shown = false;
         while (true) {
             const Sotb::FrameGate gate = host_.NextFrame();
             if (gate == Sotb::FrameGate::kQuit) {
@@ -268,6 +266,12 @@ private:
             if (result == trg::Result::kQuit && LauncherQuitAllowed(ImGui::IsKeyPressed(ImGuiKey_Escape, false))) {
                 outcome = SOTB_LAUNCHER_QUIT;
                 break;
+            }
+            if (!shown) {
+                // Shown only after a complete launcher frame was presented, so its first visible frame is never blank.
+                host_.Show();
+                shown = true;
+                sotb_startup_phase("launcher running");
             }
         }
         sotb_startup_phase("launcher loop ended");
@@ -811,6 +815,7 @@ private:
     }
 
     void BrowseAndInstall() {
+        host_.NoteDialogInFrame();
         const std::string picked = trg::BrowseForFile("Select your Shadow of the Beast package (.pkg)",
                                                       {{"PlayStation 4 packages", "*.pkg"}, {"All files", "*.*"}});
         if (picked.empty()) {

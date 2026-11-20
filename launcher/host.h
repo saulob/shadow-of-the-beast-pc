@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -39,7 +40,8 @@ public:
 
     // False when no window or renderer could be created; nothing is left open then.
     bool Open(const HostOptions& options);
-    // Shows the window once its first frame has been drawn. Does nothing when it was opened hidden.
+    // Shows the window once, after its first frame has been drawn, and presents that frame again. Does nothing before
+    // a frame was drawn or when it was opened hidden.
     void Show();
     void Close();
 
@@ -60,14 +62,20 @@ public:
     ImTextureID CreateTexture(const uint8_t* rgba, int width, int height);
     void DestroyTexture(ImTextureID texture);
 
-    // The saved placement the window was opened with, when it lay on a display.
+    // The saved placement the window was opened with (moved into a display when needed); empty when it was centered.
     const std::optional<WindowPlacement>& Restored() const { return restored_; }
+
+    // The frame being built waits in a native dialog, so its build time is not a stall.
+    void NoteDialogInFrame() { dialog_in_frame_ = true; }
 
 private:
     bool PumpEvents();
     bool Minimized() const;
     void ConfigureVsync();
     void NoteFrameDrawn(int64_t now_ns, const FrameTimes& times);
+    void NoteStall(LoopPhase phase, int64_t duration_ns, int64_t now_ns, bool covered);
+    void Submit(const ImVec4& clear);
+    void LogPlacement(const PlacementChoice& placement, std::span<const DisplayArea> areas, const std::string& name) const;
 
     std::optional<WindowPlacement> restored_;
     SDL_Window* window_ = nullptr;
@@ -78,8 +86,13 @@ private:
     bool gamepad_ = false;
     bool hidden_ = false;
     bool quit_ = false;
+    bool drawn_ = false;
+    bool shown_ = false;
+    bool dialog_in_frame_ = false;
+    ImVec4 last_clear_;
     LoopGate gate_;
     LoopMonitor monitor_;
+    StallDetector stalls_;
     std::string renderer_name_;
     int64_t frame_begin_ns_ = 0;
 };

@@ -178,6 +178,28 @@ target_include_directories(sotb-launcher-ui-tests PRIVATE ${IMGUI_DIR} ${PROJECT
 target_compile_definitions(sotb-launcher-ui-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
 set_target_properties(sotb-launcher-ui-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
+# Launcher robustness: placement, startup lifecycle, UI stalls, Escape handling and Bug Report feedback, headless.
+add_executable(sotb-launcher-placement-tests EXCLUDE_FROM_ALL ../tests/launcher_placement_tests.cpp)
+add_executable(sotb-launcher-startup-tests EXCLUDE_FROM_ALL ../tests/launcher_startup_tests.cpp)
+add_executable(sotb-launcher-hang-tests EXCLUDE_FROM_ALL ../tests/launcher_hang_tests.cpp)
+add_executable(sotb-bug-report-feedback-tests EXCLUDE_FROM_ALL ../tests/bug_report_feedback_tests.cpp)
+add_executable(sotb-launcher-navigation-tests EXCLUDE_FROM_ALL ../tests/launcher_navigation_tests.cpp ${TRG_DIR}/src/launcher.cpp
+    ${TRG_DIR}/src/headers.cpp ${IMGUI_DIR}/imgui.cpp ${IMGUI_DIR}/imgui_draw.cpp ${IMGUI_DIR}/imgui_tables.cpp
+    ${IMGUI_DIR}/imgui_widgets.cpp)
+target_link_libraries(sotb-launcher-placement-tests PRIVATE sotb_launcher_core)
+target_link_libraries(sotb-launcher-startup-tests PRIVATE sotb_startup_phase)
+target_link_libraries(sotb-bug-report-feedback-tests PRIVATE sotb_launcher_core)
+target_link_libraries(sotb-launcher-navigation-tests PRIVATE sotb_launcher_core trg_core sotb_keys SDL3::SDL3)
+target_include_directories(sotb-launcher-navigation-tests PRIVATE ${IMGUI_DIR} ${PROJECT_SOURCE_DIR}/gpu/shim)
+target_compile_definitions(sotb-launcher-navigation-tests PRIVATE _CRT_SECURE_NO_WARNINGS)
+foreach (test IN ITEMS sotb-launcher-placement-tests sotb-launcher-startup-tests sotb-launcher-hang-tests
+                       sotb-bug-report-feedback-tests sotb-launcher-navigation-tests)
+    target_include_directories(${test} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/tests)
+    target_compile_definitions(${test} PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+    set_target_properties(${test} PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(${test} PRIVATE -Wall -Wextra)
+endforeach()
+
 # The helper that replaces the program after it exits. Static, so it needs none of the DLLs it may be replacing.
 add_executable(trg-updater WIN32 updater/helper_main.cpp updater/install_transaction.cpp updater/sha256.cpp
     updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp)

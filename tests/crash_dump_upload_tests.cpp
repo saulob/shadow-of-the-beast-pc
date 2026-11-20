@@ -410,12 +410,14 @@ void TestPageWiring() {
     const std::string page = Source("launcher/incident_page.cpp");
     const std::string client = Source("launcher/incident_client.cpp");
     CHECK(Count(page, "FileReport(") == 1 && Count(page, "UploadCrashDump(") == 2);
-    CHECK(Has(page, "if (sent_dump_ && !result_->credential.empty() && ImGui::Button(Tr(\"Retry crash dump upload\"))) RetryDump();"));
+    CHECK(Has(page, "if (CanRetryDump(State(), sent_dump_.has_value(), !result_->credential.empty()) &&\n"
+                    "            ImGui::Button(Tr(\"Retry crash dump upload\"))) {\n"
+                    "            RetryDump();"));
     CHECK(Count(page, "RetryDump();") == 1);
     const size_t retry = page.find("void IncidentPage::RetryDump()");
     const std::string retry_body = page.substr(retry, page.find("\n}\n", retry) - retry);
     CHECK(Has(retry_body, "UploadCrashDump(service, ticket, receipt, dump)") && !Has(retry_body, "FileReport("));
-    CHECK(Has(page, "const bool sending = delivery_ != nullptr || dump_retry_ != nullptr;"));
+    CHECK(Has(page, "const bool sending = SendBusy(State());"));
     CHECK(Has(page, "if (submission_.empty()) submission_ = NewSubmissionKey();") && Has(page, "submission_.clear();"));
     CHECK(Has(page, "attach_crash_dump_ = selected_ < logs_.size() && DefaultAttachCrashDump(logs_[selected_]);"));
     CHECK(Has(page, "ImGui::BeginDisabled(sending || !attachable);") && Has(page, "attach_crash_dump_ && log.CanAttachDump()"));

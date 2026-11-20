@@ -55,15 +55,4 @@ inline const Display* DisplayForSetting(const std::vector<Display>& displays, in
     return &displays.front();
 }
 
-// The launcher window stays within this share of the display's usable area, in pixels.
-inline constexpr double kWindowDisplayShare = 0.9;
-
-inline void FitWindowSize(int& width, int& height, const Display& display) {
-    if (display.usable.w <= 0 || display.usable.h <= 0) {
-        return;
-    }
-    width = std::min(width, static_cast<int>(display.usable.w * kWindowDisplayShare));
-    height = std::min(height, static_cast<int>(display.usable.h * kWindowDisplayShare));
-}
-
 } // namespace Sotb

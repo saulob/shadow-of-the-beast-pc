@@ -11,6 +11,7 @@
 #include "incident_client.h"
 #include "incident_report.h"
 #include "my_reports_page.h"
+#include "report_send_state.h"
 #include "trg/launcher.h"
 
 namespace Sotb {
@@ -52,6 +53,7 @@ private:
         DumpUpload outcome = DumpUpload::kFailed;
     };
 
+    SendState State() const;
     void FindLogs();
     void SelectLog(size_t index);
     void DraftChanged();

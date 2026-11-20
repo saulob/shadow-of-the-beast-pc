@@ -226,6 +226,9 @@ public:
         windowed_ = false;
     }
 
+    // True once warmed up: a slow present is then reported as launcher_present_stall.
+    bool Measuring() const { return windowed_; }
+
 private:
     void StartWindow(int64_t now_ns, int64_t thread_cpu_ns) {
         windowed_ = true;
@@ -253,6 +256,61 @@ private:
     int64_t max_present_ = 0;
     int64_t slow_presents_ = 0;
 };
+
+enum class LoopPhase { kEvents, kBuild, kPresent };
+
+struct UiStall {
+    LoopPhase phase = LoopPhase::kBuild;
+    int64_t duration_ns = 0;
+    int64_t threshold_ns = 0;
+    int64_t count = 0;  // stalls of this phase so far, including warnings held back by the rate limit
+};
+
+// One loop phase that kept the UI thread for seconds, reported after it returns. The event pump gets a long threshold
+// because moving or resizing the window holds it on Windows. A phase covered elsewhere (a native file dialog, or a
+// present while LoopMonitor measures) is neither counted nor re-arms the warning.
+class StallDetector {
+public:
+    static constexpr int64_t kEventsNs = 10 * kNsPerSecond;
+    static constexpr int64_t kBuildNs = 2 * kNsPerSecond;
+    static constexpr int64_t kPresentNs = 2 * kNsPerSecond;
+
+    static int64_t Threshold(LoopPhase phase) {
+        switch (phase) {
+        case LoopPhase::kEvents: return kEventsNs;
+        case LoopPhase::kBuild: return kBuildNs;
+        case LoopPhase::kPresent: return kPresentNs;
+        }
+        return kBuildNs;
+    }
+
+    std::optional<UiStall> Finished(LoopPhase phase, int64_t duration_ns, int64_t now_ns, bool covered = false) {
+        if (covered) {
+            return std::nullopt;
+        }
+        const size_t index = static_cast<size_t>(phase);
+        const int64_t threshold = Threshold(phase);
+        const bool stalled = duration_ns >= threshold;
+        counts_[index] += stalled ? 1 : 0;
+        if (!alarms_[index].Fire(stalled, now_ns)) {
+            return std::nullopt;
+        }
+        return UiStall{phase, duration_ns, threshold, counts_[index]};
+    }
+
+private:
+    Alarm alarms_[3];
+    int64_t counts_[3] = {};
+};
+
+inline const char* LoopPhaseName(LoopPhase phase) {
+    switch (phase) {
+    case LoopPhase::kEvents: return "events";
+    case LoopPhase::kBuild: return "build";
+    case LoopPhase::kPresent: return "present";
+    }
+    return "unknown";
+}
 
 struct VsyncState {
     bool requested = false;
@@ -308,6 +366,17 @@ inline std::string PresentStallLine(std::string_view renderer, const LoopSample&
                   double(sample.max_present_ns) / double(kNsPerMs), static_cast<long long>(sample.slow_presents),
                   static_cast<long long>(LoopMonitor::kSlowPresentNs / kNsPerMs));
     return "Launcher telemetry: event=launcher_present_stall " + loop_detail::Body(renderer, sample) + extra;
+}
+
+inline std::string UiStallLine(std::string_view renderer, const UiStall& stall, const char* stage, bool minimized) {
+    char line[256];
+    std::snprintf(line, sizeof(line),
+                  "Launcher telemetry: event=launcher_ui_stall phase=%s duration_ms=%lld threshold_ms=%lld stalls=%lld "
+                  "stage=%.48s minimized=%d renderer=%s",
+                  LoopPhaseName(stall.phase), static_cast<long long>(stall.duration_ns / kNsPerMs),
+                  static_cast<long long>(stall.threshold_ns / kNsPerMs), static_cast<long long>(stall.count),
+                  stage && *stage ? stage : "unknown", minimized ? 1 : 0, RendererLabel(renderer).c_str());
+    return line;
 }
 
 inline std::string HighCpuLine(std::string_view renderer, const LoopSample& sample) {

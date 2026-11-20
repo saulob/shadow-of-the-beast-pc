@@ -886,7 +886,7 @@ void TestNothingHappensByItself() {
     CHECK(Count(page, "FileReport(") == 1 && Count(mine, "FetchReportStatuses(") == 1 && Count(mine, "FetchSentReport(") == 1);
     CHECK(Has(page, "if (send) Send(facts);") && Count(page, "Send(facts)") == 1 && Count(page, "delivery_ = std::make_shared<Delivery>()") == 1);
     CHECK(!Has(page, "BeginPopupModal") && !Has(page, "StartDelivery") && !Has(page, "AskToSend"));
-    CHECK(Has(page, "if (delivery_ || !service_.endpoint.configured() || !AcceptDraft()) return;"));
+    CHECK(Has(page, "if (!CanSend(State(), service_.endpoint.configured()) || !AcceptDraft()) return;"));
     CHECK(Has(mine, "if (ImGui::Button(Tr(check_ ? \"Checking...\" : \"Refresh\"), ImVec2(width, 0))) Refresh(service, true);"));
     CHECK(Count(mine, "Refresh(service, true)") == 1 && Count(mine, "Refresh(service)") == 1);
     CHECK(Has(mine, "if (!report.unavailable || asked_by_player) reports.push_back(report);"));

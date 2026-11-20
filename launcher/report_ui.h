@@ -2,10 +2,12 @@
 #pragma once
 
 #include <cfloat>
+#include <cstring>
 #include <ctime>
 #include <string>
 
 #include "imgui.h"
+#include "imgui_internal.h"
 #include "incident_report.h"
 #include "localization/ui_text.h"
 #include "trg/launcher.h"
@@ -34,6 +36,19 @@ inline void HelpLine(const ImVec4& color, const std::string& text, bool wrap = f
     if (wrap) ImGui::PopTextWrapPos();
     ImGui::PopStyleColor();
     ImGui::PopFont();
+}
+
+// Escape leaves the field like a click elsewhere: ImGui would revert to the text it had when editing began, and a long
+// draft would be lost.
+inline bool InputTextMultilineKeepOnEscape(const char* id, char* buf, size_t size, const ImVec2& box, ImGuiInputTextFlags flags,
+                                           ImGuiInputTextCallback callback = nullptr) {
+    const bool leaving = ImGui::GetActiveID() == ImGui::GetID(id) && ImGui::IsKeyPressed(ImGuiKey_Escape, false);
+    std::string kept;
+    if (leaving) kept = buf;
+    const bool changed = ImGui::InputTextMultiline(id, buf, size, box, flags, callback);
+    if (!leaving || kept == buf) return changed;
+    std::memcpy(buf, kept.c_str(), kept.size() + 1);
+    return false;
 }
 
 // Text that cannot change: ImGui never writes to a read-only buffer.

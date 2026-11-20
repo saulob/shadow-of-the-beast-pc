@@ -16,7 +16,9 @@
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
+#include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "backends/imgui_impl_sdl3.h"
@@ -120,36 +122,19 @@ bool LauncherHost::Open(const HostOptions& options) {
         Close();
         return false;
     }
-    std::vector<Rect> usable;
+    std::vector<DisplayArea> areas;
     for (const Display& display : displays) {
-        usable.push_back(ToRect(display.usable));
+        areas.push_back({ToRect(display.usable), display.scale});
     }
-
-    const bool restore = options.restore && PlacementIsVisible(*options.restore, usable);
-    restored_ = restore ? options.restore : std::nullopt;
-    const Display* target = &displays.front();
-    int x = SDL_WINDOWPOS_CENTERED, y = SDL_WINDOWPOS_CENTERED;
-    int width = 0, height = 0;
-    if (restore) {
-        const Rect& normal = options.restore->normal;
-        const SDL_Point center{(normal.left + normal.right) / 2, (normal.top + normal.bottom) / 2};
-        const SDL_DisplayID id = SDL_GetDisplayForPoint(&center);
-        for (const Display& display : displays) {
-            if (display.id == id) {
-                target = &display;
-            }
-        }
-        x = normal.left;
-        y = normal.top;
-        width = normal.width();
-        height = normal.height();
-    } else {
-        x = SDL_WINDOWPOS_CENTERED_DISPLAY(target->id);
-        y = SDL_WINDOWPOS_CENTERED_DISPLAY(target->id);
-        width = static_cast<int>(options.width * target->scale);
-        height = static_cast<int>(options.height * target->scale);
-        FitWindowSize(width, height, *target);
-    }
+    const PlacementChoice placement = ChoosePlacement(options.restore, areas, options.width, options.height);
+    restored_ = placement.centered ? std::nullopt
+                                   : std::optional<WindowPlacement>(
+                                         WindowPlacement{placement.rect, placement.maximized, placement.fullscreen});
+    const Display* target = &displays[placement.display];
+    const int x = placement.centered ? int(SDL_WINDOWPOS_CENTERED_DISPLAY(target->id)) : placement.rect.left;
+    const int y = placement.centered ? int(SDL_WINDOWPOS_CENTERED_DISPLAY(target->id)) : placement.rect.top;
+    const int width = placement.rect.width();
+    const int height = placement.rect.height();
 
     SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, options.title.c_str());
@@ -166,8 +151,10 @@ bool LauncherHost::Open(const HostOptions& options) {
         Close();
         return false;
     }
+    sotb_startup_phase("launcher window created");
     SDL_SetWindowMinimumSize(window_, std::min(static_cast<int>(options.min_width * target->scale), width),
                              std::min(static_cast<int>(options.min_height * target->scale), height));
+    LogPlacement(placement, areas, target->name);
 
     const RendererPlan plan = PlanLauncherRenderer(kWindows, std::getenv(kLauncherRendererVariable));
     RendererSelection selection;
@@ -195,15 +182,27 @@ bool LauncherHost::Open(const HostOptions& options) {
 
     hidden_ = options.hidden;
     gate_ = LoopGate(hidden_ ? 0 : kLauncherTargetHz);
-    if (restore && options.restore->maximized) {
+    if (placement.maximized) {
         SDL_MaximizeWindow(window_);
     }
-    if (restore && options.restore->fullscreen) {
+    if (placement.fullscreen) {
         SDL_SetWindowFullscreen(window_, true);
     }
     std::printf("Launcher: window %dx%d at %.2fx display scale, %s renderer\n", width, height, target->scale,
                 renderer_name_.c_str());
+    sotb_startup_phase("launcher renderer ready");
     return true;
+}
+
+void LauncherHost::LogPlacement(const PlacementChoice& placement, std::span<const DisplayArea> areas, const std::string& name) const {
+    PlacementResult result;
+    int x = 0, y = 0, width = 0, height = 0;
+    SDL_GetWindowPosition(window_, &x, &y);
+    SDL_GetWindowSize(window_, &width, &height);
+    result.final_rect = {x, y, x + width, y + height};
+    SDL_GetWindowSizeInPixels(window_, &result.pixel_width, &result.pixel_height);
+    result.window_scale = SDL_GetWindowDisplayScale(window_);
+    std::printf("%s\n", PlacementLine(placement, areas, name, result).c_str());
 }
 
 // SDL only simulates VSync on a software renderer, so it stays on only when the display really paces; the frame cap
@@ -224,12 +223,17 @@ void LauncherHost::ConfigureVsync() {
     std::printf("%s\n", PacingModeLine(renderer_name_, state).c_str());
 }
 
+// The frame drawn while hidden is presented again once the window is visible, so its client area is never left
+// unpainted until the next frame is due.
 void LauncherHost::Show() {
-    if (!window_ || hidden_) {
+    if (!window_ || hidden_ || shown_ || !drawn_) {
         return;
     }
+    shown_ = true;
     SDL_ShowWindow(window_);
     SDL_RaiseWindow(window_);
+    Submit(last_clear_);
+    SDL_RenderPresent(renderer_);
 }
 
 ImTextureID LauncherHost::CreateTexture(const uint8_t* rgba, int width, int height) {
@@ -320,10 +324,12 @@ bool LauncherHost::Minimized() const {
 
 FrameGate LauncherHost::NextFrame() {
     for (;;) {
+        const int64_t pumping = NowNs();
         if (!PumpEvents()) {
             return FrameGate::kQuit;
         }
         const int64_t polled = NowNs();
+        NoteStall(LoopPhase::kEvents, polled - pumping, polled, false);
         const GateStep step = gate_.Step(polled, Minimized());
         switch (step.action) {
         case GateAction::kDraw:
@@ -371,14 +377,29 @@ void LauncherHost::BeginFrame() {
     ImGui::NewFrame();
 }
 
-void LauncherHost::EndFrame(const ImVec4& clear, const char* capture_path) {
-    const int64_t submitting = NowNs();
-    ImGui::Render();
+void LauncherHost::NoteStall(LoopPhase phase, int64_t duration_ns, int64_t now_ns, bool covered) {
+    if (hidden_) {
+        return;
+    }
+    if (const std::optional<UiStall> stall = stalls_.Finished(phase, duration_ns, now_ns, covered)) {
+        std::printf("%s\n", UiStallLine(renderer_name_, *stall, sotb_startup_phase_current(), Minimized()).c_str());
+    }
+}
+
+void LauncherHost::Submit(const ImVec4& clear) {
     const ImGuiIO& io = ImGui::GetIO();
     SDL_SetRenderScale(renderer_, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
     SDL_SetRenderDrawColorFloat(renderer_, clear.x, clear.y, clear.z, 1.0f);
     SDL_RenderClear(renderer_);
     ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
+}
+
+void LauncherHost::EndFrame(const ImVec4& clear, const char* capture_path) {
+    const int64_t submitting = NowNs();
+    ImGui::Render();
+    Submit(clear);
+    last_clear_ = clear;
+    drawn_ = true;
     if (capture_path) {
         if (SDL_Surface* frame = SDL_RenderReadPixels(renderer_, nullptr)) {
             SDL_SavePNG(frame, capture_path);
@@ -388,6 +409,8 @@ void LauncherHost::EndFrame(const ImVec4& clear, const char* capture_path) {
     const int64_t presenting = NowNs();
     SDL_RenderPresent(renderer_);
     const int64_t presented = NowNs();
+    NoteStall(LoopPhase::kBuild, submitting - frame_begin_ns_, presented, std::exchange(dialog_in_frame_, false));
+    NoteStall(LoopPhase::kPresent, presented - presenting, presented, monitor_.Measuring());
     NoteFrameDrawn(presented, {submitting - frame_begin_ns_, presenting - submitting, presented - presenting});
 }
 
@@ -397,6 +420,8 @@ bool LauncherHost::Fullscreen() const {
 
 void LauncherHost::SetFullscreen(bool fullscreen) {
     SDL_SetWindowFullscreen(window_, fullscreen);
+    // X11 and Wayland apply it later; a frame in between could record the fullscreen size as the window's own.
+    SDL_SyncWindow(window_);
 }
 
 std::optional<WindowState> LauncherHost::State() const {

@@ -13,6 +13,7 @@
 #include "imgui_internal.h"
 #include "localization/ui_text.h"
 #include "page_margin.h"
+#include "report_send_state.h"
 #include "report_ui.h"
 #include "trg/platform.h"
 #include "utf8.h"
@@ -157,7 +158,7 @@ void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
     CollectDelivery();
     CollectDumpRetry();
     my_reports_.RefreshIfStale(service_);
-    const bool sending = delivery_ != nullptr || dump_retry_ != nullptr;
+    const bool sending = SendBusy(State());
     if (CheckDraft(description_, !logs_.empty()) != problem_) problem_ = DraftProblem::kNone;
     KeepClearOfScrollbar(std::floor(trg::layout::kContentPadding * ui.scale()));
     AccentText(ui, kPrivacyHeadline);
@@ -181,6 +182,15 @@ void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
     ui.EndRows();
     my_reports_.Draw(ui, service_);
     ui.EndRows();
+}
+
+SendState IncidentPage::State() const {
+    SendFacts in_flight;
+    in_flight.delivering = delivery_ != nullptr;
+    in_flight.uploading_dump = delivery_ && delivery_->uploading_dump;
+    in_flight.retrying_dump = dump_retry_ != nullptr;
+    in_flight.result = result_ ? &*result_ : nullptr;
+    return ClassifySend(in_flight);
 }
 
 void IncidentPage::FindLogs() {
@@ -238,7 +248,7 @@ void IncidentPage::CollectDumpRetry() {
 
 // Only the dump goes again, under the Report ID the service already gave: the report itself is never filed twice.
 void IncidentPage::RetryDump() {
-    if (!result_ || !sent_dump_ || result_->credential.empty() || delivery_ || dump_retry_) return;
+    if (!result_ || !CanRetryDump(State(), sent_dump_.has_value(), !result_->credential.empty())) return;
     dump_retry_ = std::make_shared<DumpRetry>();
     bring_result_into_view_ = true;
     std::thread([retry = dump_retry_, service = service_, ticket = result_->ticket, receipt = result_->credential, dump = *sent_dump_] {
@@ -276,8 +286,7 @@ void IncidentPage::TogglePreview(const ReportFacts& facts) {
 }
 
 void IncidentPage::Send(const ReportFacts& facts) {
-    if (dump_retry_) return;
-    if (delivery_ || !service_.endpoint.configured() || !AcceptDraft()) return;
+    if (!CanSend(State(), service_.endpoint.configured()) || !AcceptDraft()) return;
     std::shared_ptr<const IncidentPackage> package = previewed_ ? previewed_ : BuildPackage(facts);
     if (!package) return;
     if (submission_.empty()) submission_ = NewSubmissionKey();
@@ -320,8 +329,8 @@ void IncidentPage::DrawDescription(trg::Ui& ui, bool sending) {
     ImGui::BeginDisabled(sending);
     ImGui::PushStyleColor(ImGuiCol_FrameBg, too_short ? AlertedColor(frame, ui.theme().warn_dot, ImGui::GetTime() - problem_time_) : frame);
     const ImGuiInputTextFlags flags = ImGuiInputTextFlags_WordWrap | ImGuiInputTextFlags_CallbackEdit;
-    if (ImGui::InputTextMultiline("##description", description_, sizeof(description_), ImVec2(-FLT_MIN, kDescriptionHeight * ui.scale()),
-                                  flags, KeepDescriptionShort)) {
+    if (InputTextMultilineKeepOnEscape("##description", description_, sizeof(description_),
+                                       ImVec2(-FLT_MIN, kDescriptionHeight * ui.scale()), flags, KeepDescriptionShort)) {
         DraftChanged();
     }
     ImGui::PopStyleColor();
@@ -434,24 +443,24 @@ void IncidentPage::DrawOtherOptions(trg::Ui& ui, const ReportFacts& facts, bool 
 }
 
 void IncidentPage::DrawResult(trg::Ui& ui) {
-    if (dump_retry_ || (delivery_ && delivery_->uploading_dump)) {
-        ui.Spacer(4);
+    const SendState state = State();
+    if (state == SendState::kIdle) return;
+    ui.Spacer(4);
+    switch (state) {
+    case SendState::kIdle: return;
+    case SendState::kUploadingDump:
         ui.StatusCard(trg::Status::kBusy, "Uploading the crash dump...", "The report is already sent; the dump can take a little longer.");
         return;
-    }
-    if (delivery_) {
-        ui.Spacer(4);
-        ui.StatusCard(trg::Status::kBusy, "Sending your report...", "This takes a few seconds.");
-        return;
-    }
-    if (!result_) return;
-    ui.Spacer(4);
-    if (result_->outcome != ReportOutcome::kSent) {
+    case SendState::kSending: ui.StatusCard(trg::Status::kBusy, "Sending your report...", "This takes a few seconds."); return;
+    case SendState::kFailed: {
         std::string advice = Tr(OutcomeAdvice(result_->outcome));
         const std::string retry = RetryAfterText(result_->retry_after_seconds);
         if (!retry.empty()) advice += " " + std::string(Tr(retry));
         ui.StatusCard(trg::Status::kAttention, OutcomeTitle(result_->outcome), advice.c_str());
         return;
+    }
+    case SendState::kSent:
+    case SendState::kSentDumpFailed: break;
     }
     const std::string id = std::string(Tr("Report ID:")) + " " + result_->ticket;
     ui.StatusCard(trg::Status::kReady, "Report sent successfully", id.c_str());
@@ -471,7 +480,10 @@ void IncidentPage::DrawDumpResult(trg::Ui& ui) {
     case DumpUpload::kNotAttached: ui.Help("The crash dump could not be attached, so only the log was sent."); break;
     case DumpUpload::kFailed:
         WarningText(ui, "The report was sent, but its crash dump could not be uploaded.");
-        if (sent_dump_ && !result_->credential.empty() && ImGui::Button(Tr("Retry crash dump upload"))) RetryDump();
+        if (CanRetryDump(State(), sent_dump_.has_value(), !result_->credential.empty()) &&
+            ImGui::Button(Tr("Retry crash dump upload"))) {
+            RetryDump();
+        }
         break;
     }
 }
