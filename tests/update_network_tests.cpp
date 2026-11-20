@@ -7,8 +7,11 @@
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <fstream>
 #include <functional>
+#include <iterator>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -31,6 +34,7 @@
 
 #include <trg/download.h>
 
+#include "updater/retry_policy.h"
 #include "updater/sha256.h"
 #include "updater/third_party/miniz/miniz.h"
 #include "updater/update_controller.h"
@@ -129,6 +133,10 @@ class Server {
     std::lock_guard<std::mutex> lock(mutex_);
     return counts_[path];
   }
+  std::string LastRequest(const std::string& path) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return captured_[path];
+  }
 
  private:
   void Run() {
@@ -169,6 +177,7 @@ class Server {
       const auto script = scripts_.find(path);
       if (script != scripts_.end()) {
         const int index = counts_[path]++;
+        captured_[path] = request;
         step = script->second[std::min<size_t>(size_t(index), script->second.size() - 1)];
       }
     }
@@ -203,6 +212,7 @@ class Server {
   std::mutex mutex_;
   std::map<std::string, std::vector<Step>> scripts_;
   std::map<std::string, int> counts_;
+  std::map<std::string, std::string> captured_;
 };
 
 class TempDir {
@@ -244,6 +254,13 @@ struct Fixture {
   Server server;
   TempDir temp;
   std::string package = MakeZip("app.exe", "new launcher");
+  std::mutex wait_mutex;
+  std::vector<int> waits;
+
+  std::vector<int> Waits() {
+    std::lock_guard<std::mutex> lock(wait_mutex);
+    return waits;
+  }
 
   std::string ReleaseJson(bool with_digest) {
     const std::string digest = with_digest ? ",\"digest\":\"sha256:" + Sha256Hex(package) + "\"" : std::string();
@@ -268,6 +285,11 @@ struct Fixture {
     config.url_filter = [this](const std::string& url) { return server.Allows(url); };
     config.connect_timeout_ms = 2000;
     config.receive_timeout_ms = 400;
+    config.retry_wait = [this](int delay_ms, trg::Task& task) {
+      std::lock_guard<std::mutex> lock(wait_mutex);
+      waits.push_back(delay_ms);
+      return !task.cancelled();
+    };
     return config;
   }
 
@@ -331,7 +353,7 @@ void TestReleaseCheckFailures() {
   Fixture fixture;
   UpdateController controller(fixture.Config());
 
-  fixture.server.Script("/release", {Status(504), Body(fixture.ReleaseJson(true))});
+  fixture.server.Script("/release", {Status(504), Status(504), Status(504), Body(fixture.ReleaseJson(true))});
   UpdateSnapshot snapshot = CheckAndSettle(controller);
   ExpectFailedWithRetry(snapshot);
   CHECK(snapshot.retry_check);
@@ -339,11 +361,11 @@ void TestReleaseCheckFailures() {
   snapshot = RetryAndSettle(controller);
   CHECK(snapshot.state == UpdateState::kAvailable);
   CHECK(snapshot.latest_version == "1.1.0");
-  CHECK(fixture.server.Requests("/release") == 2);
+  CHECK(fixture.server.Requests("/release") == 4);
 
   Fixture closed;
   UpdateController closed_controller(closed.Config());
-  closed.server.Script("/release", {CutShort(closed.ReleaseJson(true)), Body(closed.ReleaseJson(true))});
+  closed.server.Script("/release", {CutShort(closed.ReleaseJson(true)), CutShort(closed.ReleaseJson(true)), CutShort(closed.ReleaseJson(true)), Body(closed.ReleaseJson(true))});
   snapshot = CheckAndSettle(closed_controller);
   ExpectFailedWithRetry(snapshot);
   snapshot = RetryAndSettle(closed_controller);
@@ -351,7 +373,7 @@ void TestReleaseCheckFailures() {
 
   Fixture stalled;
   UpdateController stalled_controller(stalled.Config());
-  stalled.server.Script("/release", {Stall(stalled.ReleaseJson(true)), Body(stalled.ReleaseJson(true))});
+  stalled.server.Script("/release", {Stall(stalled.ReleaseJson(true)), Stall(stalled.ReleaseJson(true)), Stall(stalled.ReleaseJson(true)), Body(stalled.ReleaseJson(true))});
   const auto started = std::chrono::steady_clock::now();
   snapshot = CheckAndSettle(stalled_controller);
   ExpectFailedWithRetry(snapshot);
@@ -372,7 +394,7 @@ void TestChecksumFailures() {
   fixture.ServeRelease(false);
   fixture.server.Script("/package", {Body(fixture.package)});
   fixture.server.Script("/checksum",
-                        {Status(504), Body(Sha256Hex(fixture.package) + "  " + kPackageName + "\n")});
+                        {Status(504), Status(504), Status(504), Body(Sha256Hex(fixture.package) + "  " + kPackageName + "\n")});
   CHECK(CheckAndSettle(controller).state == UpdateState::kAvailable);
 
   const int workspaces = Workspaces();
@@ -385,7 +407,7 @@ void TestChecksumFailures() {
 
   snapshot = RetryAndSettle(controller);
   CHECK(snapshot.state == UpdateState::kReadyToRestart);
-  CHECK(fixture.server.Requests("/checksum") == 2);
+  CHECK(fixture.server.Requests("/checksum") == 4);
 }
 
 void TestPackageFailures() {
@@ -395,7 +417,7 @@ void TestPackageFailures() {
   fixture.ServeRelease(true);
   CHECK(CheckAndSettle(controller).state == UpdateState::kAvailable);
 
-  fixture.server.Script("/package", {Status(504), Body(fixture.package)});
+  fixture.server.Script("/package", {Status(504), Status(504), Status(504), Body(fixture.package)});
   const int workspaces = Workspaces();
   UpdateSnapshot snapshot = DownloadAndSettle(controller);
   ExpectFailedWithRetry(snapshot);
@@ -409,22 +431,20 @@ void TestPackageFailures() {
   UpdateController closed_controller(closed.Config());
   closed.ServeRelease(true);
   CHECK(CheckAndSettle(closed_controller).state == UpdateState::kAvailable);
-  closed.server.Script("/package", {CutShort(closed.package), CutShort(closed.package), Body(closed.package)});
+  closed.server.Script("/package", {CutShort(closed.package), CutShort(closed.package), CutShort(closed.package), Body(closed.package)});
   const int closed_workspaces = Workspaces();
   snapshot = DownloadAndSettle(closed_controller);
   ExpectFailedWithRetry(snapshot);
   CHECK(Workspaces() == closed_workspaces);
   snapshot = RetryAndSettle(closed_controller);
-  ExpectFailedWithRetry(snapshot);
-  snapshot = RetryAndSettle(closed_controller);
   CHECK(snapshot.state == UpdateState::kReadyToRestart);
-  CHECK(closed.server.Requests("/package") == 3);
+  CHECK(closed.server.Requests("/package") == 4);
 
   Fixture stalled;
   UpdateController stalled_controller(stalled.Config());
   stalled.ServeRelease(true);
   CHECK(CheckAndSettle(stalled_controller).state == UpdateState::kAvailable);
-  stalled.server.Script("/package", {Stall(stalled.package), Body(stalled.package)});
+  stalled.server.Script("/package", {Stall(stalled.package), Stall(stalled.package), Stall(stalled.package), Body(stalled.package)});
   const auto started = std::chrono::steady_clock::now();
   snapshot = DownloadAndSettle(stalled_controller);
   ExpectFailedWithRetry(snapshot);
@@ -646,6 +666,395 @@ void TestTransportTimeouts() {
   CHECK(!trg::HttpGet("http://127.0.0.1:1/ok", out, nullptr, options).empty());
 }
 
+std::string ReadAll(const std::filesystem::path& path) {
+  std::ifstream file(path, std::ios::binary);
+  return std::string(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+}
+
+void WriteAll(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream file(path, std::ios::binary | std::ios::trunc);
+  file << text;
+}
+
+std::string RunDownload(const std::string& url, const std::filesystem::path& destination, const trg::HttpOptions& options,
+                        trg::Task::State* state = nullptr, std::function<void(trg::Task&)> during = {}) {
+  trg::Task task;
+  task.Start("test", [&](trg::Task& running) { return trg::DownloadFile(running, url, destination.string(), options); });
+  if (during) {
+    during(task);
+  }
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(15);
+  while (task.running() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  std::string error;
+  const trg::Task::State result = task.Finish(&error);
+  if (state) {
+    *state = result;
+  }
+  return error;
+}
+
+void TestTransientClassification() {
+  std::printf("transient status classification and report\n");
+  Fixture fixture;
+  trg::HttpOptions options;
+  options.allow_url = [&](const std::string& url) { return fixture.server.Allows(url); };
+  std::string out;
+  for (const int status : {408, 429, 500, 502, 503, 504, 400, 401, 403, 404}) {
+    const bool transient = status == 408 || status == 429 || status >= 500;
+    fixture.server.Script("/status", {Status(status)});
+    trg::HttpReport report;
+    options.report = &report;
+    CHECK(!trg::HttpGet(fixture.server.Url("/status"), out, nullptr, options).empty());
+    CHECK(report.status == status);
+    CHECK(report.transient == transient);
+    CHECK(!report.cancelled);
+  }
+
+  fixture.server.Script("/redirect", {Redirect(fixture.server.Url("/ok"))});
+  fixture.server.Script("/ok", {Body("hello")});
+  trg::HttpReport report;
+  options.report = &report;
+  CHECK(trg::HttpGet(fixture.server.Url("/redirect"), out, nullptr, options).empty());
+  CHECK(out == "hello");
+  CHECK(report.status == 200);
+  CHECK(report.bytes == 5);
+  CHECK(report.expected == 5);
+  CHECK(report.redirects == 1);
+  CHECK(report.host == "127.0.0.1");
+  CHECK(!report.transient);
+}
+
+void TestSensitiveHeadersAndLogs() {
+  std::printf("sensitive headers on redirect and in logs\n");
+  const std::string secret = "Bearer secret-token-5f3a";
+  Server first;
+  Server second;
+  trg::HttpOptions options;
+  options.headers = {{"Authorization", secret}, {"Cookie", "session=secret-cookie-7c1d"}, {"Accept", "text/plain"}};
+  options.allow_url = [&](const std::string& url) { return first.Allows(url) || second.Allows(url); };
+  std::vector<std::string> lines;
+  options.log = [&](const std::string& text) { lines.push_back(text); };
+  options.operation = "test";
+
+  first.Script("/start", {Redirect(second.Url("/target"))});
+  second.Script("/target", {Body("payload")});
+  std::string out;
+  CHECK(trg::HttpGet(first.Url("/start"), out, nullptr, options).empty());
+  CHECK(out == "payload");
+  CHECK(first.LastRequest("/start").find("secret-token-5f3a") != std::string::npos);
+  CHECK(first.LastRequest("/start").find("secret-cookie-7c1d") != std::string::npos);
+  const std::string redirected = second.LastRequest("/target");
+  CHECK(!redirected.empty());
+  CHECK(redirected.find("secret-token-5f3a") == std::string::npos);
+  CHECK(redirected.find("secret-cookie-7c1d") == std::string::npos);
+  CHECK(redirected.find("Authorization") == std::string::npos);
+  for (const std::string& line : lines) {
+    CHECK(line.find("secret-token-5f3a") == std::string::npos);
+    CHECK(line.find("secret-cookie-7c1d") == std::string::npos);
+  }
+
+  lines.clear();
+  Fixture fixture;
+  options.allow_url = [&](const std::string& url) { return fixture.server.Allows(url); };
+  fixture.server.Script("/big", {Body(std::string(size_t(1) << 20, 'x'))});
+  CHECK(trg::HttpGet(fixture.server.Url("/big"), out, nullptr, options).empty());
+  CHECK(out.size() == (size_t(1) << 20));
+  CHECK(lines.size() <= 4);
+}
+
+void TestDestinationPreserved() {
+  std::printf("download keeps the previous file on every failure\n");
+  TempDir dir;
+  const std::filesystem::path destination = dir.path / "package.zip";
+  const std::filesystem::path partial = dir.path / "package.zip.part";
+  Fixture fixture;
+  trg::HttpOptions options;
+  options.receive_timeout_ms = 300;
+  options.total_timeout_ms = 3000;
+  options.allow_url = [&](const std::string& url) { return fixture.server.Allows(url); };
+  const std::string body(size_t(256) << 10, 'n');
+  const auto intact = [&] { return ReadAll(destination) == "old" && !std::filesystem::exists(partial); };
+
+  WriteAll(destination, "old");
+  WriteAll(partial, "stale partial from an earlier run");
+  fixture.server.Script("/file", {Status(503)});
+  CHECK(!RunDownload(fixture.server.Url("/file"), destination, options).empty());
+  CHECK(intact());
+
+  fixture.server.Script("/file", {CutShort(body)});
+  CHECK(!RunDownload(fixture.server.Url("/file"), destination, options).empty());
+  CHECK(intact());
+
+  fixture.server.Script("/file", {Stall(body)});
+  CHECK(!RunDownload(fixture.server.Url("/file"), destination, options).empty());
+  CHECK(intact());
+
+  fixture.server.Script("/file", {Body(body)});
+  options.max_bytes = 1000;
+  CHECK(!RunDownload(fixture.server.Url("/file"), destination, options).empty());
+  CHECK(intact());
+  options.max_bytes = 0;
+
+  CHECK(!RunDownload("http://127.0.0.1:1/file", destination, options).empty());
+  CHECK(intact());
+
+  fixture.server.Script("/file", {Stall(body)});
+  trg::Task::State state = trg::Task::State::kIdle;
+  options.receive_timeout_ms = 20000;
+  options.total_timeout_ms = 0;
+  const auto started = std::chrono::steady_clock::now();
+  const std::string cancelled = RunDownload(fixture.server.Url("/file"), destination, options, &state, [](trg::Task& task) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    task.Cancel();
+  });
+  CHECK(state == trg::Task::State::kCancelled || !cancelled.empty());
+  CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
+  CHECK(intact());
+
+  fixture.server.Script("/file", {Body(body)});
+  CHECK(RunDownload(fixture.server.Url("/file"), destination, options).empty());
+  CHECK(ReadAll(destination) == body);
+  CHECK(!std::filesystem::exists(partial));
+}
+
+struct DownloadRun {
+  Fixture fixture;
+  std::unique_ptr<UpdateController> controller;
+  std::vector<std::string> log_lines;
+  std::mutex log_mutex;
+
+  void Start(std::function<void(UpdateConfig&)> adjust = {}) {
+    fixture.ServeRelease(true);
+    UpdateConfig config = fixture.Config();
+    config.log = [this](std::string_view text) {
+      std::lock_guard<std::mutex> lock(log_mutex);
+      log_lines.emplace_back(text);
+    };
+    if (adjust) {
+      adjust(config);
+    }
+    controller = std::make_unique<UpdateController>(config);
+    CHECK(CheckAndSettle(*controller).state == UpdateState::kAvailable);
+  }
+  bool Logged(const std::string& text) {
+    std::lock_guard<std::mutex> lock(log_mutex);
+    return std::any_of(log_lines.begin(), log_lines.end(),
+                       [&](const std::string& line) { return line.find(text) != std::string::npos; });
+  }
+  int PackageRequests() { return fixture.server.Requests("/package"); }
+};
+
+void TestRetryPolicy() {
+  std::printf("retry policy\n");
+  CHECK(kMaxDownloadAttempts == 3);
+  CHECK(RetryDelayMs(1) == 1000);
+  CHECK(RetryDelayMs(2) == 2500);
+  CHECK(RetryDelayMs(1) + RetryDelayMs(2) <= 5000);
+  CHECK(ShouldRetry(1, true, false));
+  CHECK(ShouldRetry(2, true, false));
+  CHECK(!ShouldRetry(3, true, false));
+  CHECK(!ShouldRetry(1, false, false));
+  CHECK(!ShouldRetry(1, true, true));
+}
+
+void TestAutomaticRetries() {
+  std::printf("automatic retries\n");
+  {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Body(run.fixture.package)});
+    CHECK(DownloadAndSettle(*run.controller).state == UpdateState::kReadyToRestart);
+    CHECK(run.PackageRequests() == 1);
+    CHECK(run.fixture.Waits().empty());
+  }
+  for (const int status : {408, 429, 500, 502, 503, 504}) {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Status(status), Body(run.fixture.package)});
+    CHECK(DownloadAndSettle(*run.controller).state == UpdateState::kReadyToRestart);
+    CHECK(run.PackageRequests() == 2);
+    CHECK(run.fixture.Waits() == std::vector<int>({1000}));
+    CHECK(run.Logged("attempt 1 of 3"));
+    CHECK(run.Logged("HTTP " + std::to_string(status)));
+    CHECK(run.Logged("retrying in 1000 ms"));
+  }
+  {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {CutShort(run.fixture.package), Body(run.fixture.package)});
+    CHECK(DownloadAndSettle(*run.controller).state == UpdateState::kReadyToRestart);
+    CHECK(run.PackageRequests() == 2);
+  }
+  {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Status(503), Status(503), Body(run.fixture.package)});
+    CHECK(DownloadAndSettle(*run.controller).state == UpdateState::kReadyToRestart);
+    CHECK(run.PackageRequests() == 3);
+    CHECK(run.fixture.Waits() == std::vector<int>({1000, 2500}));
+  }
+  {
+    Fixture release;
+    release.server.Script("/release", {Status(503), Body(release.ReleaseJson(true))});
+    UpdateController controller(release.Config());
+    CHECK(CheckAndSettle(controller).state == UpdateState::kAvailable);
+    CHECK(release.server.Requests("/release") == 2);
+    CHECK(release.Waits() == std::vector<int>({1000}));
+  }
+}
+
+void TestPermanentFailuresDoNotRetry() {
+  std::printf("permanent failures do not retry\n");
+  for (const int status : {400, 401, 403, 404}) {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Status(status), Body(run.fixture.package)});
+    ExpectFailedWithRetry(DownloadAndSettle(*run.controller));
+    CHECK(run.PackageRequests() == 1);
+    CHECK(run.fixture.Waits().empty());
+  }
+  {
+    DownloadRun run;
+    run.Start();
+    std::string altered = run.fixture.package;
+    altered.back() = static_cast<char>(altered.back() ^ 0x55);
+    run.fixture.server.Script("/package", {Body(altered), Body(run.fixture.package)});
+    const UpdateSnapshot snapshot = DownloadAndSettle(*run.controller);
+    ExpectFailedWithRetry(snapshot);
+    CHECK(snapshot.error.find("SHA-256") != std::string::npos);
+    CHECK(run.PackageRequests() == 1);
+  }
+  {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Body(std::string(size_t(2) << 20, 'x')), Body(run.fixture.package)});
+    ExpectFailedWithRetry(DownloadAndSettle(*run.controller));
+    CHECK(run.PackageRequests() == 1);
+  }
+  {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Redirect("http://localhost:1/package"), Body(run.fixture.package)});
+    const UpdateSnapshot snapshot = DownloadAndSettle(*run.controller);
+    ExpectFailedWithRetry(snapshot);
+    CHECK(snapshot.error.find("not allowed") != std::string::npos);
+    CHECK(run.PackageRequests() == 1);
+    CHECK(run.fixture.Waits().empty());
+  }
+  {
+    DownloadRun run;
+    run.Start();
+    run.fixture.server.Script("/package", {Redirect(run.fixture.server.Url("/package"))});
+    ExpectFailedWithRetry(DownloadAndSettle(*run.controller));
+    CHECK(run.PackageRequests() == 6);
+    CHECK(run.fixture.Waits().empty());
+  }
+}
+
+void TestRetryExhaustionAndManualRetry() {
+  std::printf("retry exhaustion and manual retry\n");
+  DownloadRun run;
+  run.Start();
+  const std::filesystem::path installed = run.fixture.temp.path / "install" / "app.exe";
+  std::filesystem::create_directories(installed.parent_path());
+  WriteAll(installed, "old");
+  const int workspaces = Workspaces();
+
+  run.fixture.server.Script("/package", {Status(503), Status(503), Status(503), Body(run.fixture.package)});
+  UpdateSnapshot snapshot = DownloadAndSettle(*run.controller);
+  ExpectFailedWithRetry(snapshot);
+  CHECK(run.PackageRequests() == 3);
+  CHECK(snapshot.error.find("503") != std::string::npos);
+  CHECK(snapshot.error.find("Giving up after 3 attempts") != std::string::npos);
+  CHECK(run.fixture.Waits() == std::vector<int>({1000, 2500}));
+  CHECK(run.Logged("attempt 2 of 3"));
+  CHECK(run.Logged("attempt 3 of 3"));
+  CHECK(run.Logged("retries exhausted"));
+  CHECK(ReadAll(installed) == "old");
+  CHECK(Workspaces() == workspaces);
+
+  snapshot = RetryAndSettle(*run.controller);
+  CHECK(snapshot.state == UpdateState::kReadyToRestart);
+  CHECK(run.PackageRequests() == 4);
+  CHECK(run.fixture.Waits().size() == 2);
+  CHECK(ReadAll(installed) == "old");
+  CHECK(!run.Logged("Bearer"));
+  CHECK(!run.Logged("Cookie"));
+}
+
+void TestRetrySequenceIsExclusive() {
+  std::printf("no overlapping retry sequences\n");
+  std::atomic<bool> waiting{false};
+  std::atomic<bool> proceed{false};
+  DownloadRun run;
+  run.Start([&](UpdateConfig& config) {
+    config.retry_wait = [&](int, trg::Task& task) {
+      waiting = true;
+      while (!proceed && !task.cancelled()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      }
+      return !task.cancelled();
+    };
+  });
+  run.fixture.server.Script("/package", {Status(503), Body(run.fixture.package)});
+  run.controller->StartDownload();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (!waiting && std::chrono::steady_clock::now() < deadline) {
+    run.controller->Poll();
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  CHECK(waiting);
+  CHECK(run.controller->Busy());
+  run.controller->Poll();
+  CHECK(run.controller->snapshot().state == UpdateState::kDownloading);
+  CHECK(!run.controller->snapshot().retry_available);
+  run.controller->StartDownload();
+  run.controller->Retry();
+  CHECK(run.PackageRequests() == 1);
+  proceed = true;
+  CHECK(Settle(*run.controller).state == UpdateState::kReadyToRestart);
+  CHECK(run.PackageRequests() == 2);
+}
+
+void TestRetryCancellation() {
+  std::printf("cancellation stops retries\n");
+  {
+    DownloadRun run;
+    run.Start([](UpdateConfig& config) {
+      config.retry_wait = [](int, trg::Task& task) {
+        task.Cancel();
+        return false;
+      };
+    });
+    run.fixture.server.Script("/package", {Status(503), Body(run.fixture.package)});
+    const UpdateSnapshot snapshot = DownloadAndSettle(*run.controller);
+    CHECK(snapshot.state == UpdateState::kFailed);
+    CHECK(run.PackageRequests() == 1);
+    CHECK(!run.controller->Busy());
+  }
+  {
+    DownloadRun run;
+    run.Start([](UpdateConfig& config) { config.receive_timeout_ms = 20000; });
+    run.fixture.server.Script("/package", {Stall(run.fixture.package), Body(run.fixture.package)});
+    const auto started = std::chrono::steady_clock::now();
+    run.controller->StartDownload();
+    const auto deadline = started + std::chrono::seconds(10);
+    while (run.PackageRequests() == 0 && std::chrono::steady_clock::now() < deadline) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    run.controller->Cancel();
+    const UpdateSnapshot snapshot = Settle(*run.controller);
+    CHECK(snapshot.state == UpdateState::kFailed);
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
+    CHECK(run.PackageRequests() == 1);
+    CHECK(run.fixture.Waits().empty());
+    CHECK(!run.controller->Busy());
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -658,6 +1067,15 @@ int main() {
   TestNoReleasePublished();
   TestProductionConfig();
   TestTransportTimeouts();
+  TestTransientClassification();
+  TestSensitiveHeadersAndLogs();
+  TestDestinationPreserved();
+  TestRetryPolicy();
+  TestAutomaticRetries();
+  TestPermanentFailuresDoNotRetry();
+  TestRetryExhaustionAndManualRetry();
+  TestRetrySequenceIsExclusive();
+  TestRetryCancellation();
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

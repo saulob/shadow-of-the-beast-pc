@@ -6,10 +6,12 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 #include <trg/download.h>
 
+#include "updater/retry_policy.h"
 #include "updater/sha256.h"
 #include "updater/update_job.h"
 #include "updater/update_paths.h"
@@ -87,6 +89,54 @@ bool ReadTextFile(const std::filesystem::path& path, std::string& text, std::str
 void Log(const UpdateConfig& config, std::string_view text) {
   if (config.log) {
     config.log(text);
+  }
+}
+
+bool WaitForRetry(const UpdateConfig& config, int delay_ms, trg::Task& task) {
+  if (config.retry_wait) {
+    return config.retry_wait(delay_ms, task);
+  }
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(delay_ms);
+  while (!task.cancelled() && std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(25));
+  }
+  return !task.cancelled();
+}
+
+std::string DescribeAttempt(const char* operation, int attempt, const trg::HttpReport& report) {
+  std::string text = std::string(operation) + " attempt " + std::to_string(attempt) + " of " +
+                     std::to_string(kMaxDownloadAttempts) + " failed: ";
+  text += report.status != 0 ? "HTTP " + std::to_string(report.status)
+          : report.timed_out ? "timed out"
+          : report.interrupted ? "interrupted"
+                               : "transport error";
+  text += ", " + std::to_string(report.bytes) + " bytes";
+  text += report.transient ? ", transient" : ", permanent";
+  return text;
+}
+
+template <typename Attempt>
+std::string RunWithRetry(const UpdateConfig& config, trg::Task& task, const char* operation, trg::HttpReport& last,
+                         Attempt attempt) {
+  for (int number = 1;; ++number) {
+    last = trg::HttpReport{};
+    std::string error = attempt(last);
+    if (error.empty()) {
+      return error;
+    }
+    const bool cancelled = last.cancelled || task.cancelled();
+    if (!ShouldRetry(number, last.transient, cancelled)) {
+      if (last.transient && !cancelled) {
+        Log(config, DescribeAttempt(operation, number, last) + "; retries exhausted");
+        error += " Giving up after " + std::to_string(number) + " attempts.";
+      }
+      return error;
+    }
+    const int delay = RetryDelayMs(number);
+    Log(config, DescribeAttempt(operation, number, last) + "; retrying in " + std::to_string(delay) + " ms");
+    if (!WaitForRetry(config, delay, task)) {
+      return "Cancelled.";
+    }
   }
 }
 
@@ -198,10 +248,13 @@ void UpdateController::StartCheck(bool manual) {
       }
       trg::HttpReport report;
       std::vector<std::string> diagnostics;
-      trg::HttpOptions options = HttpOptionsFor(config, "release metadata", kCheckTimeoutMs, kMaxReleaseJsonBytes);
-      options.report = &report;
-      options.log = [&diagnostics](const std::string& text) { diagnostics.push_back(text); };
-      error = trg::HttpGet(config.releases_url, json, &task, options);
+      error = RunWithRetry(config, task, "release metadata", report, [&](trg::HttpReport& attempt_report) {
+        trg::HttpOptions options = HttpOptionsFor(config, "release metadata", kCheckTimeoutMs, kMaxReleaseJsonBytes);
+        options.report = &attempt_report;
+        options.log = [&diagnostics](const std::string& text) { diagnostics.push_back(text); };
+        json.clear();
+        return trg::HttpGet(config.releases_url, json, &task, options);
+      });
       // GitHub answers 404 for "latest" while a repository has no published release (or is not public yet).
       if (!error.empty() && report.status == 404) {
         outcome->no_release = true;
@@ -375,8 +428,13 @@ void UpdateController::StartDownload() {
       expected = *digest;
     } else if (checksum_asset) {
       std::string checksum;
-      std::string error = trg::HttpGet(checksum_asset->download_url, checksum, &task,
-                                       HttpOptionsFor(config, "checksum", 20000, 64ll << 10));
+      trg::HttpReport checksum_report;
+      std::string error = RunWithRetry(config, task, "checksum", checksum_report, [&](trg::HttpReport& report) {
+        trg::HttpOptions options = HttpOptionsFor(config, "checksum", 20000, 64ll << 10);
+        options.report = &report;
+        checksum.clear();
+        return trg::HttpGet(checksum_asset->download_url, checksum, &task, options);
+      });
       if (!error.empty()) {
         return error;
       }
@@ -397,7 +455,12 @@ void UpdateController::StartDownload() {
     trg::HttpOptions download_options = HttpOptionsFor(config, "update package", kDownloadTimeoutMs, kMaxDownloadBytes);
     download_options.progress_total = static_cast<long long>(asset.size);
     download_options.max_bytes = static_cast<long long>(asset.size) + (1ll << 20);
-    std::string error = trg::DownloadFile(task, asset.download_url, Utf8Path(download_path), download_options);
+    trg::HttpReport download_report;
+    std::string error = RunWithRetry(config, task, "update package", download_report, [&](trg::HttpReport& report) {
+      trg::HttpOptions options = download_options;
+      options.report = &report;
+      return trg::DownloadFile(task, asset.download_url, Utf8Path(download_path), options);
+    });
     if (!error.empty()) {
       return error;
     }

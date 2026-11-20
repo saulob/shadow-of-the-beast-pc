@@ -41,6 +41,8 @@ struct UpdateConfig {
   std::function<bool(const std::string& url)> url_filter;
   int connect_timeout_ms = 15000;
   int receive_timeout_ms = 30000;
+  // Waits before a retry; returns false when the task was cancelled. Tests replace it to avoid real waiting.
+  std::function<bool(int delay_ms, trg::Task& task)> retry_wait;
   UpdatePackageKind package_kind = UpdatePackageKind::kZip;
   std::function<std::string(const SemanticVersion&)> asset_name;
   std::function<std::string(const SemanticVersion&)> checksum_asset_name;
