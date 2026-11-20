@@ -126,6 +126,7 @@ public:
 
 private:
     Frame* GetRenderFrame();
+    bool WaitFrameFence(Frame* frame, const char* stage);
 
     void RecreateFrame(Frame* frame, u32 width, u32 height);
 

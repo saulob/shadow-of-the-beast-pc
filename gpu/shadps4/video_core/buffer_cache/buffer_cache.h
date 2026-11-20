@@ -14,6 +14,7 @@
 #include "common/interval_set.h"
 #include "common/types.h"
 #include "video_core/buffer_cache/arena_layout.h"
+#include "video_core/buffer_cache/backing_memory.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/buffer_cache/fault_manager.h"
 #include "video_core/buffer_cache/range_set.h"
@@ -219,7 +220,9 @@ private:
     IntervalList<Backing> resident_ranges;
 
     u32 arena_memory_type_index{};
-    u32 spill_memory_type_index{~0u};
+    std::vector<u32> backing_memory_types;
+    std::vector<BackingMemory::TypeTraits> memory_type_traits;
+    BackingMemory::FallbackTelemetry backing_telemetry;
     vk::DeviceMemory guard_memory{};
     u32 block_size{};
     u32 block_shift{};

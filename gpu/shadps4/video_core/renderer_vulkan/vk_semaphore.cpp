@@ -1,7 +1,8 @@
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include <limits>
+#include <tuple>
+#include "video_core/renderer_vulkan/vk_device_lost.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_semaphore.h"
 
@@ -9,7 +10,8 @@
 
 namespace Vulkan {
 
-constexpr u64 WAIT_TIMEOUT = std::numeric_limits<u64>::max();
+// Long enough to cost nothing while waiting, short enough to notice a device lost on another thread.
+constexpr u64 WAIT_SLICE_NS = 100'000'000;
 
 Semaphore::Semaphore(const Instance& instance_) : instance{instance_} {
     const vk::StructureChain semaphore_chain = {
@@ -33,13 +35,19 @@ void Semaphore::Refresh() {
     u64 counter{};
     do {
         this_tick = gpu_tick.load(std::memory_order_acquire);
-        auto [counter_result, cntr] = instance.GetDevice().getSemaphoreCounterValue(*semaphore);
-        if (counter_result == vk::Result::eErrorDeviceLost) {
-            instance.ReportDeviceFault();
+        vk::Result counter_result{};
+        const s32 result = DeviceLost::CallWhileHealthy(
+            DeviceLost::Global(), DeviceLost::Operation::GetSemaphoreCounterValue, "semread", this_tick,
+            [&] {
+                std::tie(counter_result, counter) =
+                    instance.GetDevice().getSemaphoreCounterValue(*semaphore);
+                return counter_result;
+            });
+        if (result == DeviceLost::DeviceLostResult) {
+            return;
         }
-        ASSERT_MSG(counter_result == vk::Result::eSuccess,
-                   "Failed to get master semaphore value: {}", vk::to_string(counter_result));
-        counter = cntr;
+        ASSERT_MSG(result == DeviceLost::Success, "Failed to get master semaphore value: {}",
+                   vk::to_string(vk::Result(result)));
         if (counter < this_tick) {
             return;
         }
@@ -58,27 +66,22 @@ void Semaphore::Wait(u64 tick) {
         return;
     }
 
-    // If none of the above is hit, fallback to a regular wait
+    // If none of the above is hit, fallback to a regular wait. A lost device never signals again:
+    // the wait ends instead of blocking shutdown.
     const vk::SemaphoreWaitInfo wait_info = {
         .semaphoreCount = 1,
         .pSemaphores = &semaphore.get(),
         .pValues = &tick,
     };
-
-    for (;;) {
-        const vk::Result result = instance.GetDevice().waitSemaphores(&wait_info, WAIT_TIMEOUT);
-        if (result == vk::Result::eSuccess) {
-            break;
-        }
-        if (result == vk::Result::eTimeout) {
-            continue;
-        }
-        if (result == vk::Result::eErrorDeviceLost) {
-            instance.ReportDeviceFault();
-        }
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost, "Device lost while waiting for the GPU");
-        UNREACHABLE_MSG("Timeline semaphore wait failed: {}", vk::to_string(result));
+    const s32 result = DeviceLost::WaitWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::WaitSemaphores, "semwait", tick, [&] {
+            return instance.GetDevice().waitSemaphores(&wait_info, WAIT_SLICE_NS);
+        });
+    if (result == DeviceLost::DeviceLostResult) {
+        return;
     }
+    ASSERT_MSG(result == DeviceLost::Success, "Timeline semaphore wait failed: {}",
+               vk::to_string(vk::Result(result)));
     Refresh();
 }
 

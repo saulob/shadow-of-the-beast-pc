@@ -19,6 +19,7 @@
 #include "common/debug.h"
 #include "common/thread.h"
 #include "imgui/renderer/texture_manager.h"
+#include "video_core/renderer_vulkan/vk_device_lost.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "sotb_threads.h"
@@ -490,6 +491,10 @@ void Scheduler::AllocateWorkerCommandBuffers() {
 }
 
 void Scheduler::SubmitExecution(SubmitInfo& info) {
+    if (DeviceLost::IsLost()) {
+        DeviceLost::Global().NoteRefused();
+        return;
+    }
     std::scoped_lock lk{submit_mutex};
     const u64 signal_value = work_semaphore.NextTick();
 
@@ -555,13 +560,14 @@ void Scheduler::SubmitExecution(SubmitInfo& info) {
     };
 
     ImGui::Core::TextureManager::Submit();
-    auto submit_result = instance.GetGraphicsQueue().submit(submit_info, info.fence);
-    if (submit_result == vk::Result::eErrorDeviceLost) {
-        instance.ReportDeviceFault();
+    const s32 submit_result = DeviceLost::CallWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::QueueSubmit, "submit", signal_value,
+        [&] { return instance.GetGraphicsQueue().submit(submit_info, info.fence); });
+    if (submit_result == DeviceLost::DeviceLostResult) {
+        return;
     }
-    ASSERT_MSG(submit_result != vk::Result::eErrorDeviceLost, "Device lost during submit");
-    ASSERT_MSG(submit_result == vk::Result::eSuccess, "Queue submit failed: {}",
-               vk::to_string(submit_result));
+    ASSERT_MSG(submit_result == DeviceLost::Success, "Queue submit failed: {}",
+               vk::to_string(vk::Result(submit_result)));
 
     work_semaphore.Refresh();
     AllocateWorkerCommandBuffers();

@@ -255,26 +255,30 @@ void TestDeviceLostCleanupPaths() {
     const auto instance = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_instance.cpp");
     const auto query = instance.find("FaultReport Instance::QueryDeviceFault() const");
     CHECK(query != std::string::npos);
-    CHECK(Contains(instance, "FormatFaultReport(QueryDeviceFault())"));
-    const auto guard = instance.find("!device_fault || !VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT", query);
+    const auto available = instance.find("device_fault && VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceFaultInfoEXT", query);
+    const auto collect = instance.find("CollectFaultReport(", query);
     const auto first_call = instance.find("getFaultInfoEXT", query);
-    CHECK(guard != std::string::npos && first_call != std::string::npos && guard < first_call);
-    CHECK(Contains(instance, "BoundedFaultCount(counts.addressInfoCount, MaxFaultAddresses)"));
+    CHECK(available != std::string::npos && available < collect && collect < first_call);
     CHECK(Contains(instance, "std::array<vk::DeviceFaultAddressInfoEXT, MaxFaultAddresses>"));
     CHECK(Contains(instance, "device_fault = feature_chain.get<vk::PhysicalDeviceFaultFeaturesEXT>().deviceFault"));
     CHECK(Contains(instance, "add_extension(VK_EXT_DEVICE_FAULT_EXTENSION_NAME)"));
+    const auto fault_header = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_fault_report.h");
+    CHECK(Contains(fault_header, "BoundedFaultCount(counts.addresses, MaxFaultAddresses)"));
+    CHECK(Contains(fault_header, "BoundedFaultCount(counts.vendors, MaxVendorFaults)"));
 
     const auto semaphore = ReadSource("gpu/shadps4/video_core/renderer_vulkan/vk_semaphore.cpp");
     const auto refresh = semaphore.find("void Semaphore::Refresh()");
-    const auto lost = semaphore.find("counter_result == vk::Result::eErrorDeviceLost", refresh);
+    const auto read = semaphore.find("DeviceLost::Operation::GetSemaphoreCounterValue", refresh);
+    const auto lost = semaphore.find("result == DeviceLost::DeviceLostResult", refresh);
     const auto assert_at = semaphore.find("Failed to get master semaphore value", refresh);
-    CHECK(lost != std::string::npos && assert_at != std::string::npos && lost < assert_at);
-    CHECK(Contains(semaphore, "result == vk::Result::eErrorDeviceLost"));
+    CHECK(read != std::string::npos && read < lost && lost < assert_at);
+    CHECK(Contains(semaphore, "DeviceLost::Operation::WaitSemaphores"));
 
     const auto buffer_cache = ReadSource("gpu/shadps4/video_core/buffer_cache/buffer_cache.cpp");
     const auto bind = buffer_cache.find("bindSparse(sparse_info)");
     CHECK(bind != std::string::npos);
-    CHECK(buffer_cache.find("ReportDeviceFault()", bind) < buffer_cache.find("Sparse bind failed", bind));
+    CHECK(buffer_cache.rfind("CallWhileHealthy", bind) != std::string::npos);
+    CHECK(buffer_cache.find("DeviceLost::DeviceLostResult", bind) < buffer_cache.find("Sparse bind failed", bind));
 }
 
 void TestSubmissionAndRecordingWiring() {
@@ -283,11 +287,10 @@ void TestSubmissionAndRecordingWiring() {
 
     const auto submit = scheduler.find("GetGraphicsQueue().submit(submit_info, info.fence)");
     CHECK(submit != std::string::npos);
-    const auto lost = scheduler.find("submit_result == vk::Result::eErrorDeviceLost", submit);
-    const auto lost_assert = scheduler.find("Device lost during submit", submit);
+    const auto lost = scheduler.find("submit_result == DeviceLost::DeviceLostResult", submit);
     const auto failed_assert = scheduler.find("Queue submit failed", submit);
     const auto refresh = scheduler.find("work_semaphore.Refresh()", submit);
-    CHECK(lost < lost_assert && lost_assert < failed_assert && failed_assert < refresh);
+    CHECK(lost != std::string::npos && lost < failed_assert && failed_assert < refresh);
 
     CHECK(Contains(scheduler, "replay_rendering.Begin()"));
     CHECK(Contains(scheduler, "replay_rendering.End()"));

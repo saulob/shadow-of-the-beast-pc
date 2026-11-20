@@ -12,6 +12,7 @@
 #include "sotb_settings.h"
 #include "imgui/renderer/imgui_core.h"
 #include "sdl_window.h"
+#include "video_core/renderer_vulkan/vk_device_lost.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
@@ -22,9 +23,12 @@ namespace Vulkan {
 // submitting while the window changes size (F11, display mode, VSync).
 static void WaitDeviceIdle(const Instance& instance, const char* why) {
     std::scoped_lock lock{Scheduler::submit_mutex};
-    if (const auto result = instance.GetDevice().waitIdle(); result != vk::Result::eSuccess) {
+    const s32 result = DeviceLost::CallWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::DeviceWaitIdle, "idle", 0,
+        [&] { return instance.GetDevice().waitIdle(); });
+    if (result != DeviceLost::Success && result != DeviceLost::DeviceLostResult) {
         LOG_WARNING(Render_Vulkan, "Failed to wait for the device to become idle {}: {}", why,
-                    vk::to_string(result));
+                    vk::to_string(vk::Result(result)));
     }
 }
 
@@ -136,9 +140,16 @@ void Swapchain::SetHDR(bool hdr) {
 
 bool Swapchain::AcquireNextImage() {
     vk::Device device = instance.GetDevice();
-    vk::Result result =
-        device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
-                                   image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
+    const s32 acquired = DeviceLost::CallWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::AcquireNextImage, "acquire", 0, [&] {
+            return device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
+                                              image_acquired[frame_index], VK_NULL_HANDLE,
+                                              &image_index);
+        });
+    if (acquired == DeviceLost::DeviceLostResult) {
+        return false;
+    }
+    const vk::Result result{acquired};
 
     SwapchainHealth::Result kind = SwapchainHealth::Result::Failure;
     switch (result) {
@@ -171,7 +182,13 @@ bool Swapchain::Present() {
         .pImageIndices = &image_index,
     };
 
-    auto result = instance.GetPresentQueue().presentKHR(present_info);
+    const s32 presented = DeviceLost::CallWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::QueuePresent, "present", 0,
+        [&] { return instance.GetPresentQueue().presentKHR(present_info); });
+    if (presented == DeviceLost::DeviceLostResult) {
+        return true;
+    }
+    const vk::Result result{presented};
     if (result == vk::Result::eErrorOutOfDateKHR) {
         health.Present(SwapchainHealth::Result::OutOfDate);
     } else if (result == vk::Result::eSuboptimalKHR) {

@@ -5,6 +5,7 @@
 #include <ranges>
 #include "common/assert.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
+#include "video_core/renderer_vulkan/vk_device_lost.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_runtime.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
@@ -140,6 +141,8 @@ void UniqueImage::Create(const vk::ImageCreateInfo& image_ci) {
                      "attempts",
                      image_ci.extent.width, image_ci.extent.height, image_ci.extent.depth);
     }
+    Vulkan::DeviceLost::Global().Report(Vulkan::DeviceLost::Operation::AllocateMemory,
+                                        "image allocation", result, 0);
     ASSERT_MSG(result == VK_SUCCESS, "Failed allocating image with error {}",
                vk::to_string(vk::Result{result}));
     image = vk::Image{unsafe_image};

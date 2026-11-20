@@ -11,6 +11,7 @@
 #include "sdl_window.h"
 #include "video_core/buffer_cache/buffer.h"
 #include "video_core/renderdoc.h"
+#include "video_core/renderer_vulkan/vk_device_lost.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 #include "sotb_overlay.h"
 #include "sotb_pipeline_startup.h"
@@ -275,6 +276,22 @@ void Presenter::RecreateFrame(Frame* frame, u32 width, u32 height) {
     frame->is_hdr = swapchain.GetHDR();
 }
 
+// False once the device is lost: the fence is never signaled again and the frame is not used.
+bool Presenter::WaitFrameFence(Frame* frame, const char* stage) {
+    const vk::Device device = instance.GetDevice();
+    const s32 result = DeviceLost::WaitWhileHealthy(
+        DeviceLost::Global(), DeviceLost::Operation::WaitForFences, stage, 0, [&] {
+            return device.waitForFences(frame->present_done, false,
+                                        std::chrono::nanoseconds(DeviceLost::WaitSlice).count());
+        });
+    if (result == DeviceLost::DeviceLostResult) {
+        return false;
+    }
+    ASSERT_MSG(result == DeviceLost::Success, "Frame fence wait failed ({}): {}", stage,
+               vk::to_string(vk::Result(result)));
+    return true;
+}
+
 Frame* Presenter::PrepareLastFrame() {
     // sotb: the last frame is already back in the free queue. It is taken out while it is shown again, or the GPU
     // thread could draw into it or recreate it (a window size change) under the present thread. When the GPU
@@ -290,18 +307,9 @@ Frame* Presenter::PrepareLastFrame() {
         frame = last_submit_frame;
     }
 
-    while (true) {
-        vk::Result result = instance.GetDevice().waitForFences(frame->present_done, false,
-                                                               std::numeric_limits<u64>::max());
-        if (result == vk::Result::eSuccess) {
-            break;
-        }
-        if (result == vk::Result::eTimeout) {
-            continue;
-        }
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
-                   "Device lost during waiting for a frame");
-        UNREACHABLE_MSG("Frame fence wait failed: {}", vk::to_string(result));
+    if (!WaitFrameFence(frame, "frmfence")) {
+        RetireFrame(frame);
+        return nullptr;
     }
 
     auto& scheduler = flip_scheduler;
@@ -518,7 +526,7 @@ Frame* Presenter::PrepareBlankFrame(bool present_thread) {
 }
 
 void Presenter::PresentLoadingFrame() {
-    if (window.GetWidth() == 0 || window.GetHeight() == 0) {
+    if (window.GetWidth() == 0 || window.GetHeight() == 0 || DeviceLost::IsLost()) {
         return;
     }
     swapchain.UpdateVsync();
@@ -586,8 +594,8 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     };
 
     // A minimized window has no pixels on Windows (0x0): keep the swapchain and skip presenting
-    // until the window is restored.
-    if (window.GetWidth() == 0 || window.GetHeight() == 0) {
+    // until the window is restored. A lost device presents nothing, but its frames keep circulating.
+    if (window.GetWidth() == 0 || window.GetHeight() == 0 || DeviceLost::IsLost()) {
         free_frame();
         return;
     }
@@ -599,6 +607,10 @@ void Presenter::Present(Frame* frame, bool is_reusing_frame, bool is_game_frame)
     }
 
     if (!swapchain.AcquireNextImage()) {
+        if (DeviceLost::IsLost()) {
+            free_frame();
+            return;
+        }
         swapchain.Recreate(window.GetWidth(), window.GetHeight());
         if (!swapchain.AcquireNextImage()) {
             // User resizes the window too fast and GPU can't keep up. Skip this frame.
@@ -775,29 +787,15 @@ Frame* Presenter::GetRenderFrame() {
         free_queue.pop_front();
     }
 
-    const vk::Device device = instance.GetDevice();
-    vk::Result result{};
-
-    const auto wait = [&]() {
-        result = device.waitForFences(frame->present_done, false, std::numeric_limits<u64>::max());
-        return result;
-    };
-
     // Wait for the presentation to be finished so all frame resources are free
-    while (wait() != vk::Result::eSuccess) {
-        // Retry if the waiting times out
-        if (result == vk::Result::eTimeout) {
-            continue;
-        }
-        ASSERT_MSG(result != vk::Result::eErrorDeviceLost,
-                   "Device lost during waiting for a frame");
-        UNREACHABLE_MSG("Present fence wait failed: {}", vk::to_string(result));
+    if (!WaitFrameFence(frame, "prsfence")) {
+        return frame;
     }
 
     const u64 expected_size = expected_frame_size.load(std::memory_order_relaxed);
     const u32 expected_width = u32(expected_size), expected_height = u32(expected_size >> 32);
-    if (frame->width != expected_width || frame->height != expected_height ||
-        frame->is_hdr != swapchain.GetHDR()) {
+    if (!DeviceLost::IsLost() && (frame->width != expected_width || frame->height != expected_height ||
+                                  frame->is_hdr != swapchain.GetHDR())) {
         RecreateFrame(frame, expected_width, expected_height);
     }
 

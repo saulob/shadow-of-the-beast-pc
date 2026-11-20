@@ -37,6 +37,25 @@ enum class SwStage : u32 {
 constexpr u32 MaxStageTypes = static_cast<u32>(SwStage::NumLogicalStages);
 constexpr auto MaxEmulatedClipDistances = 4u;
 
+/// The program the hardware VS stage runs: the GS copy path, the domain shader, else the guest vertex shader.
+constexpr SwStage HardwareVsProgram(bool tessellation, bool geometry) noexcept {
+    return geometry ? SwStage::Geometry : tessellation ? SwStage::TessellationEval : SwStage::Vertex;
+}
+
+/// The emulated clip distance attribute shifts every parameter location, so the vertex and fragment
+/// sides must agree on exactly when it exists.
+constexpr bool EmulatesClipDistances(HwStage hw_stage, SwStage sw_stage, bool needs_emulation) noexcept {
+    return needs_emulation && hw_stage == HwStage::Vertex && sw_stage == SwStage::Vertex;
+}
+
+/// Taken from the pipeline's own registers, never from an earlier draw.
+constexpr bool FragmentClipDistanceEmulation(bool tessellation, bool geometry, bool clip_distances,
+                                             bool user_clip_planes, bool needs_emulation) noexcept {
+    return EmulatesClipDistances(HwStage::Vertex, HardwareVsProgram(tessellation, geometry),
+                                 needs_emulation) &&
+           (clip_distances || user_clip_planes);
+}
+
 constexpr HwStage StageFromIndex(size_t index) noexcept {
     return static_cast<HwStage>(index);
 }

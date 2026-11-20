@@ -53,6 +53,62 @@ inline std::uint32_t BoundedFaultCount(std::uint32_t reported, std::uint32_t lim
     return std::min(reported, limit);
 }
 
+constexpr std::size_t DriverTextCapacity = 256;
+constexpr std::int32_t ResultSuccess = 0;
+constexpr std::int32_t ResultIncomplete = 5;
+
+struct FaultCounts {
+    std::uint32_t addresses{};
+    std::uint32_t vendors{};
+};
+
+struct FaultBuffers {
+    struct Vendor {
+        std::uint64_t code{};
+        std::uint64_t data{};
+        char description[DriverTextCapacity]{};
+    };
+    char description[DriverTextCapacity]{};
+    FaultReport::Address addresses[MaxFaultAddresses]{};
+    Vendor vendors[MaxVendorFaults]{};
+};
+
+// `query_counts(FaultCounts&)` and `query_details(FaultCounts&, FaultBuffers&)` return a Vulkan result. The second call
+// never asks for more than the caps and reports how many entries it filled, as vkGetDeviceFaultInfoEXT does.
+template <typename QueryCounts, typename QueryDetails>
+FaultReport CollectFaultReport(bool available, QueryCounts&& query_counts, QueryDetails&& query_details) {
+    FaultReport report;
+    if (!available) {
+        return report;
+    }
+    report.status = FaultStatus::Failed;
+    FaultCounts counts;
+    if (const std::int32_t result = query_counts(counts); result != ResultSuccess) {
+        report.result = result;
+        return report;
+    }
+    report.address_count = counts.addresses;
+    report.vendor_count = counts.vendors;
+    counts.addresses = BoundedFaultCount(counts.addresses, MaxFaultAddresses);
+    counts.vendors = BoundedFaultCount(counts.vendors, MaxVendorFaults);
+    FaultBuffers buffers;
+    report.result = query_details(counts, buffers);
+    if (report.result != ResultSuccess && report.result != ResultIncomplete) {
+        return report;
+    }
+    counts.addresses = BoundedFaultCount(counts.addresses, MaxFaultAddresses);
+    counts.vendors = BoundedFaultCount(counts.vendors, MaxVendorFaults);
+    report.status = FaultStatus::Captured;
+    report.description = SanitizeDriverText(buffers.description, sizeof(buffers.description));
+    report.addresses.assign(buffers.addresses, buffers.addresses + counts.addresses);
+    for (std::uint32_t i = 0; i < counts.vendors; ++i) {
+        report.vendors.push_back({buffers.vendors[i].code, buffers.vendors[i].data,
+                                  SanitizeDriverText(buffers.vendors[i].description,
+                                                     sizeof(buffers.vendors[i].description))});
+    }
+    return report;
+}
+
 inline std::vector<std::string> FormatFaultReport(const FaultReport& report) {
     char line[MaxFaultTextBytes + 96];
     std::vector<std::string> lines;

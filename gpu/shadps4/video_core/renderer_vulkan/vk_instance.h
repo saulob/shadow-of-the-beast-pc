@@ -39,8 +39,8 @@ public:
     /// Returns a formatted string for the driver version
     std::string GetDriverVersionName();
 
-    /// Logs heap budgets and the driver's fault report (VK_EXT_device_fault) after device loss.
-    void ReportDeviceFault() const;
+    /// Logs the heap budgets; the first device-lost report calls it (vk_device_lost.h).
+    void LogMemoryBudget() const;
     /// Never throws and needs no extension: reports Unsupported without VK_EXT_device_fault.
     [[nodiscard]] FaultReport QueryDeviceFault() const;
 
@@ -556,6 +556,7 @@ private:
     void CollectPhysicalMemoryInfo();
     void CollectImageFormatInfo();
     void CollectToolingInfo() const;
+    void RegisterDeviceLostHooks();
 
     /// Gets the supported feature flags for a format.
     [[nodiscard]] vk::FormatFeatureFlags2 GetFormatFeatureFlags(vk::Format format) const;

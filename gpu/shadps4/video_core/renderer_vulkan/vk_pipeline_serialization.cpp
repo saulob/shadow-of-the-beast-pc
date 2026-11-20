@@ -33,7 +33,7 @@
 
 namespace Serialization {
 /* You should increment versions below once corresponding serialization scheme is changed. */
-static constexpr u32 ShaderBinaryVersion = 20u; // sotb: runtime image offsets, cube/1D lowering, flat-buffer user data, shared memory segments, 11/11/10 image write clamp
+static constexpr u32 ShaderBinaryVersion = 21u; // sotb: runtime image offsets, cube/1D lowering, flat-buffer user data, shared memory segments, 11/11/10 image write clamp, clip distance interface
 static constexpr u32 ShaderMetaVersion = 10u; // sotb: Info layout (flatbuf user data, shared segments, sampler is_cube)
 static constexpr u32 PipelineKeyVersion = 8u; // sotb: push constant layout, specialization without is_cube
 } // namespace Serialization

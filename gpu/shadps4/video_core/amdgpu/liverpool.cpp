@@ -27,6 +27,7 @@
 #include "sotb_write_log.h"
 #include "video_core/amdgpu/pm4_cmds.h"
 #include "video_core/renderdoc.h"
+#include "video_core/renderer_vulkan/vk_device_lost.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
 
 namespace AmdGpu {
@@ -157,18 +158,29 @@ void Liverpool::Process(std::stop_token stoken) {
     gpu_tid = gettid();
 #endif
 
-    while (!stoken.stop_requested()) {
+    auto& device_lost = Vulkan::DeviceLost::Global();
+    const auto should_stop = [&] { return Vulkan::DeviceLost::ShouldStop(device_lost, stoken); };
+    // The thread that ends the process after a device loss waits for this one to leave its loop.
+    SCOPE_EXIT {
+        if (device_lost.IsLost()) {
+            device_lost.NoteWorkerStopped();
+        }
+    };
+    while (!should_stop()) {
         {
             const auto idle_start = std::chrono::steady_clock::now();
             std::unique_lock lk{submit_mutex};
-            Common::CondvarWait(submit_cv, lk, stoken,
-                                [this] { return num_commands || num_submits || submit_done; });
+            // A loss found on another thread wakes no one, so the wait looks again every slice.
+            while (!should_stop() &&
+                   !submit_cv.wait_for(lk, stoken, Vulkan::DeviceLost::WaitSlice,
+                                       [this] { return num_commands || num_submits || submit_done; })) {
+            }
             SotbStats::gpu_idle_ns.fetch_add(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - idle_start).count(),
                 std::memory_order_relaxed);
         }
-        if (stoken.stop_requested()) {
+        if (should_stop()) {
             break;
         }
 
@@ -176,7 +188,7 @@ void Liverpool::Process(std::stop_token stoken) {
 
         curr_qid = -1;
 
-        while ((num_submits || num_commands) && !stoken.stop_requested()) {
+        while ((num_submits || num_commands) && !should_stop()) {
             ProcessCommands();
             ProcessCeQueue();
 
@@ -207,6 +219,9 @@ void Liverpool::Process(std::stop_token stoken) {
             }
         }
 
+        if (device_lost.IsLost()) {
+            break;
+        }
         if (submit_done) {
             VideoCore::EndCapture();
             if (rasterizer) {
