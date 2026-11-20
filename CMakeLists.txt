@@ -95,6 +95,7 @@ set(SOTB_GAME_SOURCES
     src/import_slots.c
     src/guest_patches.c
     src/isa_emulate.c
+    src/lzcnt_compat.c
     src/compat_win.c
     src/module_diagnostics.c
     src/module_history.c
@@ -217,6 +218,11 @@ set_target_properties(sotb-renderer-selection-tests PROPERTIES CXX_STANDARD 23 C
 target_include_directories(sotb-renderer-selection-tests PRIVATE gpu/shim gpu/shadps4)
 target_compile_definitions(sotb-renderer-selection-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(sotb-renderer-selection-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-isa-tests EXCLUDE_FROM_ALL tests/isa_tests.c src/isa_emulate.c src/lzcnt_compat.c)
+target_include_directories(sotb-isa-tests PRIVATE src)
+target_compile_definitions(sotb-isa-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin")
+target_compile_options(sotb-isa-tests PRIVATE -Wall -Wextra -Werror)
 
 add_executable(skip_intro_test EXCLUDE_FROM_ALL tests/skip_intro_tests.c)
 target_include_directories(skip_intro_test PRIVATE src)

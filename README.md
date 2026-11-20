@@ -56,6 +56,10 @@ The package must be a decrypted (fake) PS4 PKG. A package encrypted for a retail
    17 GB).
 4. Press **PLAY**. The runtime log is written to `build\logs\shadow_of_the_beast_NNN.log` when started this way.
 
+Processor: an x86-64 CPU with SSE4.1, SSE4.2, POPCNT and AVX that the operating system saves (Intel Sandy Bridge, AMD
+Bulldozer or newer). MOVBE, BMI1 and LZCNT are handled in software when the processor lacks them. The launcher
+refuses to start the game when a required set is missing and says which.
+
 `user\sotb.ini` holds launcher settings. `user\savedata\` is reserved for saves. The installed game is immutable from
 the launcher's point of view; reinstalling replaces it and keeps `user\` and `logs\`.
 

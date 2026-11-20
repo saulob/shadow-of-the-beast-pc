@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, updater, crash report and guest memory tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, updater, crash report, guest memory and CPU compatibility tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
   exit code is non-zero when any failed.
 
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
-  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report and the guest memory test.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test and the CPU compatibility test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
 .EXAMPLE
@@ -32,7 +32,7 @@ function Invoke-Native([scriptblock]$Command) {
 
 function Show-Last($Run) { $Run.Lines | Select-Object -Last 1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } }
 
-function Invoke-FocusedTest([string]$target) {
+function Invoke-FocusedTest([string]$target, [string]$show = '') {
     $build = Invoke-Native { & ninja -C $buildDir $target }
     if ($build.Code -ne 0) {
         $build.Lines | Select-Object -Last 12 | ForEach-Object { Write-Host "    $_" }
@@ -43,7 +43,7 @@ function Invoke-FocusedTest([string]$target) {
         $run.Lines | ForEach-Object { Write-Host "    $_" }
         return Result 'FAIL' "$target exited with $($run.Code)"
     }
-    Show-Last $run
+    if ($show) { $run.Lines | Where-Object { $_ -match $show } | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } } else { Show-Last $run }
     return Result 'PASS'
 }
 
@@ -58,6 +58,8 @@ function Invoke-UpdateHelper { Invoke-FocusedTest 'sotb-update-helper-tests' }
 function Invoke-ModuleHistory { Invoke-FocusedTest 'module_history_test' }
 
 function Invoke-GuestMemory { Invoke-FocusedTest 'memory_windows_test' }
+
+function Invoke-CpuCompatibility { Invoke-FocusedTest 'sotb-isa-tests' '^(real image|site table|table shapes|no LZCNT|isa tests)' }
 
 function Invoke-WorkerService {
     $node = Get-Command node -ErrorAction SilentlyContinue
@@ -98,7 +100,8 @@ $steps = @(
     @{ Title = 'Updater: loopback HTTP server only (no release yet, 5xx, dropped connection, stall, timeout, redirects, retries, production address); never contacts GitHub'; Block = { Invoke-UpdateNetwork } },
     @{ Title = 'Updater: trg-updater.exe run headless from a temporary folder (parent wait, install, restart marker, environment cleanup, protected data)'; Block = { Invoke-UpdateHelper } },
     @{ Title = 'Crash report: module history, call sites, fault ownership and startup phase (no window, no game)'; Block = { Invoke-ModuleHistory } },
-    @{ Title = 'Runtime: guest memory, and file reads into it while a map splits the view (synthetic file, no game)'; Block = { Invoke-GuestMemory } }
+    @{ Title = 'Runtime: guest memory, and file reads into it while a map splits the view (synthetic file, no game)'; Block = { Invoke-GuestMemory } },
+    @{ Title = 'CPU compatibility: MOVBE, BMI1 and LZCNT (host classification, MOVBE and BMI1 emulation, LZCNT rewrite run on synthetic forms and applied to every site; the real boot image is read only and skipped when absent)'; Block = { Invoke-CpuCompatibility } }
 )
 
 $tc = Resolve-Toolchain 'auto'

@@ -15,9 +15,13 @@ IsaHostFeatures isa_host_features(void);
 enum { ISA_EMULATE_MOVBE = 1, ISA_EMULATE_BMI1 = 2 };
 /* The instruction sets of the above that the host lacks. */
 unsigned isa_emulation_needed(IsaHostFeatures host);
-/* The Jaguar instruction sets the host lacks, comma separated in out: the ones isa_emulate works around when emulated
- * is nonzero, otherwise the ones the game cannot run without. Returns how many. */
+/* The Jaguar instruction sets the host lacks, comma separated in out: the ones the loader works around (isa_emulate,
+ * or lzcnt_compat for LZCNT) when emulated is nonzero, otherwise the ones the game cannot run without. Returns how
+ * many. */
 int isa_missing_sets(IsaHostFeatures host, int emulated, char *out, size_t size);
+/* Whether the host can run the game: 0 with the cause and advice for the player when a set it cannot do without is
+ * missing. */
+int isa_host_usable(IsaHostFeatures host, char *cause, size_t cause_size, char *advice, size_t advice_size);
 /* The CPUID brand string. */
 void isa_host_name(char *out, size_t size);
 

@@ -14,6 +14,7 @@
 #include "skip_intro.h"
 #include "guest_patches.h"
 #include "isa_emulate.h"
+#include "lzcnt_compat.h"
 #include "module_diagnostics.h"
 #include "runtime.h"
 #include "runtime_log.h"
@@ -213,11 +214,7 @@ static void log_cpu(void) {
 }
 
 static int cpu_usable(char *cause, size_t cause_size, char *advice, size_t advice_size) {
-    char missing[96];
-    if (!isa_missing_sets(isa_host_features(), 0, missing, sizeof(missing))) return 1;
-    snprintf(cause, cause_size, "This processor lacks %s, which the game's PS4 code needs.", missing);
-    snprintf(advice, advice_size, "The game needs an Intel Core 2nd generation (Sandy Bridge), AMD FX or newer processor.");
-    return 0;
+    return isa_host_usable(isa_host_features(), cause, cause_size, advice, advice_size);
 }
 
 static int annotate_address(char *out, size_t size, uintptr_t address) {
@@ -492,7 +489,10 @@ static int mapped(const Segment *segments, uint64_t count, uint64_t address, uin
 
 static const char *command_line(void) { return GetCommandLineA(); }
 
-static int host_has_lzcnt(void) { return (isa_host_features().ext1_ecx & (1u << 5)) != 0; }
+static int lzcnt_rewrite_wanted(void) {
+    const char *forced = getenv("SOTB_EMULATE_LZCNT");
+    return lzcnt_compat_needed(isa_host_features()) || (forced && *forced);
+}
 
 typedef struct {
     const Segment *segments;
@@ -829,9 +829,6 @@ int main(int argc, char **argv) {
             fail(message);
         }
     }
-    if (!host_has_lzcnt()) {
-        fail("This processor lacks LZCNT. The game's PS4 code uses it and this round has no generic rewrite yet.");
-    }
 
     if (!sotb_resolve_paths(&request, &paths)) fail(paths.error[0] ? paths.error : "cannot locate the game folders");
     boot = paths.boot;
@@ -1092,7 +1089,20 @@ int main(int argc, char **argv) {
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
     {
         const size_t cave_size = round_page(GUEST_PATCH_CAVE_SIZE);
-        unsigned char *cave = allocate(cave_size);
+        const int rewrite_lzcnt = lzcnt_rewrite_wanted();
+        const size_t lzcnt_stubs = rewrite_lzcnt ? lzcnt_compat_stub_bytes() : 0;
+        unsigned char *cave = allocate(round_page(cave_size + lzcnt_stubs));
+        if (rewrite_lzcnt) {
+            const LzcntBuild *build = NULL;
+            const LzcntCompatStatus status =
+                lzcnt_compat_install(image, size, entry, cave + cave_size, lzcnt_stubs, &build);
+            if (status != LZCNT_COMPAT_OK) {
+                char message[160];
+                snprintf(message, sizeof(message), "LZCNT compatibility: %s", lzcnt_compat_status_text(status));
+                fail(message);
+            }
+            printf("CPU: LZCNT rewritten in %zu patch ranges of %s\n", build->count, build->build);
+        }
         guest_patches_apply(image, size, cave, cave_size);
         if (sotb_skip_intro(settings_file)) {
             char reason[160];
@@ -1104,7 +1114,7 @@ int main(int argc, char **argv) {
         } else {
             printf("Skip Intro: off\n");
         }
-        protect(cave, cave_size, 5);
+        protect(cave, round_page(cave_size + lzcnt_stubs), 5);
     }
     {
         char error[160];

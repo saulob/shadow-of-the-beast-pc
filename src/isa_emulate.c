@@ -181,11 +181,11 @@ unsigned isa_emulation_needed(IsaHostFeatures host) {
 }
 
 int isa_missing_sets(IsaHostFeatures host, int emulated, char *out, size_t size) {
-    /* LZCNT runs as BSR on hosts without it instead of trapping, so it cannot be emulated. TZCNT runs as BSF without
-     * BMI1, which differs only for a zero input. */
+    /* LZCNT runs as BSR on hosts without it instead of trapping: lzcnt_compat rewrites it in the loaded image. TZCNT
+     * likewise runs as BSF without BMI1, which the game's uses do not notice. */
     static const struct { const char *name; int emulated, word; uint32_t bit; } sets[] = {
         {"SSE4.1", 0, 0, bit_SSE4_1}, {"SSE4.2", 0, 0, bit_SSE4_2}, {"POPCNT", 0, 0, bit_POPCNT},
-        {"AVX", 0, 0, bit_AVX},       {"LZCNT", 0, 2, bit_LZCNT},   {"MOVBE", 1, 0, bit_MOVBE},
+        {"AVX", 0, 0, bit_AVX},       {"LZCNT", 1, 2, bit_LZCNT},   {"MOVBE", 1, 0, bit_MOVBE},
         {"BMI1", 1, 1, bit_BMI},
     };
     const uint32_t words[] = {host.leaf1_ecx, host.leaf7_ebx, host.ext1_ecx};
@@ -201,6 +201,14 @@ int isa_missing_sets(IsaHostFeatures host, int emulated, char *out, size_t size)
         ++missing;
     }
     return missing;
+}
+
+int isa_host_usable(IsaHostFeatures host, char *cause, size_t cause_size, char *advice, size_t advice_size) {
+    char missing[96];
+    if (!isa_missing_sets(host, 0, missing, sizeof(missing))) return 1;
+    snprintf(cause, cause_size, "This processor lacks %s, which the game's PS4 code needs.", missing);
+    snprintf(advice, advice_size, "The game needs an Intel Core 2nd generation (Sandy Bridge), AMD FX or newer processor.");
+    return 0;
 }
 
 void isa_host_name(char *out, size_t size) {
