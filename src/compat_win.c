@@ -57,6 +57,9 @@ int compat_errno_from_win32(unsigned long error) {
     }
 }
 
+static __thread unsigned long io_error;
+unsigned long compat_io_error(void) { return io_error; }
+
 /* Positioned I/O on a synchronous handle moves the file pointer: it is restored afterwards.
  * A concurrent read() on the same descriptor would race, as with a shared offset anyway. */
 static ssize_t positioned(int fd, void *buffer, size_t size, int64_t offset, int write) {
@@ -64,7 +67,7 @@ static ssize_t positioned(int fd, void *buffer, size_t size, int64_t offset, int
     if (h == INVALID_HANDLE_VALUE) { errno = EBADF; return -1; }
     if (offset < 0) { errno = EINVAL; return -1; }
     LARGE_INTEGER zero = {0}, saved;
-    if (!SetFilePointerEx(h, zero, &saved, FILE_CURRENT)) { errno = compat_errno_from_win32(GetLastError()); return -1; }
+    if (!SetFilePointerEx(h, zero, &saved, FILE_CURRENT)) { io_error = GetLastError(); errno = compat_errno_from_win32(io_error); return -1; }
     size_t done = 0;
     while (done < size) {
         DWORD chunk = size - done > 0x40000000u ? 0x40000000u : (DWORD)(size - done), n = 0;
@@ -78,6 +81,7 @@ static ssize_t positioned(int fd, void *buffer, size_t size, int64_t offset, int
             if (e == ERROR_HANDLE_EOF) break;
             SetFilePointerEx(h, saved, NULL, FILE_BEGIN);
             if (done) return (ssize_t)done;
+            io_error = e;
             errno = compat_errno_from_win32(e);
             return -1;
         }

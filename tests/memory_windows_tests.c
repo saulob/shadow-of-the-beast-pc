@@ -9,8 +9,11 @@ uintptr_t runtime_lookup(const RuntimeExport *table, size_t count, const char *n
 }
 void runtime_log_flush(void) {}
 int32_t *runtime_errno(void) { static int32_t value; return &value; }
+int32_t runtime_guest_errno(int e) { return e; }
 #include <windows.h>
 #include <psapi.h>
+#include <fcntl.h>
+#include <io.h>
 static int fail_section_creation, fail_commit;
 static LPVOID WINAPI test_virtual_alloc(LPVOID address, SIZE_T size, DWORD type, DWORD protection) {
     if (fail_commit && (type & MEM_COMMIT)) { SetLastError(ERROR_COMMITMENT_LIMIT); return NULL; }
@@ -29,6 +32,124 @@ static HANDLE WINAPI test_create_section(HANDLE file, SECURITY_ATTRIBUTES *secur
 #undef VirtualAlloc
 static int checks, failures;
 #define CHECK(x) do { ++checks; if (!(x)) { ++failures; printf("FAIL %d: %s (WinError %lu)\n",__LINE__,#x,GetLastError()); } } while(0)
+
+enum { READERS = 4, READS_PER_READER = 5000, SLICE = 9 * PAGE, READ_BYTES = 131072, VIEW_PAGES = 4 * 9 + 8 };
+typedef enum { RACE_PROTECT = 1, RACE_SPLIT = 2 } RaceKind;
+typedef struct { int fd; unsigned slice, misalign; unsigned long io_error[3], other, mismatches, done; unsigned char *view; } Reader;
+static unsigned char *race_view;
+static int64_t race_phys;
+static volatile LONG race_stop;
+
+/* Like the GPU's page tracking: a write to a protected page unprotects it and the instruction runs again. */
+static LONG CALLBACK race_unprotect(EXCEPTION_POINTERS *info) {
+    const EXCEPTION_RECORD *record=info->ExceptionRecord;
+    if (record->ExceptionCode!=EXCEPTION_ACCESS_VIOLATION || record->NumberParameters<2) return EXCEPTION_CONTINUE_SEARCH;
+    const uintptr_t at=(uintptr_t)record->ExceptionInformation[1];
+    if (at<(uintptr_t)race_view || at>=(uintptr_t)race_view+VIEW_PAGES*PAGE) return EXCEPTION_CONTINUE_SEARCH;
+    runtime_memory_gpu_protect(at&~(uintptr_t)4095,4096,1,1);
+    return EXCEPTION_CONTINUE_EXECUTION;
+}
+static DWORD WINAPI race_protect(LPVOID unused) {
+    (void)unused;
+    while (!race_stop) {
+        runtime_memory_gpu_protect((uintptr_t)race_view,VIEW_PAGES*PAGE,0,0);
+        runtime_memory_gpu_protect((uintptr_t)race_view,VIEW_PAGES*PAGE,1,0);
+    }
+    return 0;
+}
+/* Maps the whole range, then over its first page: the split unmaps the pages after it for a moment. */
+static DWORD WINAPI race_split(LPVOID unused) {
+    (void)unused;
+    while (!race_stop) {
+        void *whole=race_view, *first=race_view;
+        direct_map(&whole,VIEW_PAGES*PAGE,3,MAP_FIXED_FLAG,race_phys,0);
+        direct_map(&first,PAGE,3,MAP_FIXED_FLAG,race_phys,0);
+    }
+    return 0;
+}
+static DWORD WINAPI race_reader(LPVOID parameter) {
+    Reader *r=parameter;
+    for (unsigned i=0;i<READS_PER_READER;++i) {
+        const int64_t offset=(int64_t)((i*7u+r->slice)%32)*PAGE+(int64_t)r->misalign;
+        unsigned char *into=r->view+PAGE+r->slice*SLICE+r->misalign;
+        const int64_t n=runtime_file_pread(r->fd,into,READ_BYTES,offset);
+        if (n!=READ_BYTES) {
+            const unsigned long e=compat_io_error();
+            if (e==ERROR_INVALID_USER_BUFFER) ++r->io_error[0];
+            else if (e==ERROR_NOACCESS) ++r->io_error[1];
+            else ++r->other;
+            if (n==-EIO) ++r->io_error[2];
+            continue;
+        }
+        for (unsigned p=0;p<READ_BYTES;p+=4096+(i&1)*123)
+            if (into[p]!=(unsigned char)(((uint64_t)offset+p)/PAGE)) { ++r->mismatches; break; }
+        ++r->done;
+    }
+    return 0;
+}
+static void race_case(const char *label, int kinds, int fd, unsigned misalign, int expect_clean) {
+    Reader readers[READERS]={0};
+    HANDLE threads[READERS+2]; unsigned count=0;
+    race_stop=0;
+    for (unsigned i=0;i<READERS;++i) {
+        readers[i]=(Reader){.fd=fd,.slice=i,.misalign=misalign,.view=race_view};
+        threads[count++]=CreateThread(NULL,0,race_reader,&readers[i],0,NULL);
+    }
+    HANDLE protect=(kinds&RACE_PROTECT) ? CreateThread(NULL,0,race_protect,NULL,0,NULL) : NULL;
+    HANDLE split=(kinds&RACE_SPLIT) ? CreateThread(NULL,0,race_split,NULL,0,NULL) : NULL;
+    WaitForMultipleObjects(count,threads,TRUE,INFINITE);
+    race_stop=1;
+    if (protect) WaitForSingleObject(protect,INFINITE);
+    if (split) WaitForSingleObject(split,INFINITE);
+    unsigned long invalid=0,noaccess=0,eio=0,other=0,bad=0,done=0;
+    for (unsigned i=0;i<READERS;++i) {
+        invalid+=readers[i].io_error[0]; noaccess+=readers[i].io_error[1]; eio+=readers[i].io_error[2];
+        other+=readers[i].other; bad+=readers[i].mismatches; done+=readers[i].done;
+        CloseHandle(threads[i]);
+    }
+    if (protect) CloseHandle(protect);
+    if (split) CloseHandle(split);
+    printf("Windows memory: %-34s %lu reads ok, 1784=%lu, 998=%lu, EIO=%lu, other=%lu, wrong bytes=%lu\n",label,done,invalid,noaccess,eio,
+           other,bad);
+    if (expect_clean) {
+        CHECK(done==(unsigned long)READERS*READS_PER_READER);
+        CHECK(invalid==0 && noaccess==0 && eio==0 && other==0 && bad==0);
+    }
+}
+static void file_reads_race_memory_changes(void) {
+    char dir[MAX_PATH], path[MAX_PATH];
+    GetTempPathA(MAX_PATH,dir);
+    snprintf(dir+strlen(dir),sizeof(dir)-strlen(dir),"sotb_io_race_%lu",GetCurrentProcessId());
+    CreateDirectoryA(dir,NULL);
+    snprintf(path,sizeof(path),"%s/pak.bin",dir);
+    FILE *out=fopen(path,"wb");
+    CHECK(out!=NULL);
+    if (!out) return;
+    for (unsigned p=0;p<64;++p) for (uint64_t b=0;b<PAGE;++b) fputc((int)p,out);
+    fclose(out);
+    CHECK(runtime_file_mount("/race",dir)==0);
+    const int64_t fd=runtime_file_open("/race/pak.bin",0,0);
+    CHECK(fd>=3);
+    CHECK(direct_allocate(0,INT64_MAX,VIEW_PAGES*PAGE,0,3,&race_phys)==0);
+    void *view=NULL;
+    CHECK(direct_map(&view,VIEW_PAGES*PAGE,3,0,race_phys,0)==0);
+    race_view=view;
+    void *handler=AddVectoredExceptionHandler(1,race_unprotect);
+    if (fd>=3 && race_view) {
+        race_case("quiet",0,(int)fd,0,1);
+        race_case("GPU page protection",RACE_PROTECT,(int)fd,0,1);
+        race_case("GPU page protection, unaligned",RACE_PROTECT,(int)fd,1000,1);
+        race_case("map split/merge",RACE_SPLIT,(int)fd,0,1);
+        race_case("map split/merge, unaligned",RACE_SPLIT,(int)fd,1000,1);
+        race_case("split/merge + protection",RACE_SPLIT|RACE_PROTECT,(int)fd,513,1);
+        CHECK(direct_unmap(race_view,VIEW_PAGES*PAGE)==0);
+    }
+    RemoveVectoredExceptionHandler(handler);
+    CHECK(direct_release(race_phys,VIEW_PAGES*PAGE)==0);
+    if (fd>=3) runtime_file_close((int)fd);
+    DeleteFileA(path);
+    RemoveDirectoryA(dir);
+}
 static uint64_t system_commit(void) {
     PERFORMANCE_INFORMATION info;
     memset(&info,0,sizeof(info)); info.cb=sizeof(info);
@@ -271,6 +392,7 @@ int main(void) {
     CHECK(VirtualQuery(reserved,&info,sizeof(info)) && info.State==MEM_RESERVE);
     CHECK(pool_commit(reserved,65536,3,3,0)==0);
     CHECK(pool_decommit(reserved,65536,0)==0);
+    file_reads_race_memory_changes();
     printf("Windows memory: %d checks, %d failures\n",checks,failures);
     return failures ? 1 : 0;
 }

@@ -33,6 +33,8 @@ int32_t runtime_guest_errno(int e) {
 }
 static int32_t guest_errno_value;
 int32_t *runtime_errno(void) { return &guest_errno_value; }
+void runtime_memory_io_begin(void) {}
+void runtime_memory_io_end(void) {}
 
 typedef int32_t (ABI *InitializeFn)(const void *);
 typedef int32_t (ABI *Mount2Fn)(const Mount2 *, MountResult *);

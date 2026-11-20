@@ -31,6 +31,7 @@
 #include "paths.h"
 #include "placement.h"
 #include "settings.h"
+#include "startup_phase.h"
 #include "text_languages.h"
 #include "trophy_page.h"
 #include "sotb_graphics.h"
@@ -197,6 +198,7 @@ private:
         options.min_width = 980;
         options.min_height = 620;
         options.restore = ReadPlacement(settings_);
+        sotb_startup_phase("launcher opening");
         if (!host_.Open(options)) {
             std::fprintf(stderr, "Launcher: could not open the launcher window\n");
             return SOTB_LAUNCHER_BLOCKED;
@@ -220,6 +222,7 @@ private:
         host_.BeginFrame();
         host_.EndFrame(LauncherTheme().bg);
         host_.Show();
+        sotb_startup_phase("launcher running");
 
         SotbLauncherResult outcome = SOTB_LAUNCHER_QUIT;
         bool first = true;
@@ -252,6 +255,7 @@ private:
                 break;
             }
         }
+        sotb_startup_phase("launcher loop ended");
         incident_page_.reset();
         std::printf("Launcher: closed%s\n", outcome == SOTB_LAUNCHER_PLAY ? ", starting the game" : "");
         SavePlacement(placement_.Flush());

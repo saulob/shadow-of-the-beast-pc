@@ -22,6 +22,7 @@
 #include "sotbgpu.h"
 #include "trophies/trophy_runtime.h"
 #include "startup_phase.h"
+#include "fault_origin.h"
 
 #if !defined(_WIN32)
 #error The Shadow of the Beast PC port currently targets Windows only.
@@ -312,8 +313,6 @@ static LONG fatal_exception(EXCEPTION_POINTERS *info) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-typedef enum { FAULT_ADDRESS_GUEST, FAULT_ADDRESS_SELF, FAULT_ADDRESS_OTHER_MODULE, FAULT_ADDRESS_UNLISTED } FaultAddress;
-
 static FaultAddress classify_fault_address(uintptr_t address, HMODULE self) {
     HMODULE module = NULL;
     if (image && address - (uintptr_t)image < 0x20000000) return FAULT_ADDRESS_GUEST;
@@ -332,12 +331,6 @@ static FaultAddress classify_caller(const CONTEXT *c, HMODULE self) {
         return FAULT_ADDRESS_UNLISTED;
     }
     return classify_fault_address(caller, self);
-}
-
-static int fault_is_ours(FaultAddress at, FaultAddress caller) {
-    if (at == FAULT_ADDRESS_GUEST || at == FAULT_ADDRESS_SELF) return 1;
-    if (at == FAULT_ADDRESS_UNLISTED) return caller == FAULT_ADDRESS_GUEST || caller == FAULT_ADDRESS_SELF;
-    return 0;
 }
 
 static LONG CALLBACK vectored_fault(EXCEPTION_POINTERS *info) {
@@ -1122,6 +1115,7 @@ int main(int argc, char **argv) {
         }
         printf("Display: render resolution %dx%d (%s)\n", render_resolution->width, render_resolution->height, render_resolution->key);
     }
+    sotb_startup_phase("patches installed");
     if (gpu_enabled) {
         uint64_t *triples = calloc(ns * 3, sizeof(*triples));
         if (!triples) fail_running("allocation failed");

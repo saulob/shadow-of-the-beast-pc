@@ -134,7 +134,7 @@ target_compile_definitions(runtime_services_test PRIVATE _WIN32_WINNT=0x0A00 NTD
 target_link_libraries(runtime_services_test PRIVATE sotb_startup_phase sotb_keys sotb_atrac9 SDL3::SDL3 Zydis::Zydis onecore bcrypt
     ws2_32 -pthread)
 
-add_executable(memory_windows_test EXCLUDE_FROM_ALL tests/memory_windows_tests.c)
+add_executable(memory_windows_test EXCLUDE_FROM_ALL tests/memory_windows_tests.c src/compat_win.c src/runtime_file.c)
 target_include_directories(memory_windows_test PRIVATE src)
 target_compile_definitions(memory_windows_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
 target_compile_options(memory_windows_test PRIVATE -Wall -Wextra -Werror)

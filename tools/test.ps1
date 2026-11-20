@@ -1,13 +1,13 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, crash report and guest memory tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
   exit code is non-zero when any failed.
 
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the Worker's tests in Node on a
-  disposable in-memory database, and tools\worker.ps1 against a stand-in npx.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the module history test of the crash report and the guest memory test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
 .EXAMPLE
@@ -32,8 +32,7 @@ function Invoke-Native([scriptblock]$Command) {
 
 function Show-Last($Run) { $Run.Lines | Select-Object -Last 1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray } }
 
-function Invoke-LauncherBugReport {
-    $target = 'sotb-bug-report-tests'
+function Invoke-FocusedTest([string]$target) {
     $build = Invoke-Native { & ninja -C $buildDir $target }
     if ($build.Code -ne 0) {
         $build.Lines | Select-Object -Last 12 | ForEach-Object { Write-Host "    $_" }
@@ -47,6 +46,12 @@ function Invoke-LauncherBugReport {
     Show-Last $run
     return Result 'PASS'
 }
+
+function Invoke-LauncherBugReport { Invoke-FocusedTest 'sotb-bug-report-tests' }
+
+function Invoke-ModuleHistory { Invoke-FocusedTest 'module_history_test' }
+
+function Invoke-GuestMemory { Invoke-FocusedTest 'memory_windows_test' }
 
 function Invoke-WorkerService {
     $node = Get-Command node -ErrorAction SilentlyContinue
@@ -80,9 +85,11 @@ function Invoke-WorkerScript {
 }
 
 $steps = @(
-    @{ Title = 'Bug Report client (no window, no network: stand-in transport, synthetic logs)'; Block = { Invoke-LauncherBugReport } },
-    @{ Title = 'Bug Report service (Node, disposable database): submission, receipts, limits, retention, admin, dashboard, and the launcher''s own request'; Block = { Invoke-WorkerService } },
-    @{ Title = 'worker.ps1 stand-in npx: placeholders, missing files, dry run, failures; nothing deployed'; Block = { Invoke-WorkerScript } }
+    @{ Title = 'Launcher: Bug Report client (no window, no network: stand-in transport, synthetic logs)'; Block = { Invoke-LauncherBugReport } },
+    @{ Title = 'Launcher: Bug Report service (Node, disposable database): submission, receipts, limits, retention, admin, dashboard, and the launcher''s own request'; Block = { Invoke-WorkerService } },
+    @{ Title = 'Launcher: worker.ps1 stand-in npx: placeholders, missing files, dry run, failures; nothing deployed'; Block = { Invoke-WorkerScript } },
+    @{ Title = 'Crash report: module history, call sites, fault ownership and startup phase (no window, no game)'; Block = { Invoke-ModuleHistory } },
+    @{ Title = 'Runtime: guest memory, and file reads into it while a map splits the view (synthetic file, no game)'; Block = { Invoke-GuestMemory } }
 )
 
 $tc = Resolve-Toolchain 'auto'
@@ -92,7 +99,7 @@ Remove-Item -LiteralPath $requestFile -ErrorAction SilentlyContinue
 
 $failed = 0
 foreach ($step in $steps) {
-    Write-Step "Launcher: $($step.Title)"
+    Write-Step $step.Title
     $result = & $step.Block
     switch ($result.State) {
         'PASS' { Write-Host '    PASS' -ForegroundColor Green }

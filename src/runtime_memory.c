@@ -1054,6 +1054,10 @@ int runtime_memory_region(uintptr_t address, uintptr_t *start, uintptr_t *end, i
     read_unlock();
     return found;
 }
+/* A map or unmap that splits a view unmaps its neighbours for a moment: a host read copying into them
+ * then fails (ERROR_INVALID_USER_BUFFER or ERROR_NOACCESS). The PS4 kernel has no such window. */
+void runtime_memory_io_begin(void) { read_lock(); }
+void runtime_memory_io_end(void) { read_unlock(); }
 /* GPU page tracking: restrict host access, never beyond the guest's own protection. */
 void runtime_memory_gpu_protect(uintptr_t address, uint64_t size, int read, int write) {
     read_lock();

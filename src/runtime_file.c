@@ -12,6 +12,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <inttypes.h>
 #include <limits.h>
 #include <pthread.h>
 #include <unistd.h>
@@ -76,10 +77,12 @@ static void note_missing(const char *guest) {
 }
 static uint64_t bytes_read;
 static pthread_mutex_t lock=PTHREAD_MUTEX_INITIALIZER;
-static void note_failure(const char *operation,const char *guest,int error) {
+static int failure_reported(int error) {
     static int reported;
-    if (error==ENOENT || __atomic_fetch_add(&reported,1,__ATOMIC_RELAXED)>=32) return;
-    printf("Runtime: %s(%s) -> %s\n",operation,guest ? guest : "",strerror(error));
+    return error!=ENOENT && __atomic_fetch_add(&reported,1,__ATOMIC_RELAXED)<32;
+}
+static void note_failure(const char *operation,const char *guest,int error) {
+    if (failure_reported(error)) printf("Runtime: %s(%s) -> %s\n",operation,guest ? guest : "",strerror(error));
 }
 
 static int mount_as(const char *guest,const char *host,int read_only) {
@@ -385,17 +388,6 @@ static ssize_t host_write(int h,const void *buffer,uint64_t size) { return write
 #define host_read read
 #define host_write write
 #endif
-/* Pages of the destination may be write-protected for GPU tracking: the kernel's copy then
- * fails with EFAULT instead of faulting to our handler. A user-mode write to each page first
- * goes through the handler, which unprotects it (and records the upcoming write). */
-static void touch_for_write(void *buffer,uint64_t size) {
-    if (!size) return;
-    uintptr_t p=(uintptr_t)buffer & ~(uintptr_t)4095, end=(uintptr_t)buffer+size;
-    for (; p<end; p+=4096) {
-        volatile unsigned char *b=(volatile unsigned char *)(p<(uintptr_t)buffer ? (uintptr_t)buffer : p);
-        *b=*b;
-    }
-}
 /* The host bytes, zeros past the host file's end, then the overlay's patches on top. */
 static int64_t overlay_pread(const File *f,void *buffer,uint64_t size,int64_t offset) {
     const Overlay *o=f->overlay;
@@ -420,6 +412,77 @@ static int64_t overlay_pread(const File *f,void *buffer,uint64_t size,int64_t of
     }
     return (int64_t)size;
 }
+/* The host never reads or writes guest pages directly: GPU page tracking changes their protection at any time, and a
+ * kernel copy that meets a protected page fails (EFAULT, ERROR_INVALID_USER_BUFFER) instead of reaching the fault handler.
+ * Data goes through a private chunk; the user-mode copy to or from guest memory runs under the region read lock, so no
+ * map or unmap changes the view meanwhile. */
+enum { IO_CHUNK = 512 * 1024 };
+static __thread unsigned char *io_chunk;
+static unsigned char *io_buffer(void) {
+    if (!io_chunk) io_chunk=malloc(IO_CHUNK);
+    return io_chunk;
+}
+static void copy_to_guest(void *guest,const void *host,size_t size) {
+    runtime_memory_io_begin();
+    memcpy(guest,host,size);
+    runtime_memory_io_end();
+}
+static void copy_from_guest(void *host,const void *guest,size_t size) {
+    runtime_memory_io_begin();
+    memcpy(host,guest,size);
+    runtime_memory_io_end();
+}
+static ssize_t guest_read(int h,void *buffer,uint64_t size,const int64_t *offset) {
+    unsigned char *chunk=io_buffer();
+    if (!chunk) { errno=ENOMEM; return -1; }
+    size_t done=0;
+    while (done<size) {
+        const size_t want=size-done<IO_CHUNK ? (size_t)(size-done) : IO_CHUNK;
+        const ssize_t n=offset ? pread(h,chunk,want,*offset+(int64_t)done) : host_read(h,chunk,want);
+        if (n<0) return done ? (ssize_t)done : -1;
+        copy_to_guest((unsigned char *)buffer+done,chunk,(size_t)n);
+        done+=(size_t)n;
+        if ((size_t)n<want) break;
+    }
+    return (ssize_t)done;
+}
+static int64_t guest_overlay_read(const File *f,void *buffer,uint64_t size,int64_t offset) {
+    unsigned char *chunk=io_buffer();
+    if (!chunk) return -ENOMEM;
+    uint64_t done=0;
+    while (done<size) {
+        const uint64_t want=size-done<IO_CHUNK ? size-done : IO_CHUNK;
+        const int64_t n=overlay_pread(f,chunk,want,offset+(int64_t)done);
+        if (n<0) return done ? (int64_t)done : n;
+        copy_to_guest((unsigned char *)buffer+done,chunk,(size_t)n);
+        done+=(uint64_t)n;
+        if ((uint64_t)n<want) break;
+    }
+    return (int64_t)done;
+}
+static ssize_t guest_write(int h,const void *buffer,uint64_t size,const int64_t *offset) {
+    unsigned char *chunk=io_buffer();
+    if (!chunk) { errno=ENOMEM; return -1; }
+    size_t done=0;
+    while (done<size) {
+        const size_t want=size-done<IO_CHUNK ? (size_t)(size-done) : IO_CHUNK;
+        copy_from_guest(chunk,(const unsigned char *)buffer+done,want);
+        const ssize_t n=offset ? pwrite(h,chunk,want,*offset+(int64_t)done) : host_write(h,chunk,want);
+        if (n<0) return done ? (ssize_t)done : -1;
+        done+=(size_t)n;
+        if ((size_t)n<want) break;
+    }
+    return (ssize_t)done;
+}
+static void note_pread_failure(const char *guest,const void *destination,int64_t offset,uint64_t size,int error) {
+    if (!failure_reported(error)) return;
+#ifdef _WIN32
+    printf("Runtime: pread(%s, guest %p, offset %" PRId64 ", %" PRIu64 " bytes) -> %s (Windows error %lu)\n",guest,destination,offset,
+           size,strerror(error),compat_io_error());
+#else
+    printf("Runtime: pread(%s, guest %p, offset %" PRId64 ", %" PRIu64 " bytes) -> %s\n",guest,destination,offset,size,strerror(error));
+#endif
+}
 /* Only told what was read: an observer has no way to change how a read went for the guest. */
 typedef void (*ReadObserver)(const char *guest,uint64_t offset,uint64_t size);
 static ReadObserver read_observer;
@@ -441,19 +504,18 @@ static void observe_read(int fd,int64_t offset,int64_t n) {
 static int64_t do_read(int fd,void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    touch_for_write(buffer,size);
     const File *f=get(fd);
     if (f && f->overlay) {
         int64_t at=host_lseek(h,0,SEEK_CUR);
         if (at<0) return -errno;
-        int64_t n=overlay_pread(f,buffer,size,at);
+        int64_t n=guest_overlay_read(f,buffer,size,at);
         if (n>0 && host_lseek(h,at+n,SEEK_SET)<0) return -errno;
         if (n>0) { __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED); }
         observe_read(fd,at,n);
         return n;
     }
     const int64_t at=observed_position(fd,h);
-    ssize_t n=host_read(h,buffer,size);
+    ssize_t n=guest_read(h,buffer,size,NULL);
     if (n<0) { note_failure("read",f ? f->path : "",errno); return -errno; }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     observe_read(fd,at,n);
@@ -462,16 +524,15 @@ static int64_t do_read(int fd,void *buffer,uint64_t size) {
 static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    touch_for_write(buffer,size);
     const File *f=get(fd);
     if (f && f->overlay) {
-        int64_t n=overlay_pread(f,buffer,size,offset);
+        int64_t n=guest_overlay_read(f,buffer,size,offset);
         if (n>0) { __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED); }
         observe_read(fd,offset,n);
         return n;
     }
-    ssize_t n=pread(h,buffer,size,offset);
-    if (n<0) { note_failure("pread",f ? f->path : "",errno); return -errno; }
+    ssize_t n=guest_read(h,buffer,size,&offset);
+    if (n<0) { note_pread_failure(f ? f->path : "",buffer,offset,size,errno); return -errno; }
     __atomic_add_fetch(&reads,1,__ATOMIC_RELAXED); __atomic_add_fetch(&bytes_read,(uint64_t)n,__ATOMIC_RELAXED);
     observe_read(fd,offset,n);
     return n;
@@ -479,7 +540,7 @@ static int64_t do_pread(int fd,void *buffer,uint64_t size,int64_t offset) {
 static int64_t do_write(int fd,const void *buffer,uint64_t size) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    ssize_t n=host_write(h,buffer,size);
+    ssize_t n=guest_write(h,buffer,size,NULL);
     if (n<0) { const File *f=get(fd); note_failure("write",f ? f->path : "",errno); return -errno; }
     __atomic_add_fetch(&writes,1,__ATOMIC_RELAXED);
     return n;
@@ -487,7 +548,7 @@ static int64_t do_write(int fd,const void *buffer,uint64_t size) {
 static int64_t do_pwrite(int fd,const void *buffer,uint64_t size,int64_t offset) {
     int h=host_fd(fd);
     if (h<0) return -EBADF;
-    ssize_t n=pwrite(h,buffer,size,offset);
+    ssize_t n=guest_write(h,buffer,size,&offset);
     if (n<0) { const File *f=get(fd); note_failure("pwrite",f ? f->path : "",errno); return -errno; }
     __atomic_add_fetch(&writes,1,__ATOMIC_RELAXED);
     return n;

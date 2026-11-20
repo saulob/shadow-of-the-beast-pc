@@ -33,6 +33,9 @@ void runtime_mutex_report(void);
 uintptr_t runtime_memory_resolve(const char *name);
 void runtime_memory_report(void);
 int runtime_memory_is_mapped(uintptr_t address, uint64_t size);
+/* Held while the host copies a file to or from guest memory: no guest map or unmap runs meanwhile. */
+void runtime_memory_io_begin(void);
+void runtime_memory_io_end(void);
 const char *runtime_import_name(const char *name);
 uintptr_t runtime_rwlock_resolve(const char *name);
 void runtime_rwlock_report(void);
