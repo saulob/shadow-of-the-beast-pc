@@ -1,5 +1,6 @@
 #include "isa_emulate.h"
 #include "lzcnt_compat.h"
+#include "test_progress.h"
 #include <cpuid.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -504,6 +505,7 @@ static void rewritten_register_forms(void) {
     for (unsigned w = 0; w < 3; ++w)
         for (unsigned d = 0; d < PROBE_REGISTER_COUNT; ++d)
             for (unsigned s = 0; s < PROBE_REGISTER_COUNT; ++s) {
+                sotb_test_progress(checks);
                 uint8_t insn[16];
                 uint64_t regs[16];
                 fill_registers(regs);
@@ -523,6 +525,7 @@ static void rewritten_memory_forms(void) {
                     const unsigned base = bases[b];
                     if ((mode == 0 && (base & 7) == 5) || (mode == 2 && ((base & 7) == 4 || probe_widths[w] == 16)))
                         continue;
+                    sotb_test_progress(checks);
                     uint8_t insn[16];
                     uint64_t regs[16], displacement;
                     fill_registers(regs);
@@ -645,6 +648,7 @@ static void table_shapes(void) {
             const int memory = operand.memory;
             CHECK(!memory || operand.base >= 0);
             for (size_t n = 0; n < 2 * PROBE_VALUE_COUNT; ++n) {
+                sotb_test_progress(checks);
                 const uint64_t value = probe_values[n % PROBE_VALUE_COUNT];
                 uint64_t in[16], out[2][16];
                 for (unsigned r = 0; r < 16; ++r)
