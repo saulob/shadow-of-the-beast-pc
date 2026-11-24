@@ -717,7 +717,7 @@ private:
         if (SavedPromptMode(settings_) == SOTB_PROMPT_AUTO) {
             text += std::string(" (detected: ") + sotb_pad_kind_name(active_pad_.kind) + ")";
         }
-        return text + ". These names are for this page; the game's own button art is not changed.";
+        return text + ". The game's button icons use this style from the next game start.";
     }
 
     void PadRow(trg::Ui& ui, SotbPadAction action, SotbPromptFamily family) {

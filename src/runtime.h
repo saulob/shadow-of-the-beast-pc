@@ -70,6 +70,8 @@ uintptr_t runtime_http_uri_resolve(const char *name);
 void runtime_ajm_report(void);
 /* The Sotb.ini whose keyboard bindings the pad reads, once, at the first sample. */
 void runtime_pad_set_settings(const char *settings_file);
+/* A SotbPadKind: the first connected gamepad's, before the guest starts. */
+int runtime_pad_startup_kind(void);
 /* 1 when the slot is Player 1 or has a live gamepad; 0 for a slot the game may drive with AI. */
 int runtime_pad_slot_human(int slot);
 uintptr_t runtime_pad_resolve(const char *name);
@@ -98,7 +100,7 @@ typedef struct {
 } RuntimeFilePatch;
 /* The guest sees `guest` as `length` bytes: the host file, zeros past its end, and the patches on top. The patches'
  * data is borrowed and must outlive the process. Before the guest starts only; -1 with nothing registered when the
- * table is full, the path already has one or a patch falls outside `length`. */
+ * table is full, the path already has one, a patch falls outside `length` or two patches overlap. */
 int runtime_file_overlay(const char *guest, uint64_t length, const RuntimeFilePatch *patches, size_t count);
 int runtime_file_translate(const char *guest, char *out, size_t size);
 int64_t runtime_file_open(const char *path, int flags, int mode);

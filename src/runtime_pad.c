@@ -190,6 +190,32 @@ static ButtonMap key_map;
 static SotbKeyMap keys;
 void runtime_pad_set_settings(const char *settings_file) { snprintf(keys_file,sizeof(keys_file),"%s",settings_file ? settings_file : ""); }
 
+/* The SotbPadKind of the first connected gamepad before the guest starts, Unknown without one. The user's mappings load
+ * here, ahead of the first scan of refresh_gamepads, which then finds SDL ready. */
+int runtime_pad_startup_kind(void) {
+    pthread_mutex_lock(&lock);
+    if (!sdl_ready) {
+        if (!SDL_WasInit(SDL_INIT_GAMEPAD)) sotb_prepare_sdl_gamepad();
+        sdl_ready = SDL_WasInit(SDL_INIT_GAMEPAD) ? 1 : SDL_InitSubSystem(SDL_INIT_GAMEPAD) ? 1 : -1;
+        if (sdl_ready>0) load_user_gamepad_mappings();
+    }
+    SotbPadKind kind=SOTB_PAD_KIND_UNKNOWN;
+    /* Some drivers list a connected controller a moment after SDL starts: wait a little before saying there is none. */
+    for (int attempt=0;sdl_ready>0 && attempt<4;++attempt) {
+        int count=0;
+        SDL_JoystickID *ids=SDL_GetGamepads(&count);
+        if (ids && count>0)
+            kind=sotb_pad_classify((int)SDL_GetGamepadTypeForID(ids[0]),(int)SDL_GetRealGamepadTypeForID(ids[0]),
+                                   SDL_GetGamepadVendorForID(ids[0]),SDL_GetGamepadProductForID(ids[0]));
+        SDL_free(ids);
+        if (count>0) break;
+        SDL_UpdateJoysticks();
+        SDL_Delay(40);
+    }
+    pthread_mutex_unlock(&lock);
+    return (int)kind;
+}
+
 static const struct { SotbKeyAction action; uint32_t ps; } key_buttons[]={
     {SOTB_KEY_CROSS,BTN_CROSS}, {SOTB_KEY_CIRCLE,BTN_CIRCLE}, {SOTB_KEY_SQUARE,BTN_SQUARE}, {SOTB_KEY_TRIANGLE,BTN_TRIANGLE},
     {SOTB_KEY_L1,BTN_L1}, {SOTB_KEY_R1,BTN_R1}, {SOTB_KEY_L2,BTN_L2}, {SOTB_KEY_R2,BTN_R2},
@@ -256,8 +282,8 @@ static void read_prompt_mode(const char *key, const char *value, void *user) {
     if (!strcmp(key,"controller_prompts")) *(SotbPromptMode *)user=sotb_prompt_mode_from_name(value);
 }
 
-/* The prompt family follows the controller the player last used; it is only logged here, since the game's prompts are
- * baked into its paks. */
+/* The launcher's button names follow the controller the player last used; the game's own icons were chosen at startup
+ * and stay as they are. This only logs the change. */
 static void track_prompt_family(uint32_t input_id) {
     static SotbActivePad active;
     static bool started;

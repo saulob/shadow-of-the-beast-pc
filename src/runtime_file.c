@@ -178,18 +178,26 @@ static const Overlay *overlay_of(const char *guest) {
     for (size_t i=0;i<overlay_count;++i) if (same_path_ignoring_case(overlays[i].guest,path)) return &overlays[i];
     return NULL;
 }
+static int patch_order(const void *a,const void *b) {
+    const uint64_t x=((const OverlayPatch *)a)->offset, y=((const OverlayPatch *)b)->offset;
+    return x<y ? -1 : x>y;
+}
 /* Registered before the guest starts: opens and reads take no lock for the table. The patches' data is borrowed, not
- * copied, and must stay valid for the life of the process. */
+ * copied, and must stay valid for the life of the process. The table is kept sorted so a read finds its patches by
+ * binary search; patches that overlap are refused. */
 int runtime_file_overlay(const char *guest,uint64_t length,const RuntimeFilePatch *patches,size_t count) {
     if (!guest || overlay_count==MAX_OVERLAYS || overlay_of(guest) || strlen(guest)+6>=sizeof(overlays[0].guest)) return -1;
     for (size_t i=0;i<count;++i)
-        if (patches[i].offset>length || patches[i].size>length-patches[i].offset) return -1;
+        if (patches[i].offset>length || patches[i].size>length-patches[i].offset || (patches[i].size && !patches[i].data)) return -1;
     Overlay o={.length=length,.patches=calloc(count ? count : 1,sizeof(OverlayPatch))};
     if (!o.patches) return -1;
     for (;o.count<count;++o.count) {
         const RuntimeFilePatch *p=&patches[o.count];
         o.patches[o.count]=(OverlayPatch){p->offset,p->size,p->data};
     }
+    qsort(o.patches,o.count,sizeof(*o.patches),patch_order);
+    for (size_t i=1;i<o.count;++i)
+        if (o.patches[i].offset<o.patches[i-1].offset+o.patches[i-1].size) { free(o.patches); return -1; }
     absolute_guest_path(guest,o.guest,sizeof(o.guest));
     overlays[overlay_count++]=o;
     return 0;
@@ -404,10 +412,16 @@ static int64_t overlay_pread(const File *f,void *buffer,uint64_t size,int64_t of
         filled+=(uint64_t)n;
     }
     memset((unsigned char *)buffer+filled,0,size-filled);
-    for (size_t i=0;i<o->count;++i) {
+    const uint64_t end=(uint64_t)offset+size;
+    size_t low=0, high=o->count;
+    while (low<high) {
+        const size_t middle=low+(high-low)/2;
+        if (o->patches[middle].offset+o->patches[middle].size<=(uint64_t)offset) low=middle+1; else high=middle;
+    }
+    for (size_t i=low;i<o->count && o->patches[i].offset<end;++i) {
         const OverlayPatch *p=&o->patches[i];
         uint64_t lo=p->offset>(uint64_t)offset ? p->offset : (uint64_t)offset;
-        uint64_t hi=p->offset+p->size<(uint64_t)offset+size ? p->offset+p->size : (uint64_t)offset+size;
+        uint64_t hi=p->offset+p->size<end ? p->offset+p->size : end;
         if (lo<hi) memcpy((unsigned char *)buffer+(lo-(uint64_t)offset),p->data+(lo-p->offset),hi-lo);
     }
     return (int64_t)size;

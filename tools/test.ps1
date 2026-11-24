@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, crash dump correlation and upload, device-lost reporting, startup diagnostics, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, launcher placement, launcher startup, launcher UI stall, launcher Escape navigation, Bug Report feedback, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, crash dump correlation and upload, device-lost reporting, startup diagnostics, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, in-game controller prompt assets, launcher placement, launcher startup, launcher UI stall, launcher Escape navigation, Bug Report feedback, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
@@ -137,6 +137,27 @@ function Invoke-PadBinding { Invoke-FocusedTest 'sotb-pad-binding-tests' '^pad b
 
 function Invoke-PadPrompt { Invoke-FocusedTest 'sotb-pad-prompt-tests' '^pad prompt tests' }
 
+function Invoke-ControllerPrompts {
+    $policy = Invoke-FocusedTest 'sotb-controller-prompts-tests' '^(real pak|controller prompts tests)'
+    if ($policy.State -ne 'PASS') { return $policy }
+    $policyChecks = $script:Progress.Checks
+    $overlay = Invoke-FocusedTest 'sotb-prompt-overlay-tests' '^runtime overlay tests'
+    if ($null -ne $policyChecks -and $null -ne $script:Progress.Checks) { $script:Progress.Checks = $policyChecks + $script:Progress.Checks }
+    return $overlay
+}
+
+function Invoke-ControllerPromptsAssets {
+    $python = Get-Python
+    if (-not $python) { return Result 'SKIPPED' 'Python 3 was not found' }
+    $run = Invoke-Native $python.Exe (@($python.Args) + @('-I', (Join-Path $root 'tests\controller_prompts_assets_tests.py'))) $root
+    if ($run.Code -ne 0) {
+        $run.Lines | ForEach-Object { Write-Host "    $_" }
+        return Result 'FAIL' "controller_prompts_assets_tests.py exited with $($run.Code)"
+    }
+    $run.Lines | Where-Object { $_ -match '^(SKIPPED|controller prompts assets tests)' } | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    return Result 'PASS'
+}
+
 function Invoke-GamepadDatabase { Invoke-FocusedTest 'sotb-gamepad-database-tests' '^gamepad database tests' }
 
 function Invoke-InputDevice { Invoke-FocusedTest 'sotb-input-device-tests' '^input device tests' }
@@ -250,6 +271,8 @@ $steps = @(
     @{ Name = 'audio-backlog'; Title = 'Audio backlog recovery: format-aware queue duration, 100 ms threshold and boundary, invalid formats and overflow, steady playback never recovers, device stall and endpoint reset recover, repeated recoveries, log rate limit (pure queue model, no audio device)'; Block = { Invoke-AudioBacklog } },
     @{ Name = 'pad-binding'; Title = 'Controller rebinding: default layout, every action and source, triggers, shoulders, stick clicks, Options and touchpad, persistence and reset in the settings file, invalid and older configs, duplicate policy, capture rules, hotplug (synthetic gamepad samples, no controller, no window)'; Block = { Invoke-PadBinding } },
     @{ Name = 'pad-prompt'; Title = 'Controller prompts: Xbox, DualShock, DualSense, generic and Steam Input detection, Auto/Xbox/PlayStation policy, active controller tracking without flapping, persisted mode, labels, regional Confirm/Back, prompts never change the guest buttons (synthetic metadata, no controller)'; Block = { Invoke-PadPrompt } },
+    @{ Name = 'controller-prompts'; Title = 'In-game controller prompts: Auto, Xbox and PlayStation style chosen once at startup (Auto follows the first controller, anything else gives Xbox, explicit modes ignore the controller), invalid setting is Auto, PlayStation installs nothing, Xbox art served over the unchanged pak only after pak size, footer, index and every texture CRC-32 match, all-or-nothing, modified, truncated, wrong-build and damaged-table sources rejected with the original art kept, bounded diagnostics without paths, no per-frame decision, launcher wording, and the runtime file overlay itself (sorted non-overlapping patches, reads across chunks, patch edges, the host end and zeros past it, seek and size, refusals, table limit, host file unchanged; synthetic paks and files, no controller, no window; the installed pak is read only and skipped when absent)'; Block = { Invoke-ControllerPrompts } },
+    @{ Name = 'controller-prompts-assets'; Title = 'Xbox prompt assets: generated data tied to the build and pak identity, every texture CRC-32, position, format, mips and tiling against the installed pak, replacement confined to mip payload bytes and to the original footprint, glyph coverage of every prompt the game draws, deterministic regeneration, line art licence and notices, no local paths and no game files in the repository (the installed pak is read only and its checks are skipped when absent)'; Block = { Invoke-ControllerPromptsAssets } },
     @{ Name = 'gamepad-database'; Title = 'Gamepad database: user/gamecontrollerdb.txt beside the settings file (never a configured path), missing file silent, one bounded summary line, malformed and unreadable files harmless, size cap, loaded once before the first gamepad enumeration, mappings reach later joysticks through SDL, recognized pads unchanged; unmapped joysticks logged once per device identity (name, GUID, VID:PID, no pointer or path), reconnects and hotplug, bounded memory (fake loader and SDL virtual joysticks, no controller, no window)'; Block = { Invoke-GamepadDatabase } },
     @{ Name = 'input-device'; Title = 'Controller activity: button and D-pad onset, stick and trigger thresholds with hysteresis, held input and drift never repeat, rearm after release, independent axes, extreme and zero values, per-controller state with hotplug and disconnect (pure policy, no controller)'; Block = { Invoke-InputDevice } },
     @{ Name = 'cursor-policy'; Title = 'Cursor visibility: last meaningful device (mouse, keyboard, controller), overlay forces the cursor visible, device kept while the overlay is open, overlay close follows the current device, no flapping, launcher and focus rules, window wiring (pure policy, no window, no cursor)'; Block = { Invoke-CursorPolicy } },

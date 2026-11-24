@@ -46,6 +46,11 @@ target_include_directories(sotb_keys PUBLIC src)
 target_link_libraries(sotb_keys PUBLIC SDL3::SDL3)
 target_compile_options(sotb_keys PRIVATE -Wall -Wextra -Werror)
 
+add_library(sotb_game_prompts STATIC src/sotb_game_prompts.c src/sotb_prompt_assets.c src/sotb_prompt_assets_data.c)
+target_include_directories(sotb_game_prompts PUBLIC src)
+target_link_libraries(sotb_game_prompts PUBLIC sotb_keys)
+target_compile_options(sotb_game_prompts PRIVATE -Wall -Wextra -Werror)
+
 add_library(sotb_ui_text INTERFACE)
 target_include_directories(sotb_ui_text INTERFACE launcher)
 
@@ -111,7 +116,7 @@ target_compile_options(shadow_of_the_beast PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall
 target_compile_definitions(shadow_of_the_beast PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
 target_link_options(shadow_of_the_beast PRIVATE -Wl,--disable-high-entropy-va
     "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
-target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
+target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
     onecore bcrypt ws2_32 user32 -pthread)
 add_dependencies(shadow_of_the_beast trg-updater)
 
@@ -150,18 +155,20 @@ target_compile_definitions(runtime_sync_test PRIVATE SOTB_SOURCE_DIR="${CMAKE_SO
 add_executable(savedata_test EXCLUDE_FROM_ALL tests/savedata_tests.c src/runtime_file.c src/compat_win.c)
 target_compile_definitions(savedata_test PRIVATE SOTB_SAVEDATA_TEST_ROOT="${CMAKE_BINARY_DIR}/savedata-tests"
     SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+add_executable(sotb-prompt-overlay-tests EXCLUDE_FROM_ALL tests/runtime_overlay_tests.c src/compat_win.c)
 add_executable(module_history_test EXCLUDE_FROM_ALL tests/module_history_tests.c src/module_history.c src/call_site.c
     src/startup_phase.c)
 add_executable(log_test EXCLUDE_FROM_ALL tests/log_tests.c src/runtime_log.c src/runtime_session_log.c)
 add_executable(ajm_test EXCLUDE_FROM_ALL tests/ajm_tests.c)
 target_link_libraries(ajm_test PRIVATE sotb_atrac9 -pthread)
-foreach (test IN ITEMS runtime_sync_test savedata_test module_history_test log_test ajm_test)
+foreach (test IN ITEMS runtime_sync_test savedata_test sotb-prompt-overlay-tests module_history_test log_test ajm_test)
     target_include_directories(${test} PRIVATE src tests launcher gpu/shim ${CMAKE_BINARY_DIR}/generated)
     target_compile_definitions(${test} PRIVATE ${SOTB_TEST_DEFINITIONS})
     target_compile_options(${test} PRIVATE -Wall -Wextra)
 endforeach()
 target_link_libraries(runtime_sync_test PRIVATE onecore bcrypt -pthread)
 target_link_libraries(savedata_test PRIVATE onecore bcrypt -pthread)
+target_link_libraries(sotb-prompt-overlay-tests PRIVATE onecore bcrypt -pthread)
 target_link_libraries(module_history_test PRIVATE -pthread)
 target_link_libraries(log_test PRIVATE -pthread)
 
@@ -314,6 +321,12 @@ add_executable(sotb-isa-tests EXCLUDE_FROM_ALL tests/isa_tests.c src/isa_emulate
 target_include_directories(sotb-isa-tests PRIVATE src)
 target_compile_definitions(sotb-isa-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin")
 target_compile_options(sotb-isa-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-controller-prompts-tests EXCLUDE_FROM_ALL tests/controller_prompts_tests.cpp)
+target_link_libraries(sotb-controller-prompts-tests PRIVATE sotb_game_prompts SDL3::SDL3)
+target_compile_definitions(sotb-controller-prompts-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_target_properties(sotb-controller-prompts-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-controller-prompts-tests PRIVATE -Wall -Wextra)
 
 add_executable(skip_intro_test EXCLUDE_FROM_ALL tests/skip_intro_tests.c)
 target_include_directories(skip_intro_test PRIVATE src)

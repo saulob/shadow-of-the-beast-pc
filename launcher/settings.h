@@ -109,8 +109,8 @@ inline constexpr char kSkipIntroHelp[] = "Skip startup logos and intro and go di
 inline constexpr char kTextLanguageHelp[] = "Language used by game menus and subtitles.";
 inline constexpr char kControllerRumbleHelp[] = "Off disables controller vibration. Applies at the next game start.";
 inline constexpr char kControllerPromptsHelp[] =
-    "Auto names the buttons after the controller in use; Xbox or PlayStation always uses that style. This only changes "
-    "the names on this page and never the bindings or what the game receives.";
+    "Auto follows the controller connected when the game starts; Xbox or PlayStation always uses that style. It sets the "
+    "game's button icons and the button names on this page, never the bindings. Applies at the next game start.";
 inline constexpr char kControllerBindingsHelp[] =
     "Click a row, then press a controller button or pull a trigger. Esc cancels. Each row is a PlayStation button, "
     "which is what the game receives; the controller button shown presses it. The bindings apply to every connected "

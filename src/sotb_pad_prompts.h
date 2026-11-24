@@ -1,7 +1,6 @@
 /* Which controller is connected and which button prompts suit it. Detection and the prompt mode (Auto, Xbox or
- * PlayStation) are host-side: they pick the launcher's button names and are logged by the runtime. The game's own
- * prompt art is baked into its paks and is not changed here, and the PS4 buttons the game receives never depend on
- * the prompt family. */
+ * PlayStation) choose the launcher's button names and, once at startup, the game's own button icons (see
+ * sotb_game_prompts.h). The PS4 buttons the game receives never depend on the prompt family. */
 #ifndef SOTB_PAD_PROMPTS_H
 #define SOTB_PAD_PROMPTS_H
 

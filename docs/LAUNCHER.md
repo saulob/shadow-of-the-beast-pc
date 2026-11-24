@@ -57,8 +57,9 @@ The frame counter is drawn top right at 100%; its corner and size are not launch
 ## Controls
 
 Controller detection, **Controller Rumble** (`controller_rumble`), **Controller prompts** (`controller_prompts`: `auto`, `xbox`
-or `playstation`; Auto follows the controller in use, anything it cannot classify shows Xbox names; it only names buttons on
-this page and never changes a binding, and the game's own button art is baked into its paks and is not changed), **Controller
+or `playstation`; Auto follows the controller connected when the game starts, anything it cannot classify shows Xbox; it sets
+the button names on this page and the game's own button icons from the next game start, and never changes a binding; see
+`docs/CONTROLLER_PROMPTS.md`), **Controller
 bindings** (`pad_cross`, `pad_circle`, ... one SDL gamepad name each: click a row, press a controller button or pull a trigger, Esc cancels; one
 controller button may press several PS4 buttons; sticks stay analog; **Reset to defaults** touches only these), keyboard
 bindings (click a key, press the new one, Esc cancels, a key may serve more than one control, **Reset to defaults**), the port

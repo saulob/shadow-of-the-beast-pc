@@ -313,14 +313,15 @@ void TestLabels(const fs::path& base) {
     }
 }
 
-void TestLimitationIsDocumented() {
-    // The game's button art is baked into its paks: the launcher says so and nothing pretends to replace it.
+void TestGameArtFollowsTheSetting() {
+    // The setting reaches the game's own button icons at the next start: the launcher says so and the audit no longer lists it as missing.
     const std::string launcher = ReadAll(fs::path(SOTB_SOURCE_DIR) / "launcher/launcher.cpp");
-    CHECK(Contains(launcher, "the game's own button art is not changed"));
+    CHECK(Contains(launcher, "button icons use this style from the next game start"));
+    CHECK(!Contains(launcher, "the game's own button art is not changed"));
     const std::string header = ReadAll(fs::path(SOTB_SOURCE_DIR) / "src/sotb_pad_prompts.h");
-    CHECK(Contains(header, "baked into its paks"));
+    CHECK(Contains(header, "the game's own button icons") && !Contains(header, "baked into its paks"));
     const std::string audit = ReadAll(fs::path(SOTB_SOURCE_DIR) / "docs/LAUNCHER_PARITY_AUDIT.md");
-    CHECK(Contains(audit, "no prompt atlas or glyph textures"));
+    CHECK(!Contains(audit, "no prompt atlas or glyph textures"));
 }
 
 void TestUserMappedPadKeepsPromptLayer() {
@@ -351,7 +352,7 @@ int main() {
     TestPromptsAndBindingsAreIndependent(base);
     TestRegionalConfirmBack();
     TestLabels(base);
-    TestLimitationIsDocumented();
+    TestGameArtFollowsTheSetting();
     TestUserMappedPadKeepsPromptLayer();
     std::error_code ignored;
     fs::remove_all(base, ignored);

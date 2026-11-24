@@ -13,6 +13,7 @@
 #include "import_slots.h"
 #include "guest_display.h"
 #include "skip_intro.h"
+#include "sotb_game_prompts.h"
 #include "guest_patches.h"
 #include "isa_emulate.h"
 #include "lzcnt_compat.h"
@@ -745,6 +746,26 @@ static uint64_t verify_import_slots(const ImportBindings *b, int detailed) {
     return errors;
 }
 
+static int register_prompt_overlay(const char *guest, uint64_t length, const SotbPromptPatch *patches, size_t count) {
+    _Static_assert(sizeof(SotbPromptPatch) == sizeof(RuntimeFilePatch), "prompt patches are file patches");
+    return runtime_file_overlay(guest, length, (const RuntimeFilePatch *)patches, count);
+}
+
+static SotbPadKind probe_startup_pad(void) { return (SotbPadKind)runtime_pad_startup_kind(); }
+
+static void print_prompt_line(void *user, const char *line) {
+    (void)user;
+    puts(line);
+}
+
+static void install_controller_prompts(const char *settings_file, const char *app0, const SotbGameBuild *build) {
+    char pak[4400], key[96];
+    snprintf(pak, sizeof(pak), "%s/beast/content/paks/pakchunk0-ps4.pak", app0);
+    snprintf(key, sizeof(key), "%s-%s", build->title_id, build->version);
+    const SotbGamePromptsRequest request = {settings_file, pak, key, NULL, probe_startup_pad, register_prompt_overlay, print_prompt_line, NULL};
+    sotb_game_prompts_apply(&request);
+}
+
 int main(int argc, char **argv) {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (argc == 4 && !strcmp(argv[1], "--prepare-image")) {
@@ -904,6 +925,7 @@ int main(int argc, char **argv) {
     if (app0) {
         runtime_file_configure(app0, user_dir ? user_dir : "user");
         sotb_startup_phase("filesystem configured");
+        install_controller_prompts(settings_file, app0, &game_build);
         char sfo[4096], id[16] = "";
         snprintf(sfo, sizeof(sfo), "%s/sce_sys/param.sfo", app0);
         if (sfo_value(sfo, "INSTALL_DIR_SAVEDATA", id, sizeof(id), NULL) ||
