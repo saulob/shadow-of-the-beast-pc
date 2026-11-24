@@ -356,3 +356,8 @@ target_link_libraries(sotb-exit-game-tests PRIVATE sotb_exit_game_l10n)
 target_compile_definitions(sotb-exit-game-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(sotb-exit-game-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-exit-game-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-loading-hint-layout-tests EXCLUDE_FROM_ALL tests/loading_hint_layout_tests.cpp src/guest_display.c)
+target_include_directories(sotb-loading-hint-layout-tests PRIVATE src)
+set_target_properties(sotb-loading-hint-layout-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-loading-hint-layout-tests PRIVATE -Wall -Wextra -Werror)

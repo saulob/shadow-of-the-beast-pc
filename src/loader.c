@@ -1192,6 +1192,9 @@ int main(int argc, char **argv) {
             snprintf(message, sizeof(message), "render resolution is not available: %s", error);
             fail_running(message);
         }
+        if (!guest_apply_loading_screen_layout(image, size, error, sizeof(error))) {
+            printf("Display: loading screen layout scaling unavailable: %s\n", error);
+        }
         printf("Display: render resolution %dx%d (%s)\n", render_resolution->width, render_resolution->height, render_resolution->key);
     }
     sotb_startup_phase("patches installed");

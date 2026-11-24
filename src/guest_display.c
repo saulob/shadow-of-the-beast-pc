@@ -59,3 +59,73 @@ int guest_apply_display_size(uint8_t *image, size_t image_size, int width, int h
     }
     return 1;
 }
+
+_Static_assert(sizeof(GuestSlateGeometry) == 0x38, "UE4.8 FGeometry size mismatch");
+
+#define GUEST_ABI __attribute__((sysv_abi))
+#define LOADING_VTABLE_ARRANGE_OFFSET 0x3d42610u
+#define COMPOUND_ARRANGE_OFFSET 0x808a50u
+#define HINT_TEXT_POS_OFFSET 0x1e0963au
+
+static const uint8_t compound_arrange_bytes[] = {
+    0x48, 0x8d, 0x87, 0xf0, 0x00, 0x00, 0x00,
+    0x48, 0x8d, 0x8f, 0x38, 0x01, 0x00, 0x00,
+    0x48, 0x89, 0xf7,
+};
+
+static const uint8_t hint_text_pos_bytes[] = {
+    0x48, 0xb8, 0x00, 0x00, 0x48, 0x43, 0x00, 0x00, 0x57, 0x44,
+};
+
+typedef void (GUEST_ABI *GuestArrangeChildrenFn)(void *self, const GuestSlateGeometry *allotted, void *arranged);
+static GuestArrangeChildrenFn original_loading_arrange;
+
+static float absf(float x) { return x < 0.0f ? -x : x; }
+
+GuestSlateGeometry guest_scale_loading_geometry(const GuestSlateGeometry *allotted) {
+    GuestSlateGeometry out = *allotted;
+    if (allotted->size_x <= 0.0f || allotted->size_y <= 0.0f) return out;
+    const float scale_x = allotted->size_x / SOTB_LOADING_DESIGN_WIDTH;
+    const float scale_y = allotted->size_y / SOTB_LOADING_DESIGN_HEIGHT;
+    const float scale = scale_x < scale_y ? scale_x : scale_y;
+    const float offset_x = (allotted->size_x - SOTB_LOADING_DESIGN_WIDTH * scale) * 0.5f;
+    const float offset_y = (allotted->size_y - SOTB_LOADING_DESIGN_HEIGHT * scale) * 0.5f;
+    if (absf(scale - 1.0f) < 1e-5f && absf(offset_x) < 1e-3f && absf(offset_y) < 1e-3f) return out;
+    out.size_x = SOTB_LOADING_DESIGN_WIDTH;
+    out.size_y = SOTB_LOADING_DESIGN_HEIGHT;
+    out.scale = allotted->scale * scale;
+    out.abs_pos_x = allotted->abs_pos_x + offset_x * allotted->scale;
+    out.abs_pos_y = allotted->abs_pos_y + offset_y * allotted->scale;
+    out.position_x = offset_x;
+    out.position_y = offset_y;
+    out.render_m00 = allotted->render_m00 * scale;
+    out.render_m01 = allotted->render_m01 * scale;
+    out.render_m10 = allotted->render_m10 * scale;
+    out.render_m11 = allotted->render_m11 * scale;
+    out.render_tx = allotted->render_tx + offset_x * allotted->render_m00 + offset_y * allotted->render_m10;
+    out.render_ty = allotted->render_ty + offset_x * allotted->render_m01 + offset_y * allotted->render_m11;
+    return out;
+}
+
+static GUEST_ABI void loading_screen_arrange_children(void *self, const GuestSlateGeometry *allotted, void *arranged) {
+    const GuestSlateGeometry scaled = guest_scale_loading_geometry(allotted);
+    original_loading_arrange(self, &scaled, arranged);
+}
+
+int guest_apply_loading_screen_layout(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!image || (uint64_t)LOADING_VTABLE_ARRANGE_OFFSET + sizeof(uint64_t) > image_size)
+        return fail(error, error_size, "loading screen vtable outside the image", LOADING_VTABLE_ARRANGE_OFFSET);
+    if (memcmp(image + COMPOUND_ARRANGE_OFFSET, compound_arrange_bytes, sizeof(compound_arrange_bytes)))
+        return fail(error, error_size, "unexpected SCompoundWidget::OnArrangeChildren bytes", COMPOUND_ARRANGE_OFFSET);
+    if (memcmp(image + HINT_TEXT_POS_OFFSET, hint_text_pos_bytes, sizeof(hint_text_pos_bytes)))
+        return fail(error, error_size, "unexpected loading hint position bytes", HINT_TEXT_POS_OFFSET);
+    uint64_t current = 0;
+    memcpy(&current, image + LOADING_VTABLE_ARRANGE_OFFSET, sizeof(current));
+    const uint64_t expected = (uint64_t)(uintptr_t)(image + COMPOUND_ARRANGE_OFFSET);
+    if (current != expected)
+        return fail(error, error_size, "unexpected SBeastLoadingScreen vtable entry", LOADING_VTABLE_ARRANGE_OFFSET);
+    original_loading_arrange = (GuestArrangeChildrenFn)(uintptr_t)expected;
+    const uint64_t hook = (uint64_t)(uintptr_t)loading_screen_arrange_children;
+    memcpy(image + LOADING_VTABLE_ARRANGE_OFFSET, &hook, sizeof(hook));
+    return 1;
+}
