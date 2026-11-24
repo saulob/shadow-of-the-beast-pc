@@ -75,3 +75,12 @@ extern "C" int sotb_text_language(const char* settings_file) {
     const Sotb::TextLanguage& language = Sotb::ResolveTextLanguage(settings.Get(Sotb::kTextLanguageKey));
     return language.ps4_id;
 }
+
+extern "C" const char* sotb_text_language_key(const char* settings_file) {
+    if (!settings_file || !*settings_file) {
+        return Sotb::ResolveTextLanguage({}).key.data();
+    }
+    const Sotb::LauncherSettings settings(Sotb::PathFromUtf8(settings_file));
+    const Sotb::TextLanguage& language = Sotb::ResolveTextLanguage(settings.Get(Sotb::kTextLanguageKey));
+    return language.key.data();
+}

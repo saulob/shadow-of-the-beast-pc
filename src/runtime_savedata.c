@@ -78,6 +78,18 @@ static uint64_t memory_size;
 static size_t mounts_done, unmounts_done, memory_writes;
 
 const char *runtime_savedata_title(void) { return title_id; }
+int runtime_savedata_write_active(void) {
+    int active = 0;
+    pthread_mutex_lock(&lock);
+    for (int i = 0; i < SLOTS; ++i) {
+        if (slots[i].used && !slots[i].read_only) {
+            active = 1;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&lock);
+    return active;
+}
 void runtime_savedata_configure(const char *title) {
     if (title && *title) snprintf(title_id,sizeof(title_id),"%s",title);
 }

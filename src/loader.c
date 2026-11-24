@@ -13,6 +13,7 @@
 #include "import_slots.h"
 #include "guest_display.h"
 #include "skip_intro.h"
+#include "sotb_exit_game.h"
 #include "sotb_game_prompts.h"
 #include "sotb_menu_buttons.h"
 #include "guest_patches.h"
@@ -759,12 +760,21 @@ static void print_prompt_line(void *user, const char *line) {
     puts(line);
 }
 
+static int g_exit_layout_original;
+static int g_exit_prompt_xbox = 1;
+static const char *g_exit_locale = "en_US";
+
+static int open_exit_confirm(void) {
+    return sotbgpu_exit_confirm_begin(g_exit_layout_original, g_exit_prompt_xbox, g_exit_locale);
+}
+
 static void install_controller_prompts(const char *settings_file, const char *app0, const SotbGameBuild *build) {
     char pak[4400], key[96];
     snprintf(pak, sizeof(pak), "%s/beast/content/paks/pakchunk0-ps4.pak", app0);
     snprintf(key, sizeof(key), "%s-%s", build->title_id, build->version);
     const SotbGamePromptsRequest request = {settings_file, pak, key, NULL, probe_startup_pad, register_prompt_overlay, print_prompt_line, NULL};
-    sotb_game_prompts_apply(&request);
+    const SotbGamePromptsOutcome outcome = sotb_game_prompts_apply(&request);
+    g_exit_prompt_xbox = (outcome.effective == SOTB_PROMPT_FAMILY_XBOX);
 }
 
 int main(int argc, char **argv) {
@@ -902,6 +912,8 @@ int main(int argc, char **argv) {
 
     runtime_pad_set_settings(settings_file);
     runtime_set_language(sotb_text_language(settings_file));
+    g_exit_locale = sotb_text_language_key(settings_file);
+    sotb_exit_game_set_locale(g_exit_locale);
     trophy_runtime_configure(app0, user_dir ? user_dir : "user");
     sotb_log_settings_summary(settings_file, game_build.label);
     const SotbResolution *render_resolution = &sotb_resolutions[sotb_render_resolution(settings_file)];
@@ -1149,6 +1161,18 @@ int main(int argc, char **argv) {
         guest_patches_apply(image, size, cave, cave_size);
         const SotbMenuButtonLayout menu_button_layout = sotb_menu_button_layout(settings_file);
         sotb_menu_buttons_apply(image, size, game_build.code_key, menu_button_layout);
+        g_exit_layout_original = (menu_button_layout == SOTB_MENU_BUTTON_LAYOUT_ORIGINAL);
+        if (gpu_enabled) {
+            char exit_reason[160];
+            sotbgpu_exit_confirm_set_save_check(runtime_savedata_write_active);
+            sotb_exit_game_set_confirm_handler(open_exit_confirm);
+            if (sotb_exit_game_apply(image, size, game_build.code_key, cave + 2048, cave_size - 2048, exit_reason,
+                                     sizeof(exit_reason))) {
+                puts("Exit Game: menu footer active on Map and Pause screens");
+            } else {
+                printf("Exit Game: unavailable for %s: %s\n", game_build.code_key, exit_reason);
+            }
+        }
         if (sotb_skip_intro(settings_file)) {
             char reason[160];
             if (skip_intro_apply(image, size, cave + 1024, cave_size - 1024, reason, sizeof(reason))) {

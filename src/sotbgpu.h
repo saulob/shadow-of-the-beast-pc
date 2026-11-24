@@ -26,6 +26,8 @@ int sotbgpu_handle_fault(void *context, void *address);
 void sotbgpu_dump_guest_writes(void *context);
 unsigned sotbgpu_symbol_count(void);
 int sotbgpu_request_close(void);
+int sotbgpu_exit_confirm_begin(int original_layout, int xbox_prompts, const char *locale);
+void sotbgpu_exit_confirm_set_save_check(int (*save_active)(void));
 int sotbgpu_text_input_begin(const char *initial_utf8, const char *prompt_utf8);
 int sotbgpu_text_input_poll(char *out_utf8, uint64_t size);
 int sotbgpu_choice_begin(const char *title, const char *const *items, const char *const *images, int count, int focus);

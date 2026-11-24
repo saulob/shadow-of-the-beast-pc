@@ -138,6 +138,7 @@ void runtime_savedata_report(void);
 int runtime_savedata_param(int32_t user, const char *dir, void *param);
 int runtime_savedata_icon(int32_t user, const char *dir, char *out, size_t size);
 const char *runtime_savedata_title(void);
+int runtime_savedata_write_active(void);
 int runtime_file_make_dirs(const char *path);
 /* Temporary file, flushed, then renamed over `path`; 0 on success. */
 int runtime_file_write_atomic(const char *path, const void *data, size_t size);

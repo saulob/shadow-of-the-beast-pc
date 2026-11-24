@@ -6,6 +6,7 @@
 #define _GNU_SOURCE
 #include "runtime.h"
 #include "sotbgpu.h"
+#include "sotb_exit_game.h"
 #include "sotb_keys.h"
 #include "sotb_pad.h"
 #include "sotb_pad_prompts.h"
@@ -512,7 +513,10 @@ static uint32_t list_buttons(void) {
     uint32_t buttons=host_buttons()|injected.buttons;
     SDL_Gamepad *g=slots[0].gamepad;
     if (g) {
+        const int x=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTX);
         const int y=SDL_GetGamepadAxis(g,SDL_GAMEPAD_AXIS_LEFTY);
+        if (x<-16000) buttons|=BTN_LEFT;
+        else if (x>16000) buttons|=BTN_RIGHT;
         if (y<-16000) buttons|=BTN_UP;
         else if (y>16000) buttons|=BTN_DOWN;
     }
@@ -544,6 +548,9 @@ static void sample(int slot, PadData *d) {
     if (s->hold_after_capture) {
         if (d->buttons) d->buttons=0;
         else s->hold_after_capture=0;
+    }
+    if (slot==0 && sotb_exit_game_filter_square((d->buttons & BTN_SQUARE)!=0)) {
+        d->buttons &= ~BTN_SQUARE;
     }
 }
 

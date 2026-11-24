@@ -68,4 +68,8 @@ void BeginChoice(const std::string& title, const std::vector<std::string>& items
                  std::vector<SotbPng::Image> pictures, int focus);
 int PollChoice();
 
+/// Exit Game confirmation modal; respects Menu Button Layout, Controller Prompts, and Menu & Subtitles language.
+bool BeginExitConfirm(bool original_layout, bool xbox_prompts, const char* locale,
+                      int (*save_active)(), int (*request_close)());
+
 } // namespace SotbOverlay

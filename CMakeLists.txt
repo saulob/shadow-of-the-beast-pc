@@ -38,6 +38,9 @@ target_include_directories(sotb_startup_phase PUBLIC src)
 target_compile_options(sotb_startup_phase PRIVATE -Wall -Wextra -Werror)
 
 add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c)
+add_library(sotb_exit_game_l10n STATIC src/sotb_exit_game_l10n.c)
+target_include_directories(sotb_exit_game_l10n PUBLIC src)
+target_compile_options(sotb_exit_game_l10n PRIVATE -Wall -Wextra -Werror)
 target_include_directories(sotb_guest_display PUBLIC src)
 target_compile_options(sotb_guest_display PRIVATE -Wall -Wextra -Werror)
 
@@ -100,6 +103,7 @@ set(SOTB_GAME_SOURCES
     src/crash_dump.c
     src/import_slots.c
     src/guest_patches.c
+    src/sotb_exit_game.c
     src/sotb_menu_buttons.c
     src/isa_emulate.c
     src/lzcnt_compat.c
@@ -117,7 +121,7 @@ target_compile_options(shadow_of_the_beast PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall
 target_compile_definitions(shadow_of_the_beast PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
 target_link_options(shadow_of_the_beast PRIVATE -Wl,--disable-high-entropy-va
     "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
-target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
+target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotb_exit_game_l10n sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
     onecore bcrypt ws2_32 user32 -pthread)
 add_dependencies(shadow_of_the_beast trg-updater)
 
@@ -339,3 +343,16 @@ target_include_directories(sotb-menu-buttons-tests PRIVATE src)
 target_link_libraries(sotb-menu-buttons-tests PRIVATE sotb_keys SDL3::SDL3)
 target_compile_definitions(sotb-menu-buttons-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(sotb-menu-buttons-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-title-bar-tests EXCLUDE_FROM_ALL tests/title_bar_tests.cpp)
+target_include_directories(sotb-title-bar-tests PRIVATE gpu/shim src)
+target_compile_definitions(sotb-title-bar-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_target_properties(sotb-title-bar-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-title-bar-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-exit-game-tests EXCLUDE_FROM_ALL tests/exit_game_tests.cpp src/sotb_exit_game.c)
+target_include_directories(sotb-exit-game-tests PRIVATE src gpu/shim launcher)
+target_link_libraries(sotb-exit-game-tests PRIVATE sotb_exit_game_l10n)
+target_compile_definitions(sotb-exit-game-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+set_target_properties(sotb-exit-game-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-exit-game-tests PRIVATE -Wall -Wextra -Werror)

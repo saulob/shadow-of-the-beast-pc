@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "sotb_overlay.h"
+#include "sotb_exit_confirm.h"
 
 #include <algorithm>
 #include <atomic>
@@ -88,6 +89,11 @@ std::atomic<int> choice_result{-1}; // -1 open, -2 cancelled, else the chosen in
 std::vector<SotbPng::Image> choice_pictures;
 std::vector<ImTextureData*> choice_textures, choice_retired;
 std::atomic<bool> choice_retiring{false};
+SotbExitConfirm::State exit_confirm{};
+std::atomic<bool> exit_confirm_active{false};
+int (*exit_save_active_cb)() = nullptr;
+int (*exit_close_cb)() = nullptr;
+std::chrono::steady_clock::time_point exit_save_wait_started{};
 float base_scale = 1.0f;
 
 // Present rate for the FPS counter.
@@ -332,6 +338,53 @@ void ChoiceBox() {
     ImGui::Separator();
     ImGui::TextDisabled("%s", sotb::Tr("Up/Down or D-pad: choose   Enter or Cross (A): OK   Esc or Circle (B): cancel"));
     ImGui::End();
+}
+
+void ExitConfirmBox() {
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const SotbExitConfirm::PopupMetrics m =
+        SotbExitConfirm::ComputeMetrics(viewport->WorkSize.x, viewport->WorkSize.y, base_scale);
+    const SotbExitGameStrings& text = exit_confirm.Text();
+    ImGui::SetNextWindowPos(ImVec2(viewport->WorkPos.x + viewport->WorkSize.x * 0.5f,
+                                   viewport->WorkPos.y + viewport->WorkSize.y * 0.5f),
+                            ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(m.min_w, 0.0f), ImVec2(m.max_w, m.max_h));
+    ImGui::SetNextWindowBgAlpha(0.95f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(m.pad_x, m.pad_y));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(m.item_spacing_x, m.item_spacing_y));
+    ImGui::Begin("##exit_confirm", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
+                     ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav |
+                     ImGuiWindowFlags_NoFocusOnAppearing);
+    ImGui::SetWindowFontScale(m.title_scale);
+    ImGui::TextColored(ImVec4(0.85f, 0.72f, 0.45f, 1.0f), "%s", text.title);
+    ImGui::Dummy(ImVec2(0.0f, m.section_gap * 0.5f));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, m.section_gap));
+    ImGui::SetWindowFontScale(m.body_scale);
+    if (exit_confirm.waiting_for_save) {
+        ImGui::TextWrapped("%s", text.saving);
+    } else {
+        ImGui::TextWrapped("%s", text.question);
+        ImGui::Dummy(ImVec2(0.0f, m.section_gap));
+        const char* labels[2] = {text.confirm, text.cancel};
+        for (int i = 0; i < 2; ++i) {
+            if (i == exit_confirm.focus) {
+                ImGui::TextColored(ImVec4(1.0f, 0.9f, 0.55f, 1.0f), "> %s", labels[i]);
+            } else {
+                ImGui::Text("  %s", labels[i]);
+            }
+        }
+    }
+    ImGui::Dummy(ImVec2(0.0f, m.section_gap));
+    ImGui::Separator();
+    ImGui::Dummy(ImVec2(0.0f, m.section_gap * 0.5f));
+    ImGui::SetWindowFontScale(m.hint_scale);
+    const std::string hint = exit_confirm.HintText();
+    ImGui::TextDisabled("%s", hint.c_str());
+    ImGui::SetWindowFontScale(1.0f);
+    ImGui::End();
+    ImGui::PopStyleVar(2);
 }
 
 void LoadingScreen() {
@@ -607,10 +660,102 @@ void SetChoiceInput(uint32_t (*buttons)()) {
     choice_input = buttons;
 }
 
+// Caller holds imgui_mutex.
+void FinishExitConfirm(SotbExitConfirm::Action action) {
+    if (action == SotbExitConfirm::Action::Cancelled) {
+        exit_confirm_active = false;
+        return;
+    }
+    if (action != SotbExitConfirm::Action::Confirmed) {
+        return;
+    }
+    if (exit_save_active_cb && exit_save_active_cb()) {
+        exit_confirm.waiting_for_save = true;
+        exit_save_wait_started = std::chrono::steady_clock::now();
+        return;
+    }
+    exit_confirm.Close();
+    exit_confirm_active = false;
+    if (exit_close_cb) {
+        exit_close_cb();
+    }
+}
+
+void PollExitConfirmInput() {
+    static std::mutex poll_mutex;
+    std::scoped_lock poll_lock{poll_mutex};
+    static uint32_t previous = 0;
+    static bool open = false;
+    if (!exit_confirm_active) {
+        open = false;
+        return;
+    }
+    {
+        std::scoped_lock lock{imgui_mutex};
+        if (exit_confirm.waiting_for_save) {
+            const auto elapsed = std::chrono::steady_clock::now() - exit_save_wait_started;
+            if (!exit_save_active_cb || !exit_save_active_cb() || elapsed >= std::chrono::seconds(5)) {
+                exit_confirm.Close();
+                exit_confirm_active = false;
+                if (exit_close_cb) {
+                    exit_close_cb();
+                }
+            }
+            return;
+        }
+    }
+    if (!choice_input) {
+        return;
+    }
+    const uint32_t buttons = choice_input();
+    if (!open) {
+        open = true;
+        previous = buttons;
+        return;
+    }
+    const uint32_t pressed = buttons & ~previous;
+    previous = buttons;
+    if (!pressed) {
+        return;
+    }
+    std::scoped_lock lock{imgui_mutex};
+    FinishExitConfirm(exit_confirm.StepPad(pressed));
+}
+
+bool HandleExitConfirmEvent(const SDL_Event& event) {
+    int move = 0;
+    bool confirm = false, cancel = false;
+    if (event.type == SDL_EVENT_KEY_DOWN) {
+        const SDL_Keycode key = event.key.key;
+        move = (key == SDLK_UP || key == SDLK_DOWN || key == SDLK_LEFT || key == SDLK_RIGHT ||
+                key == SDLK_W || key == SDLK_S || key == SDLK_A || key == SDLK_D) ? 1 : 0;
+        confirm = key == SDLK_RETURN || key == SDLK_KP_ENTER || key == SDLK_SPACE;
+        cancel = key == SDLK_ESCAPE || key == SDLK_BACKSPACE;
+    } else if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN) {
+        if (choice_input) {
+            return true;
+        }
+        const u8 b = event.gbutton.button;
+        move = (b == SDL_GAMEPAD_BUTTON_DPAD_UP || b == SDL_GAMEPAD_BUTTON_DPAD_DOWN ||
+                b == SDL_GAMEPAD_BUTTON_DPAD_LEFT || b == SDL_GAMEPAD_BUTTON_DPAD_RIGHT) ? 1 : 0;
+        const bool south = b == SDL_GAMEPAD_BUTTON_SOUTH;
+        const bool east = b == SDL_GAMEPAD_BUTTON_EAST;
+        confirm = exit_confirm.original_layout ? east : south;
+        cancel = exit_confirm.original_layout ? south : east;
+    } else {
+        return event.type == SDL_EVENT_KEY_UP || event.type == SDL_EVENT_GAMEPAD_BUTTON_UP;
+    }
+    FinishExitConfirm(exit_confirm.Step(move, confirm, cancel));
+    return true;
+}
+
 bool HandleEvent(const SDL_Event& event) {
     std::scoped_lock lock{imgui_mutex};
     if (!initialized) {
         return false;
+    }
+    if (exit_confirm_active) {
+        return HandleExitConfirmEvent(event);
     }
     if (choice_active) {
         return HandleChoiceEvent(event);
@@ -725,7 +870,7 @@ void ShowNotice(const std::string& text) {
 bool Visible() {
     const auto& s = SotbSettings::Get();
     return initialized && (loading || background_total || options_open || text_entry_active || choice_active ||
-                           choice_retiring || s.show_fps || NoticeShown());
+                           choice_retiring || exit_confirm_active || s.show_fps || NoticeShown());
 }
 
 void SetDisplayScale(float scale) {
@@ -733,7 +878,20 @@ void SetDisplayScale(float scale) {
 }
 
 bool CapturesInput() {
-    return options_open || text_entry_active || choice_active;
+    return options_open || text_entry_active || choice_active || exit_confirm_active;
+}
+
+bool BeginExitConfirm(bool original_layout, bool xbox_prompts, const char* locale,
+                      int (*save_active)(), int (*request_close)()) {
+    std::scoped_lock lock{imgui_mutex};
+    if (!initialized || options_open || text_entry_active || choice_active || exit_confirm.active) {
+        return false;
+    }
+    exit_save_active_cb = save_active;
+    exit_close_cb = request_close;
+    exit_confirm.Open(original_layout, xbox_prompts, locale);
+    exit_confirm_active = true;
+    return true;
 }
 
 void BeginChoice(const std::string& title, const std::vector<std::string>& items,
@@ -785,6 +943,7 @@ bool BeginPresent() {
         frame_ms_avg = frame_ms_avg == 0.0f ? ms : frame_ms_avg * 0.95f + ms * 0.05f;
     }
     PollChoiceInput();
+    PollExitConfirmInput();
     return Visible();
 }
 
@@ -826,6 +985,9 @@ void BuildFrame(u32 width, u32 height, void (*new_frame)()) {
     }
     if (choice_active) {
         ChoiceBox();
+    }
+    if (exit_confirm.active) {
+        ExitConfirmBox();
     }
     ImGui::Render();
 }

@@ -126,7 +126,7 @@ set_source_files_properties(shim/imgui_impl_gles3.cpp PROPERTIES
 set_source_files_properties(shim/sotb_overlay.cpp PROPERTIES
     OBJECT_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/third_party/fonts/DejaVuSans.ttf)
 target_compile_options(sotbgpu PRIVATE -Wno-deprecated-declarations -Wno-missing-field-initializers)
-target_link_libraries(sotbgpu PRIVATE $<LINK_ONLY:sotb_startup_phase> $<LINK_ONLY:sotb_guest_display> sotb_ui_text)
+target_link_libraries(sotbgpu PRIVATE $<LINK_ONLY:sotb_startup_phase> $<LINK_ONLY:sotb_guest_display> sotb_exit_game_l10n sotb_ui_text)
 target_link_libraries(sotbgpu PUBLIC Vulkan::Headers Vulkan::Vulkan fmt::fmt Boost::headers magic_enum tsl::robin_map
     VulkanMemoryAllocator PkgConfig::XXHASH PkgConfig::FFMPEG SDL3::SDL3 PNG::PNG miniz Zydis::Zydis sirit sotb_keys)
 if (WIN32)

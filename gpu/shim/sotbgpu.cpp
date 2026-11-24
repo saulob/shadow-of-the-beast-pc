@@ -237,8 +237,7 @@ extern "C" int sotbgpu_init(const SotbGpuConfig* config) {
     Common::FS::SetUserDir(std::filesystem::path(std::u8string(user_dir.begin(), user_dir.end())));
     g_sdk_version = config->sdk_version;
     Core::Emulator::FillElfInfo(*config);
-    const std::string title =
-        SotbTitle::Base(config->title ? config->title : SOTB_WINDOW_TITLE, config->build ? config->build : "");
+    const std::string title = config->title ? config->title : SOTB_WINDOW_TITLE;
     const s32 width = config->width, height = config->height;
     g_window_thread = std::thread([title, width, height] {
         Common::SetCurrentThreadName("sotb:window");
@@ -369,10 +368,22 @@ extern "C" uint64_t sotbgpu_latency_press_ns(void) {
     return SotbLatencyTrace::press_ns.load(std::memory_order_relaxed);
 }
 
+static int (*g_exit_save_active)(void) = nullptr;
+
 extern "C" int sotbgpu_request_close(void) {
     if (!g_window || !g_window->RequestClose()) return 0;
     std::printf("Exit Game: host exit scheduled\n");
     return 1;
+}
+
+extern "C" void sotbgpu_exit_confirm_set_save_check(int (*save_active)(void)) {
+    g_exit_save_active = save_active;
+}
+
+extern "C" int sotbgpu_exit_confirm_begin(int original_layout, int xbox_prompts, const char* locale) {
+    if (!g_window) return 0;
+    return SotbOverlay::BeginExitConfirm(original_layout != 0, xbox_prompts != 0, locale, g_exit_save_active,
+                                         sotbgpu_request_close) ? 1 : 0;
 }
 
 extern "C" int sotbgpu_text_input_begin(const char* initial, const char* prompt) {

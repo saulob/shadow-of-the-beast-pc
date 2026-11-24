@@ -66,6 +66,7 @@ void sotb_game_build_problem(const char* image_dir, char* out, size_t size);
 void sotb_game_build_report(const char* image_dir, void (*emit)(const char* line));
 
 int sotb_text_language(const char* settings_file);
+const char* sotb_text_language_key(const char* settings_file);
 int sotb_detailed_logging(const char* settings_file);
 int sotb_render_resolution(const char* settings_file);
 int sotb_skip_intro(const char* settings_file);
