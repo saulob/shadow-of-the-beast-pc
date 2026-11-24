@@ -12,6 +12,9 @@ and applies at the next game start.
 
 An unusable value is `auto`. The launcher's button names keep following the controller in use while it runs.
 
+The prompt style is separate from the menu Confirm/Back layout. **Menu Button Layout** decides whether
+Cross/A or Circle/B confirms; the glyphs above always follow the key the game binds. See `docs/MENU_BUTTONS.md`.
+
 ## How the Xbox art reaches the game
 
 `pakchunk0-ps4.pak` is a version 3 UE4 pak, uncompressed and unencrypted. Every prompt is a cooked `Texture2D` in it. The

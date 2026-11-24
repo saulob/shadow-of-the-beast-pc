@@ -28,6 +28,7 @@ not on every path), PLACEBO (saved or shown, nothing reads it), MISSING. Test cl
 | Keyboard bindings | per action | `runtime_pad.c` via `sotb_keys` | FUNCTIONAL | kept | H load, invalid, duplicate, Escape unbindable, U |
 | Controller Rumble | `controller_rumble` | `runtime_pad.c` (`sotbgpu_controller_rumble`) | MISSING | added | H parse, U |
 | Controller prompts | `controller_prompts` | `sotb_game_prompts.c`: the game's button icons, chosen once at startup | MISSING (names on the Controls page only) | Xbox art served over the unchanged pak (`docs/CONTROLLER_PROMPTS.md`) | H `sotb-controller-prompts-tests`, `controller_prompts_assets_tests.py`; U |
+| Menu Button Layout | `menu_button_layout` | `sotb_menu_buttons.c`: the game's menu key registration, patched once at startup | MISSING (the Korean `KR_BD` build uses Circle/B to confirm) | Western (default) forces Cross/A confirm; Original keeps the Korean `KR_BD` layout (`docs/MENU_BUTTONS.md`) | H `sotb-menu-buttons-tests`; U |
 | gamecontrollerdb, unmapped joystick log | n/a | `runtime_pad.c` | FUNCTIONAL | documented | U |
 | Xbox mapping | n/a | `runtime_pad.c` table | MISSING | read-only mapping table on Controls | H table |
 | Menu & Subtitles | `text_language` | `runtime_set_language` (system language) | MISSING | added, 19 languages | H table, parse, fallback; U |

@@ -59,11 +59,14 @@ The frame counter is drawn top right at 100%; its corner and size are not launch
 Controller detection, **Controller Rumble** (`controller_rumble`), **Controller prompts** (`controller_prompts`: `auto`, `xbox`
 or `playstation`; Auto follows the controller connected when the game starts, anything it cannot classify shows Xbox; it sets
 the button names on this page and the game's own button icons from the next game start, and never changes a binding; see
-`docs/CONTROLLER_PROMPTS.md`), **Controller
+`docs/CONTROLLER_PROMPTS.md`), **Menu Button Layout** (`menu_button_layout`: `western` or `original`, default
+`western`; Western uses Cross/A to confirm and Circle/B to go back, Original restores the Korean `KR_BD` release
+layout with Circle/B to confirm and Cross/A to go back; combat controls are unchanged; see
+`docs/MENU_BUTTONS.md`), **Controller
 bindings** (`pad_cross`, `pad_circle`, ... one SDL gamepad name each: click a row, press a controller button or pull a trigger, Esc cancels; one
 controller button may press several PS4 buttons; sticks stay analog; **Reset to defaults** touches only these), keyboard
 bindings (click a key, press the new one, Esc cancels, a key may serve more than one control, **Reset to defaults**), the port
-hotkeys, and the default controller layout. The game asks the system for its enter button and always gets Cross.
+hotkeys, and the default controller layout.
 `SOTB_PIPELINE_ON_DEMAND=1` keeps pipelines out of the background warm-up. A controller SDL does not recognise needs a line in `user\gamecontrollerdb.txt`; `SDL_GAMECONTROLLERCONFIG`
 keeps priority and an unmapped joystick is logged once per connection with its GUID.
 

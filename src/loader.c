@@ -14,6 +14,7 @@
 #include "guest_display.h"
 #include "skip_intro.h"
 #include "sotb_game_prompts.h"
+#include "sotb_menu_buttons.h"
 #include "guest_patches.h"
 #include "isa_emulate.h"
 #include "lzcnt_compat.h"
@@ -1146,6 +1147,8 @@ int main(int argc, char **argv) {
             printf("CPU: LZCNT rewritten in %zu patch ranges of %s\n", build->count, build->build);
         }
         guest_patches_apply(image, size, cave, cave_size);
+        const SotbMenuButtonLayout menu_button_layout = sotb_menu_button_layout(settings_file);
+        sotb_menu_buttons_apply(image, size, game_build.code_key, menu_button_layout);
         if (sotb_skip_intro(settings_file)) {
             char reason[160];
             if (skip_intro_apply(image, size, cave + 1024, cave_size - 1024, reason, sizeof(reason))) {

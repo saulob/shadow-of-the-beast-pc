@@ -49,6 +49,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kShowFrameCounterKey, "0"},
     {kControllerRumbleKey, "1"},
     {kControllerPromptsKey, "auto"},
+    {kMenuButtonLayoutKey, kDefaultMenuButtonLayout},
     {kDetailedLoggingKey, "1"},
     {kLauncherXKey, ""},
     {kLauncherYKey, ""},
@@ -102,6 +103,10 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     }
     if (key == kControllerPromptsKey) {
         return one_of({"auto", "xbox", "playstation"});
+    }
+    if (key == kMenuButtonLayoutKey) {
+        return std::any_of(std::begin(kMenuButtonLayoutChoices), std::end(kMenuButtonLayoutChoices),
+                           [&](const Choice& choice) { return value == choice.key; });
     }
     if (key == kDisplayModeKey) {
         return one_of({"windowed", "borderless"});
@@ -256,6 +261,8 @@ std::string SettingsSummary(const LauncherSettings& settings, const char* game_b
     line(std::string("Controller rumble ") + OnOff(settings.GetBool(kControllerRumbleKey, true)) + ", prompts " +
          settings.Get(kControllerPromptsKey, "auto") + ", " + std::to_string(custom_bindings) +
          " custom controller bindings, detailed logging " + OnOff(settings.GetBool(kDetailedLoggingKey, true)));
+    line(std::string("Menu button layout ") +
+         (settings.Get(kMenuButtonLayoutKey, kDefaultMenuButtonLayout) == "original" ? "Original" : "Western"));
     return out;
 }
 

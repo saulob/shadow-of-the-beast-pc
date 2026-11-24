@@ -274,6 +274,44 @@ void TestSkipIntro(const fs::path& base) {
     CHECK(Contains(launcher, "const bool saved = settings_.Save();") && Contains(launcher, "Launcher: settings %s, Skip Intro %s"));
 }
 
+void TestMenuButtonLayout(const fs::path& base) {
+    const fs::path file = base / "menu_buttons.ini";
+    WriteAll(file, "");
+    const LauncherSettings defaults(file);
+    CHECK(defaults.Get(kMenuButtonLayoutKey, kDefaultMenuButtonLayout) == "western");
+    bool managed = false;
+    for (const ManagedSetting& entry : ManagedSettings()) {
+        managed = managed || (entry.key == kMenuButtonLayoutKey && std::string(entry.default_value) == "western");
+    }
+    CHECK(managed);
+    CHECK(Contains(SettingsSummary(defaults, "CUSA03762 1.00"), "Menu button layout Western"));
+
+    WriteAll(file, "menu_button_layout = original\n");
+    const LauncherSettings orig(file);
+    CHECK(orig.Get(kMenuButtonLayoutKey, kDefaultMenuButtonLayout) == "original");
+    CHECK(Contains(SettingsSummary(orig, "CUSA03762 1.00"), "Menu button layout Original"));
+
+    LauncherSettings edit(file);
+    edit.Set(kMenuButtonLayoutKey, "western");
+    CHECK(edit.Save());
+    CHECK(Contains(ReadAll(file), "menu_button_layout = western"));
+    CHECK(LauncherSettings(file).Get(kMenuButtonLayoutKey, "original") == "western");
+
+    const std::string launcher = ReadAll(fs::path(SOTB_SOURCE_DIR) / "launcher/launcher.cpp");
+    const size_t prompts = launcher.find("ui.Combo(\"Controller prompts\"");
+    const size_t shown = launcher.find("ui.Info(\"Prompts shown\"");
+    const size_t choice = launcher.find("ui.Choice(\"Menu Button Layout\", kMenuButtonLayoutHelp, kMenuButtonLayoutKey, "
+                                        "kDefaultMenuButtonLayout,");
+    const size_t defaults_row = launcher.find("ui.ConfirmRow(\"Controller defaults\"");
+    CHECK(prompts != std::string::npos && shown != std::string::npos && choice != std::string::npos &&
+          defaults_row != std::string::npos);
+    CHECK(prompts < shown && shown < choice && choice < defaults_row);
+    CHECK(Contains(std::string(kMenuButtonLayoutHelp), "Cross/A to confirm"));
+    CHECK(Contains(std::string(kMenuButtonLayoutHelp), "Circle/B to confirm"));
+    CHECK(Contains(std::string(kMenuButtonLayoutHelp), "Combat controls are unchanged"));
+    CHECK(std::string(kMenuButtonLayoutKey) == "menu_button_layout");
+}
+
 void TestPageTexts() {
     const std::string launcher = ReadAll(fs::path(SOTB_SOURCE_DIR) / "launcher/launcher.cpp");
     for (const char* text : {"\"Check the game files and start playing.\"", "\"Window, monitor, scaling and presentation.\"",
@@ -301,7 +339,8 @@ void TestManagedSettings() {
     for (const char* key : {kDisplayModeKey, kRendererKey, kGraphicsCardKey, kVSyncKey, kPresentationKey, kUpscaleKey,
                             kSharpenKey, kSharpenStrengthKey, kAntiAliasingKey, kAnisotropyKey, kFrameRateKey,
                             kShowFpsTitleKey, kShowResolutionTitleKey, kShowFrameCounterKey, kControllerRumbleKey,
-                            kDetailedLoggingKey, kWindowWidthKey, kWindowHeightKey, kMonitorKey, kShowLauncherKey}) {
+                            kMenuButtonLayoutKey, kDetailedLoggingKey, kWindowWidthKey, kWindowHeightKey, kMonitorKey,
+                            kShowLauncherKey}) {
         CHECK(keys.count(key) == 1);
     }
     CHECK(keys.count("overlay_corner") == 0 && keys.count("overlay_scale") == 0);
@@ -317,6 +356,8 @@ void TestManagedSettings() {
     CHECK(IsValidSetting(kPresentationKey, "stretch") && !IsValidSetting(kPresentationKey, "zoom"));
     CHECK(IsValidSetting(kAnisotropyKey, "16") && !IsValidSetting(kAnisotropyKey, "3"));
     CHECK(IsValidSetting(kFrameRateKey, "0") && IsValidSetting(kFrameRateKey, "240") && !IsValidSetting(kFrameRateKey, "75"));
+    CHECK(IsValidSetting(kMenuButtonLayoutKey, "western") && IsValidSetting(kMenuButtonLayoutKey, "original") &&
+          !IsValidSetting(kMenuButtonLayoutKey, "0") && !IsValidSetting(kMenuButtonLayoutKey, "1"));
     CHECK(IsValidSetting("cross", "space") || IsValidSetting(sotb_key_actions[SOTB_KEY_CROSS].ini_key, "space"));
     CHECK(!IsValidSetting(sotb_key_actions[SOTB_KEY_CROSS].ini_key, "nonsense-key"));
 }
@@ -652,6 +693,7 @@ int main() {
     TestAppIcon();
     TestPageTexts();
     TestSkipIntro(base);
+    TestMenuButtonLayout(base);
     TestLauncherQuit();
     TestManagedSettings();
     TestSettingsFile(base);

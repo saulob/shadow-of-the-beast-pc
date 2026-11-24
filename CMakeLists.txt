@@ -100,6 +100,7 @@ set(SOTB_GAME_SOURCES
     src/crash_dump.c
     src/import_slots.c
     src/guest_patches.c
+    src/sotb_menu_buttons.c
     src/isa_emulate.c
     src/lzcnt_compat.c
     src/compat_win.c
@@ -332,3 +333,9 @@ add_executable(skip_intro_test EXCLUDE_FROM_ALL tests/skip_intro_tests.c)
 target_include_directories(skip_intro_test PRIVATE src)
 target_compile_definitions(skip_intro_test PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(skip_intro_test PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-menu-buttons-tests EXCLUDE_FROM_ALL tests/menu_buttons_tests.c)
+target_include_directories(sotb-menu-buttons-tests PRIVATE src)
+target_link_libraries(sotb-menu-buttons-tests PRIVATE sotb_keys SDL3::SDL3)
+target_compile_definitions(sotb-menu-buttons-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-menu-buttons-tests PRIVATE -Wall -Wextra -Werror)

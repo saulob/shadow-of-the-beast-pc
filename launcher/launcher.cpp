@@ -513,6 +513,8 @@ private:
         ui.Combo("Controller prompts", kControllerPromptsHelp, kControllerPromptsKey, "auto",
                  {{"auto", "Auto"}, {"xbox", "Xbox"}, {"playstation", "PlayStation"}});
         ui.Info("Prompts shown", PromptsText(family).c_str());
+        ui.Choice("Menu Button Layout", kMenuButtonLayoutHelp, kMenuButtonLayoutKey, kDefaultMenuButtonLayout,
+                  {{"western", "Western"}, {"original", "Original"}}, 2);
         if (ui.ConfirmRow("Controller defaults", "Puts every controller binding back to the standard layout.",
                           "Reset to defaults", "Put every controller button back to its default?", "Reset")) {
             ResetPads(settings_);

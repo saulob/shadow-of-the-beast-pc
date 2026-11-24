@@ -34,6 +34,7 @@ inline constexpr char kShowResolutionTitleKey[] = "show_resolution_title";
 inline constexpr char kShowFrameCounterKey[] = "show_fps";
 inline constexpr char kControllerRumbleKey[] = "controller_rumble";
 inline constexpr char kControllerPromptsKey[] = "controller_prompts";
+inline constexpr char kMenuButtonLayoutKey[] = "menu_button_layout";
 inline constexpr char kDetailedLoggingKey[] = "detailed_logging";
 
 inline constexpr char kLauncherXKey[] = "launcher_x";
@@ -45,6 +46,7 @@ inline constexpr char kLauncherFullscreenKey[] = "launcher_fullscreen";
 
 inline constexpr char kDefaultRenderer[] = "vulkan";
 inline constexpr char kDefaultPresentation[] = "letterbox";
+inline constexpr char kDefaultMenuButtonLayout[] = "western";
 inline constexpr char kNativeResolution[] = "native";
 
 struct Choice {
@@ -63,6 +65,10 @@ inline constexpr Choice kRendererChoices[] = {
 inline constexpr Choice kPresentationChoices[] = {
     {"letterbox", "Letterbox"},
     {"stretch", "Stretch"},
+};
+inline constexpr Choice kMenuButtonLayoutChoices[] = {
+    {"western", "Western"},
+    {"original", "Original"},
 };
 inline constexpr std::string_view kFrameRates[] = {"30", "60", "90", "120", "144", "165", "240", "0"};
 inline constexpr std::string_view kAnisotropyLevels[] = {"0", "2", "4", "8", "16"};
@@ -111,6 +117,9 @@ inline constexpr char kControllerRumbleHelp[] = "Off disables controller vibrati
 inline constexpr char kControllerPromptsHelp[] =
     "Auto follows the controller connected when the game starts; Xbox or PlayStation always uses that style. It sets the "
     "game's button icons and the button names on this page, never the bindings. Applies at the next game start.";
+inline constexpr char kMenuButtonLayoutHelp[] =
+    "Western uses Cross/A to confirm and Circle/B to go back. Original restores the Korean release layout with "
+    "Circle/B to confirm and Cross/A to go back. Combat controls are unchanged. Applies at the next game start.";
 inline constexpr char kControllerBindingsHelp[] =
     "Click a row, then press a controller button or pull a trigger. Esc cancels. Each row is a PlayStation button, "
     "which is what the game receives; the controller button shown presses it. The bindings apply to every connected "
