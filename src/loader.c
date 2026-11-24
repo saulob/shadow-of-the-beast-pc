@@ -12,6 +12,7 @@
 #include "crash_dump.h"
 #include "import_slots.h"
 #include "guest_display.h"
+#include "resolution_guard.h"
 #include "skip_intro.h"
 #include "sotb_exit_game.h"
 #include "sotb_game_prompts.h"
@@ -830,6 +831,7 @@ int main(int argc, char **argv) {
 
     static char settings_file[4200];
     snprintf(settings_file, sizeof(settings_file), "%s/sotb.ini", user_dir);
+    sotb_resolution_guard_init(user_dir);
     char log_path[4200];
     static char log_folder[4200];
     snprintf(log_folder, sizeof(log_folder), "%s", paths.logs_dir);
@@ -866,6 +868,9 @@ int main(int argc, char **argv) {
         runtime_log_set_detailed(sotb_detailed_logging(settings_file));
         if (launched == SOTB_LAUNCHER_QUIT) { runtime_log_mark_clean_exit(); exit(0); }
         if (launched == SOTB_LAUNCHER_BLOCKED) exit(1);
+        const int resolution = sotb_render_resolution(settings_file);
+        if (resolution >= 0 && resolution < SOTB_RESOLUTION_COUNT)
+            sotb_resolution_guard_arm(user_dir, sotb_resolutions[resolution].key);
     }
 
     {

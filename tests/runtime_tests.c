@@ -9,6 +9,10 @@ static int checks, failures;
 #define CHECK(condition) do { __atomic_add_fetch(&checks, 1, __ATOMIC_RELAXED); if (!(condition)) { __atomic_add_fetch(&failures, 1, __ATOMIC_RELAXED); printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
 
 void runtime_thread_keys_cleanup(void) {}
+static atomic_int loading_screen_finished_calls;
+void sotb_resolution_guard_loading_screen_finished(void) {
+    atomic_fetch_add(&loading_screen_finished_calls, 1);
+}
 
 typedef int32_t (ABI *CreateFn)(GuestThread **, ThreadAttr **, GuestEntry, void *, const char *);
 typedef int32_t (ABI *JoinFn)(GuestThread *, void **);
@@ -403,6 +407,28 @@ static void test_report(void) {
     runtime_thread_wait_end();
 }
 
+static void test_loading_screen_milestone(void) {
+    GuestThread *t = NULL;
+    void *result = NULL;
+    CHECK(atomic_load(&loading_screen_finished_calls) == 0);
+
+    CHECK(create_thread(&t, NULL, return_argument, (void *)1, "unrelated-worker") == 0);
+    CHECK(join_thread(t, &result) == 0);
+    CHECK(atomic_load(&loading_screen_finished_calls) == 0);
+
+    CHECK(create_thread(&t, NULL, return_argument, (void *)2, "SlateLoadingThread") == 0);
+    CHECK(join_thread(t, &result) == 0);
+    CHECK(atomic_load(&loading_screen_finished_calls) == 0);
+
+    CHECK(create_thread(&t, NULL, return_argument, (void *)3, "SlateLoadingThread") == 0);
+    CHECK(join_thread(t, &result) == 0);
+    CHECK(atomic_load(&loading_screen_finished_calls) == 1);
+
+    CHECK(create_thread(&t, NULL, return_argument, (void *)4, "SlateLoadingThread") == 0);
+    CHECK(join_thread(t, &result) == 0);
+    CHECK(atomic_load(&loading_screen_finished_calls) == 1);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     runtime_thread_attach_main();
@@ -433,6 +459,7 @@ int main(void) {
     test_cancellation_source();
     test_mutexes_and_wait_states();
     test_report();
+    test_loading_screen_milestone();
     printf("runtime: %d checks, %d failed\n", checks, failures);
     return failures ? 1 : 0;
 }

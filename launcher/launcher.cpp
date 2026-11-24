@@ -31,6 +31,7 @@
 #include "page_icons.h"
 #include "paths.h"
 #include "placement.h"
+#include "resolution_recovery.h"
 #include "settings.h"
 #include "startup_phase.h"
 #include "text_languages.h"
@@ -175,6 +176,22 @@ public:
         std::error_code ec;
         std::filesystem::create_directories(user_dir_, ec);
         std::filesystem::create_directories(logs_dir_, ec);
+        const ResolutionRecovery recovery = RecoverFailedRenderResolution(
+            settings_, user_dir_, logs_dir_, PathFromUtf8(config.log_file ? config.log_file : ""));
+        if (recovery.attempted) {
+            const std::string stage = recovery.stage.empty() ? "" : " at '" + recovery.stage + "'";
+            if (recovery.recovered) {
+                std::printf("Resolution guard: %s failed during startup (%s%s); restored %s\n",
+                            recovery.requested.c_str(), recovery.reason.c_str(), stage.c_str(),
+                            SOTB_RESOLUTION_GUARD_SAFE_KEY);
+            } else if (recovery.reason == "no game log") {
+                std::printf("Resolution guard: %s attempt has no game log; resolution kept\n",
+                            recovery.requested.c_str());
+            } else {
+                std::printf("Resolution guard: %s attempt ended %s%s; resolution kept\n",
+                            recovery.requested.c_str(), recovery.reason.c_str(), stage.c_str());
+            }
+        }
         Refresh();
         if (LoadLauncherImage("header-art.png", header_art_)) {
             header_aspect_ = float(header_art_.width) / float(header_art_.height);

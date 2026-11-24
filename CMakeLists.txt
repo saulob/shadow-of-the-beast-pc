@@ -38,11 +38,15 @@ target_include_directories(sotb_startup_phase PUBLIC src)
 target_compile_options(sotb_startup_phase PRIVATE -Wall -Wextra -Werror)
 
 add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c)
+add_library(sotb_resolution_guard STATIC src/resolution_guard.c)
 add_library(sotb_exit_game_l10n STATIC src/sotb_exit_game_l10n.c)
 target_include_directories(sotb_exit_game_l10n PUBLIC src)
 target_compile_options(sotb_exit_game_l10n PRIVATE -Wall -Wextra -Werror)
 target_include_directories(sotb_guest_display PUBLIC src)
 target_compile_options(sotb_guest_display PRIVATE -Wall -Wextra -Werror)
+target_include_directories(sotb_resolution_guard PUBLIC src)
+target_link_libraries(sotb_resolution_guard PUBLIC sotb_guest_display sotb_startup_phase)
+target_compile_options(sotb_resolution_guard PRIVATE -Wall -Wextra -Werror)
 
 add_library(sotb_keys STATIC src/sotb_keys.c src/sotb_pad.c src/sotb_pad_prompts.c)
 target_include_directories(sotb_keys PUBLIC src)
@@ -121,7 +125,7 @@ target_compile_options(shadow_of_the_beast PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall
 target_compile_definitions(shadow_of_the_beast PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
 target_link_options(shadow_of_the_beast PRIVATE -Wl,--disable-high-entropy-va
     "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
-target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotb_exit_game_l10n sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
+target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotb_exit_game_l10n sotb_resolution_guard sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
     onecore bcrypt ws2_32 user32 -pthread)
 add_dependencies(shadow_of_the_beast trg-updater)
 
@@ -361,3 +365,9 @@ add_executable(sotb-loading-hint-layout-tests EXCLUDE_FROM_ALL tests/loading_hin
 target_include_directories(sotb-loading-hint-layout-tests PRIVATE src)
 set_target_properties(sotb-loading-hint-layout-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-loading-hint-layout-tests PRIVATE -Wall -Wextra -Werror)
+
+add_executable(sotb-resolution-guard-tests EXCLUDE_FROM_ALL tests/resolution_guard_tests.cpp)
+target_include_directories(sotb-resolution-guard-tests PRIVATE src launcher)
+target_link_libraries(sotb-resolution-guard-tests PRIVATE sotb_resolution_guard)
+set_target_properties(sotb-resolution-guard-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-resolution-guard-tests PRIVATE -Wall -Wextra -Werror)

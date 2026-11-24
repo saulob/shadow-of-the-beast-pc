@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Builds and runs the focused headless Bug Report, crash dump correlation and upload, device-lost reporting, startup diagnostics, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, in-game controller prompt assets, launcher placement, launcher startup, launcher UI stall, launcher Escape navigation, Bug Report feedback, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening and shader interface hardening tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
+  Builds and runs the focused headless Bug Report, crash dump correlation and upload, device-lost reporting, startup diagnostics, updater, crash report, guest memory, CPU compatibility, Vulkan preflight, buffer arena, build identity, pipeline cache, pipeline warm-up, audio backlog recovery, controller rebinding, controller prompt, in-game controller prompt assets, launcher placement, launcher startup, launcher UI stall, launcher Escape navigation, Bug Report feedback, GPU command snapshot, Vulkan recording, Vulkan device lost, GPU crash timeline, GPU memory fallback, swapchain state, frame pacing, presentation hardening, shader interface hardening, loading-screen hint layout and resolution guard tests, plus the runtime thread cancellation and save mount diagnostics tests: no window, no game launch, no audio, no Internet, nothing deployed.
 .DESCRIPTION
   Needs the build configured once by tools\build.ps1. Only the test target is built, incrementally in the existing build
   folder; the game executable, the launcher and the video core are not rebuilt. Every step runs even after one fails; the
@@ -13,14 +13,29 @@
   Steps: the launcher's Bug Report test (builds the request the Worker must accept), the crash dump correlation test, the
   crash dump upload test against a stand-in service (builds the dump request and chunks the Worker must accept), the
   device-lost reporting test, the startup diagnostics test, the Worker's tests in Node on a
-  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the pipeline warm-up test, the audio backlog recovery test, the controller rebinding test, the controller prompt test, the launcher placement, startup, UI stall and Escape navigation tests, the Bug Report feedback test, the GPU command snapshot test, the Vulkan recording and synchronization test, the Vulkan device lost test, the GPU crash timeline test, the runtime thread cancellation test, the save mount diagnostics test, the GPU memory fallback test, the swapchain state test, the frame pacing and high frame rate test, the presentation hardening test and the shader interface hardening test.
+  disposable in-memory database, tools\worker.ps1 against a stand-in npx, the updater tests (rules, loopback server, helper in a temporary folder), the module history test of the crash report, the guest memory test, the CPU compatibility test, the Vulkan preflight test, the buffer arena (sparse or fully resident) test, the build identity (unsupported build diagnostics) test, the pipeline cache test, the pipeline warm-up test, the audio backlog recovery test, the controller rebinding test, the controller prompt test, the launcher placement, startup, UI stall and Escape navigation tests, the Bug Report feedback test, the GPU command snapshot test, the Vulkan recording and synchronization test, the Vulkan device lost test, the GPU crash timeline test, the runtime thread cancellation test, the save mount diagnostics test, the GPU memory fallback test, the swapchain state test, the frame pacing and high frame rate test, the presentation hardening test, the shader interface hardening test, the loading-screen hint layout test and the resolution guard test.
 .PARAMETER TimeoutSeconds
   Fails a step that runs longer than this.
+.PARAMETER List
+  Lists the suites by name and exits; nothing is built or run.
+.PARAMETER Filter
+  Runs only the suites whose name contains this text (case-insensitive; _ and - are equivalent).
+.PARAMETER WindowsOnly
+  Every suite here is Windows headless; accepted for the shared test convention.
 .EXAMPLE
   .\tools\test.ps1
+.EXAMPLE
+  .\tools\test.ps1 -List
+.EXAMPLE
+  .\tools\test.ps1 -Filter resolution_guard_tests
 #>
 [CmdletBinding()]
-param([int]$TimeoutSeconds = 300)
+param(
+    [int]$TimeoutSeconds = 300,
+    [switch]$List,
+    [string]$Filter = '',
+    [switch]$WindowsOnly
+)
 
 . (Join-Path $PSScriptRoot '_common.ps1')
 . (Join-Path $PSScriptRoot '_progress.ps1')
@@ -107,6 +122,8 @@ function Invoke-DeviceLostReporting { Invoke-FocusedTest 'sotb-device-lost-repor
 
 function Invoke-StartupDiagnostics { Invoke-FocusedTest 'sotb-startup-diagnostics-tests' '^startup diagnostics tests' }
 
+function Invoke-ResolutionGuard { Invoke-FocusedTest 'sotb-resolution-guard-tests' '^resolution_guard_tests' }
+
 function Invoke-UpdateRules { Invoke-FocusedTest 'sotb-update-tests' }
 
 function Invoke-UpdateNetwork { Invoke-FocusedTest 'sotb-update-network-tests' }
@@ -120,6 +137,8 @@ function Invoke-GuestMemory { Invoke-FocusedTest 'memory_windows_test' }
 function Invoke-CpuCompatibility { Invoke-FocusedTest 'sotb-isa-tests' '^(real image|site table|table shapes|no LZCNT|isa tests)' }
 
 function Invoke-RendererSelection { Invoke-FocusedTest 'sotb-renderer-selection-tests' '^renderer selection tests' }
+
+function Invoke-LoadingHintLayout { Invoke-FocusedTest 'sotb-loading-hint-layout-tests' '^loading_hint_layout_tests' }
 
 function Invoke-VulkanPreflight { Invoke-FocusedTest 'sotb-vulkan-preflight-tests' '^vulkan preflight tests' }
 
@@ -254,6 +273,7 @@ $steps = @(
     @{ Name = 'crash-dump-upload'; Title = 'Crash dump upload: Crash detected and the optional attachment, report with and without a dump, chunks resumed from what the service holds, lost answers and already-stored chunks, refusals stop, failures keep the report, retry under the same Report ID, repeated send with the submission key files one report, no local path sent (stand-in service, no network)'; Block = { Invoke-CrashDumpUpload } },
     @{ Name = 'device-lost-reporting'; Title = 'Device-lost reporting: the device-lost owner''s own lines classify the session (exit code 25 path), reason with operation, result, stage, GPU, driver and bounded fault text, timeline left in the log, missing fault data, first fault owns the session, last startup stage kept, with and without a dump (no Vulkan device)'; Block = { Invoke-DeviceLostReporting } },
     @{ Name = 'startup-diagnostics'; Title = 'Startup diagnostics: one current stage printed once per change, GPU initialization and first frame presented stages, no per-frame growth, empty stages ignored, loader stage order unchanged, the stage a failure happened in reaches the report, module history keeps the stage (no game, no window)'; Block = { Invoke-StartupDiagnostics } },
+    @{ Name = 'resolution-guard-tests'; Title = 'Resolution guard: a high-resolution startup crash restores 1440p, a gameplay crash, clean run, pre-patch failure and unknown outcome keep the setting, 1800p and 4K arm the marker, marker arm/read/clear, the gameplay milestone clears it, 1440p, 1800p and 4K stay selectable (pure policy and marker files, no game, no window)'; Block = { Invoke-ResolutionGuard } },
     @{ Name = 'bug-report-service'; Title = 'Launcher: Bug Report service (Node, disposable database): submission, receipts, limits, retention, admin, dashboard, crash dump announcement, resumable chunked upload, completion checks, minidump download and retention, submission key, and the launcher''s own report and dump requests'; Block = { Invoke-WorkerService } },
     @{ Name = 'worker-script'; Title = 'Launcher: worker.ps1 stand-in npx: placeholders, missing files, dry run, failures; nothing deployed'; Block = { Invoke-WorkerScript } },
     @{ Name = 'updater-rules'; Title = 'Updater: versions, release JSON, SHA-256, ZIP safety, staging, manifest, protected data, install, rollback and release contract (no network)'; Block = { Invoke-UpdateRules } },
@@ -265,6 +285,7 @@ $steps = @(
     @{ Name = 'save-mount-diagnostics'; Title = 'Save data: mount, search, delete and save memory through the real save and file layers, and one bounded failure line for Mount, Mount2 and TransferringMount (call, directory, error, mode, no host path, hostile names) in a synthetic save root; the real user save is read only and skipped when absent'; Block = { Invoke-SaveMountDiagnostics } },
     @{ Name = 'cpu-compatibility'; Title = 'CPU compatibility: MOVBE, BMI1 and LZCNT (host classification, MOVBE and BMI1 emulation, LZCNT rewrite run on synthetic forms and applied to every site; the real boot image is read only and skipped when absent)'; Block = { Invoke-CpuCompatibility } },
     @{ Name = 'renderer-selection'; Title = 'Renderer selection: the Renderer setting, Auto fallback and the sources that must agree (no window, no context)'; Block = { Invoke-RendererSelection } },
+    @{ Name = 'loading-hint-layout-tests'; Title = 'Loading screen hint layout: 1920x1080 identity, 1440p 1.333x, 4K 2x, centered bar, proportional placement, ultrawide kept, vtable patch fingerprint validation (pure geometry, no window)'; Block = { Invoke-LoadingHintLayout } },
     @{ Name = 'vulkan-preflight'; Title = 'Vulkan preflight: loader, runtime, device, mandatory extensions and features, optional capabilities, explicit Vulkan and Auto fallback (synthetic capabilities, no Vulkan, no window)'; Block = { Invoke-VulkanPreflight } },
     @{ Name = 'buffer-arena'; Title = 'GPU memory: sparse or fully resident arena decision, layout, overflow, allocation failure rollback and migration (fake arenas, no Vulkan device)'; Block = { Invoke-BufferArena } },
     @{ Name = 'build-identity'; Title = 'Unsupported build diagnostics: supported identity, altered fields, candidates, deterministic report, refusal before guest code (synthetic; the real boot image is read only and skipped when absent)'; Block = { Invoke-BuildIdentity } },
@@ -298,6 +319,21 @@ $steps = @(
     @{ Name = 'nvidia-hardening'; Title = 'Shader interface hardening: one clip distance rule for vertex and fragment stages, pipelines without a pixel shader, retired shader binaries (pure rules and source wiring, no Vulkan, no compilation)'; Block = { Invoke-NvidiaHardening } },
     @{ Name = 'progress-reporter'; Title = 'Test progress: percentage, bar, durations, ETA, check counts, previous group, timing summary, redirected output and a synthetic long group (synthetic time, no sleeping)'; Block = { Invoke-ProgressReporter } }
 )
+
+if ($Filter) {
+    $needle = ($Filter -replace '_', '-').ToLowerInvariant()
+    $steps = @($steps | Where-Object { (($_.Name -replace '_', '-').ToLowerInvariant()) -like "*$needle*" })
+    if ($steps.Count -eq 0) {
+        Write-Host "No suite matches '$Filter'."
+        Write-Host 'Run tools\test.ps1 -List to see the suite names.'
+        exit 2
+    }
+}
+if ($List) {
+    foreach ($step in $steps) { Write-Output ('{0}  {1}' -f $step.Name, $step.Title) }
+    exit 0
+}
+if ($Filter) { Write-Host ("Filter: {0} ({1} suite(s))" -f $Filter, $steps.Count) }
 
 $tc = Resolve-Toolchain 'auto'
 $env:PATH = "$($tc.Bin);$env:PATH"

@@ -42,6 +42,7 @@ add_library(sotb_launcher_core STATIC
     paths.cpp
     pkg_extract.cpp
     report_history.cpp
+    resolution_recovery.cpp
     settings.cpp
     text_languages.cpp
     trophy_content.cpp
@@ -55,7 +56,7 @@ add_library(sotb_launcher_core STATIC
     ${PROJECT_SOURCE_DIR}/src/trophies/trp_archive.cpp
     crypto_win.cpp)
 target_include_directories(sotb_launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(sotb_launcher_core PUBLIC trg_core SDL3::SDL3 sotb_startup_phase sotb_guest_display
+target_link_libraries(sotb_launcher_core PUBLIC trg_core SDL3::SDL3 sotb_startup_phase sotb_guest_display sotb_resolution_guard
     PRIVATE ZLIB::ZLIB bcrypt winhttp)
 target_compile_definitions(sotb_launcher_core PRIVATE SOTB_PORT_VERSION="${PROJECT_VERSION}")
 

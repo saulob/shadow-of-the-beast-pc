@@ -7,6 +7,7 @@
  * the same 9-byte instruction with another displacement. */
 #define _GNU_SOURCE
 #include "runtime.h"
+#include "resolution_guard.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -79,6 +80,8 @@ static _Thread_local int32_t guest_errno;
 static const unsigned char *tls_template;
 static uint64_t tls_filesz, tls_memsz, tls_align=16;
 static size_t created, joined_count, exited;
+static GuestThread *watched_loading_thread;
+static int loading_thread_count;
 #ifndef _WIN32
 /* Detached threads whose stacks can be reused once they have exited; the host threads stay joinable for that. */
 static GuestThread *to_reap;
@@ -434,6 +437,8 @@ static void *host_start(void *p) {
     set_host_name(t->name);
     scrub_stack();
     if (!exit_setjmp(t)) t->result=t->entry(t->argument);
+    if (t == __atomic_load_n(&watched_loading_thread, __ATOMIC_ACQUIRE))
+        sotb_resolution_guard_loading_screen_finished();
     runtime_thread_keys_cleanup();
     pthread_mutex_lock(&lock); t->finished=1; ++exited;
 #ifndef _WIN32
@@ -452,6 +457,11 @@ static int32_t create(GuestThread **out,ThreadAttr **attr_slot,GuestEntry entry,
     if (a) { t->attr=*a; t->attr.next=NULL; }
     t->entry=entry; t->argument=argument; t->detached=t->attr.detached;
     snprintf(t->name,sizeof(t->name),"%s",name ? name : "guest");
+    /* The second SlateLoadingThread is the level loading screen; its exit is the first stable gameplay milestone. */
+    if (!strcmp(t->name,"SlateLoadingThread")) {
+        const int ordinal=__atomic_add_fetch(&loading_thread_count,1,__ATOMIC_ACQ_REL);
+        if (ordinal==2) __atomic_store_n(&watched_loading_thread,t,__ATOMIC_RELEASE);
+    }
     pthread_attr_t host;
     pthread_attr_init(&host);
     uint64_t stack=t->attr.stack<MIN_STACK ? MIN_STACK : t->attr.stack;
