@@ -147,7 +147,28 @@ GuestSlateGeometry guest_scale_loading_geometry(const GuestSlateGeometry *allott
     return out;
 }
 
+GuestSlateGeometry guest_safe_area_geometry(const GuestSlateGeometry *allotted) {
+    GuestSlateGeometry out = *allotted;
+    if (allotted->size_x <= 0.0f || allotted->size_y <= 0.0f) return out;
+    const float safe_width = allotted->size_y * (16.0f / 9.0f);
+    if (allotted->size_x <= safe_width * 1.01f) return out;
+    const float offset = (allotted->size_x - safe_width) * 0.5f;
+    out.size_x = safe_width;
+    out.position_x = allotted->position_x + offset;
+    out.abs_pos_x = allotted->abs_pos_x + offset * allotted->scale;
+    out.render_tx = allotted->render_tx + offset * allotted->render_m00;
+    out.render_ty = allotted->render_ty + offset * allotted->render_m01;
+    return out;
+}
+
+static void (*loading_observer)(const GuestSlateGeometry *allotted);
+
+void guest_loading_screen_set_observer(void (*observer)(const GuestSlateGeometry *allotted)) {
+    loading_observer = observer;
+}
+
 static GUEST_ABI void loading_screen_arrange_children(void *self, const GuestSlateGeometry *allotted, void *arranged) {
+    if (loading_observer) loading_observer(allotted);
     const GuestSlateGeometry scaled = guest_scale_loading_geometry(allotted);
     original_loading_arrange(self, &scaled, arranged);
 }

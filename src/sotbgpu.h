@@ -37,6 +37,10 @@ int sotbgpu_overlay_captures_input(void);
 int sotbgpu_controller_rumble(void);
 int sotbgpu_latency_trace_enabled(void);
 uint64_t sotbgpu_latency_press_ns(void);
+/* The loading screen is being drawn in the central 16:9 part: the sides show a blurred copy of it for a short time. */
+void sotbgpu_mark_loading_fill(void);
+/* The open frontend screen: 1 the title, 2 the map, anything else none. Their sides get the vignette for exactly that long. */
+void sotbgpu_set_frontend_fill(int context);
 #ifdef __cplusplus
 }
 #endif

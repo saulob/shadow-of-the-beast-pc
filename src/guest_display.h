@@ -67,6 +67,12 @@ typedef struct {
 int guest_apply_display_size(uint8_t *image, size_t image_size, int width, int height, char *error, size_t error_size);
 
 GuestSlateGeometry guest_scale_loading_geometry(const GuestSlateGeometry *allotted);
+
+/* Told the geometry the loading screen is given each time it is arranged; null stops it. */
+void guest_loading_screen_set_observer(void (*observer)(const GuestSlateGeometry *allotted));
+
+/* The centered 16:9 part of a geometry that is wider than 16:9, at its full height; any other geometry unchanged. */
+GuestSlateGeometry guest_safe_area_geometry(const GuestSlateGeometry *allotted);
 int guest_apply_loading_screen_layout(uint8_t *image, size_t image_size, char *error, size_t error_size);
 
 #ifdef __cplusplus

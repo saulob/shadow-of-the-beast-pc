@@ -26,6 +26,7 @@ inline constexpr char kRendererKey[] = "renderer";
 inline constexpr char kGraphicsCardKey[] = "graphics_card";
 inline constexpr char kRenderResolutionKey[] = "render_resolution";
 inline constexpr char kAspectRatioKey[] = "aspect_ratio";
+inline constexpr char kTrueUltrawideKey[] = "true_ultrawide";
 inline constexpr char kAntiAliasingKey[] = "smaa";
 inline constexpr char kAnisotropyKey[] = "anisotropy";
 inline constexpr char kSkipIntroKey[] = "skip_intro";
@@ -88,6 +89,9 @@ inline constexpr char kRenderResolutionHelp[] =
     "1440p and above need a powerful graphics card.";
 inline constexpr char kAspectRatioHelp[] =
     "Sets the game's target rendering format and the Window size choices. Applies at the next game start.";
+inline constexpr char kTrueUltrawideHelp[] =
+    "Opens the 3D view sideways in 21:9 and 32:9 with the same vertical view as 16:9, and keeps the game's widgets in a "
+    "centered 16:9 area. Applies at the next game start.";
 inline constexpr char kMonitorHelp[] = "The display the game opens on.";
 inline constexpr char kVSyncHelp[] =
     "On prevents tearing. Off allows it, for the lowest latency and G-Sync/FreeSync.";

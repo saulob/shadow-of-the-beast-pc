@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "guest_display.h"
+#include "guest_ultrawide.h"
 #include "sotb_keys.h"
 #include "sotb_pad.h"
 #include "sotb_pad_prompts.h"
@@ -38,6 +39,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kSharpenStrengthKey, "75"},
     {kRenderResolutionKey, kNativeResolution},
     {kAspectRatioKey, kDefaultAspectRatio},
+    {kTrueUltrawideKey, "1"},
     {kGraphicsCardKey, ""},
     {kRendererKey, kDefaultRenderer},
     {kAntiAliasingKey, "0"},
@@ -246,6 +248,8 @@ std::string SettingsSummary(const LauncherSettings& settings, const char* game_b
     const SotbRenderTarget target = sotb_render_target(&resolution, &aspect);
     line("Render resolution " + std::string(resolution.key) + " " + std::to_string(target.width) + "x" +
          std::to_string(target.height) + ", aspect ratio " + aspect.key);
+    line(std::string("True Ultrawide ") + OnOff(settings.GetBool(kTrueUltrawideKey, true)) +
+         (sotb_ultrawide_wanted(aspect.key) ? "" : " (no effect in this shape)"));
     line(std::string("Window ") + (settings.Get(kDisplayModeKey, "windowed") == "borderless" ? "Borderless Fullscreen"
                                                                                            : "Windowed") +
          " " + settings.Get(kWindowWidthKey, "1920") + "x" + settings.Get(kWindowHeightKey, "1080") + ", monitor " +
@@ -297,6 +301,11 @@ extern "C" int sotb_render_resolution(const char* settings_file) {
 extern "C" int sotb_aspect_ratio(const char* settings_file) {
     const Sotb::LauncherSettings settings(Sotb::PathFromUtf8(settings_file ? settings_file : ""));
     return sotb_aspect_index(settings.Get(Sotb::kAspectRatioKey, Sotb::kDefaultAspectRatio).c_str());
+}
+
+extern "C" int sotb_true_ultrawide(const char* settings_file) {
+    const Sotb::LauncherSettings settings(Sotb::PathFromUtf8(settings_file ? settings_file : ""));
+    return settings.GetBool(Sotb::kTrueUltrawideKey, true) ? 1 : 0;
 }
 
 extern "C" void sotb_log_settings_summary(const char* settings_file, const char* game_build) {

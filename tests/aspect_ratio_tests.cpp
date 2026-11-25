@@ -160,6 +160,23 @@ void TestPersistence() {
     }
     WriteAll(file, "aspect_ratio =\n");
     CHECK(sotb_aspect_ratio(file.string().c_str()) == 0);
+
+    // Whatever else an older or damaged file holds, the shape is 16:9 Original: no key, an empty value, a label, an
+    // index, another vocabulary or a stray character never selects another shape.
+    for (const char* line : {"", "render_resolution = 4K\nwindow_width = 2520\nwindow_height = 1080\n", "aspect_ratio = 2\n",
+                             "aspect_ratio = -1\n", "aspect_ratio = 1\n", "aspect_ratio = ultrawide\n", "aspect_ratio = auto\n",
+                             "aspect_ratio = 21:9 Ultrawide\n", "aspect_ratio = 21x9\n", "aspect_ratio = 21:9;\n",
+                             "aspect_ratio = true\n", "true_ultrawide = 1\n", "aspect_ratio==21:9\n", "# aspect_ratio = 21:9\n"}) {
+        WriteAll(file, line);
+        const LauncherSettings legacy(file);
+        CHECK(legacy.Get(kAspectRatioKey, kDefaultAspectRatio) == "16:9");
+        CHECK(sotb_aspect_ratio(file.string().c_str()) == 0);
+        CHECK(Contains(SettingsSummary(legacy, nullptr), ", aspect ratio 16:9\n"));
+    }
+    fs::remove(file, ec);
+    CHECK(sotb_aspect_ratio(file.string().c_str()) == 0);
+    CHECK(Contains(SettingsSummary(LauncherSettings(file), nullptr), ", aspect ratio 16:9\n"));
+    CHECK(sotb_aspect_index("16:9") == 0 && std::string(sotb_aspect_ratios[0].name) == "16:9 Original");
     CHECK(sotb_aspect_ratio(nullptr) == 0 && sotb_aspect_ratio("") == 0);
     CHECK(sotb_aspect_ratio((dir / "missing.ini").string().c_str()) == 0);
 
@@ -574,9 +591,10 @@ void TestWiring() {
     // This round changes the shape of the render target and nothing about the camera, the HUD or the pictures.
     for (const char* name : {"src/guest_display.c", "src/loader.c", "launcher/launcher.cpp", "launcher/settings.cpp"}) {
         const std::string text = ReadAll(Root() / name);
-        for (const char* forbidden : {"true_ultrawide", "True Ultrawide", "Hor+", "ortho"}) {
+        for (const char* forbidden : {"ortho"}) {
             CHECK(!Contains(text, forbidden));
         }
+        CHECK(std::string(name) == "src/loader.c" || !Contains(text, "Hor+"));
         CHECK(!Contains(text, std::string("DEBUG_") + "SAULO"));
     }
 

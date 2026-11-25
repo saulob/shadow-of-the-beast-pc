@@ -113,6 +113,14 @@ target_compile_definitions(sotb-aspect-ratio-tests PRIVATE SOTB_SOURCE_DIR="${PR
 set_target_properties(sotb-aspect-ratio-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-aspect-ratio-tests PRIVATE -Wall -Wextra)
 
+add_executable(sotb-true-ultrawide-tests EXCLUDE_FROM_ALL ../tests/true_ultrawide_tests.cpp ../src/guest_patches.c
+    ../src/sotb_exit_game.c ../src/sotb_menu_buttons.c)
+target_link_libraries(sotb-true-ultrawide-tests PRIVATE sotb_launcher_core sotb_exit_game_l10n sotb_keys SDL3::SDL3)
+target_include_directories(sotb-true-ultrawide-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim ${PROJECT_SOURCE_DIR}/tests)
+target_compile_definitions(sotb-true-ultrawide-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-true-ultrawide-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-true-ultrawide-tests PRIVATE -Wall -Wextra)
+
 add_executable(sotb-pad-binding-tests EXCLUDE_FROM_ALL ../tests/pad_binding_tests.cpp)
 target_link_libraries(sotb-pad-binding-tests PRIVATE sotb_launcher_core sotb_keys SDL3::SDL3)
 target_compile_definitions(sotb-pad-binding-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

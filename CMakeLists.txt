@@ -37,7 +37,7 @@ add_library(sotb_startup_phase STATIC src/startup_phase.c)
 target_include_directories(sotb_startup_phase PUBLIC src)
 target_compile_options(sotb_startup_phase PRIVATE -Wall -Wextra -Werror)
 
-add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c src/psn_notice.c)
+add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c src/psn_notice.c src/guest_ultrawide.c src/guest_hud.c)
 add_library(sotb_resolution_guard STATIC src/resolution_guard.c)
 add_library(sotb_exit_game_l10n STATIC src/sotb_exit_game_l10n.c)
 target_include_directories(sotb_exit_game_l10n PUBLIC src)

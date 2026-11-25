@@ -23,6 +23,7 @@
 #include "game_profile.h"
 #include "gameplay_rows.h"
 #include "guest_display.h"
+#include "guest_ultrawide.h"
 #include "header_art.h"
 #include "incident_page.h"
 #include "launcher_quit.h"
@@ -478,6 +479,9 @@ private:
             const int height = settings_.GetInt(kWindowHeightKey, kDefaultWindowHeight);
             settings_.SetInt(kWindowWidthKey, WindowSizeOf(height, SavedAspectRatio()).width);
         }
+        ImGui::BeginDisabled(!sotb_ultrawide_wanted(SavedAspectRatio().key));
+        ui.Toggle("True Ultrawide", kTrueUltrawideHelp, kTrueUltrawideKey, true, "Off", "On");
+        ImGui::EndDisabled();
         std::vector<trg::Option> renderers;
         for (const Choice& choice : kRendererChoices) {
             renderers.push_back({std::string(choice.key), std::string(choice.name)});

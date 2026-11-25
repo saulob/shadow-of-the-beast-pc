@@ -20,6 +20,7 @@
 #include "sotb_vulkan_support.h"
 #include "sotb_png.h"
 #include "sotb_settings.h"
+#include "sotb_side_fill.h"
 #include "sotb_title.h"
 #include "sotb_toggles.h"
 #include "sotb_write_log.h"
@@ -366,6 +367,14 @@ extern "C" int sotbgpu_latency_trace_enabled(void) {
 
 extern "C" uint64_t sotbgpu_latency_press_ns(void) {
     return SotbLatencyTrace::press_ns.load(std::memory_order_relaxed);
+}
+
+extern "C" void sotbgpu_mark_loading_fill(void) {
+    SotbSideFill::MarkLoading(SotbSideFill::NowMs());
+}
+
+extern "C" void sotbgpu_set_frontend_fill(int context) {
+    SotbSideFill::SetScreen(context == 1 ? SotbSideFill::TitleVignette : context == 2 ? SotbSideFill::MapVignette : SotbSideFill::None);
 }
 
 static int (*g_exit_save_active)(void) = nullptr;

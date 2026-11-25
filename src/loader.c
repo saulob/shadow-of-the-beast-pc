@@ -13,6 +13,8 @@
 #include "import_slots.h"
 #include "guest_display.h"
 #include "resolution_guard.h"
+#include "guest_hud.h"
+#include "guest_ultrawide.h"
 #include "psn_notice.h"
 #include "skip_intro.h"
 #include "sotb_exit_game.h"
@@ -1188,6 +1190,33 @@ int main(int argc, char **argv) {
                 puts("PlayStation Network: ConnectionSuccess text overridden with blank text");
             } else {
                 printf("PlayStation Network: ConnectionSuccess blank text unavailable: %s\n", reason);
+            }
+        }
+        if (sotb_ultrawide_wanted(aspect_ratio->key)) {
+            char reason[160];
+            if (!sotb_ultrawide_enabled(aspect_ratio->key, sotb_true_ultrawide(settings_file))) {
+                puts("Ultrawide: True Ultrawide is off");
+            } else if (guest_ultrawide_apply(image, size, cave + 3584, cave_size - 3584, reason, sizeof(reason))) {
+                printf("Ultrawide: Hor+ projection hook installed for %s\n", aspect_ratio->key);
+                if (guest_ultrawide_apply_safe_area(image, size, reason, sizeof(reason))) {
+                    puts("Ultrawide: 16:9 safe area for the game's widgets installed");
+                } else {
+                    printf("Ultrawide: safe area unavailable: %s\n", reason);
+                }
+                if (guest_hud_apply(image, size, cave + 3840, cave_size - 3840, reason, sizeof(reason))) {
+                    puts("Ultrawide: HUD components anchored to the screen edges");
+                } else {
+                    printf("Ultrawide: HUD anchoring unavailable: %s\n", reason);
+                }
+                if (guest_ultrawide_apply_frontend(image, size, reason, sizeof(reason))) {
+                    puts("Ultrawide: frontend screen state (title, map) read from the game's screen stack");
+                } else {
+                    printf("Ultrawide: frontend screen state unavailable: %s\n", reason);
+                }
+                sotb_ultrawide_enable_side_fill(sotbgpu_mark_loading_fill, sotbgpu_set_frontend_fill);
+                puts("Ultrawide: title and map side vignette and blurred loading sides on");
+            } else {
+                printf("Ultrawide: Hor+ unavailable for %s: %s\n", aspect_ratio->key, reason);
             }
         }
         if (sotb_skip_intro(settings_file)) {

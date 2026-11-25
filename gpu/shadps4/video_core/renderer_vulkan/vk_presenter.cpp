@@ -16,6 +16,7 @@
 #include "sotb_overlay.h"
 #include "sotb_pipeline_startup.h"
 #include "sotb_settings.h"
+#include "sotb_side_fill.h"
 #include "sotb_graphics.h"
 #include "startup_phase.h"
 #include "video_core/renderer_vulkan/vk_presenter.h"
@@ -435,6 +436,9 @@ Frame* Presenter::PrepareFrame(const Libraries::VideoOut::BufferAttributeGroup& 
     image_view = fsr_pass.Render(cmdbuf, image_view, image_size, {frame->width, frame->height},
                                  fsr_settings, frame->is_hdr);
 
+    const float side_fraction = SotbSideFill::CentralFraction(image_size.width, image_size.height);
+    pp_settings.side_fill = side_fraction > 0.0f ? u32(SotbSideFill::Current(SotbSideFill::NowMs())) : 0u;
+    pp_settings.side_fraction = side_fraction > 0.0f ? side_fraction : 1.0f;
     pp_pass.Render(cmdbuf, image_view, image_size, *frame, pp_settings);
 
     // Flush frame creation commands.

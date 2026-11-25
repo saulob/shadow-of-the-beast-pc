@@ -370,7 +370,7 @@ void TestManagedSettings() {
         CHECK(keys.count(key) == 1);
     }
     CHECK(keys.count("overlay_corner") == 0 && keys.count("overlay_scale") == 0);
-    CHECK(keys.count(kRenderResolutionKey) == 1 && keys.count(kAspectRatioKey) == 1 && keys.count("true_ultrawide") == 0);
+    CHECK(keys.count(kRenderResolutionKey) == 1 && keys.count(kAspectRatioKey) == 1 && keys.count(kTrueUltrawideKey) == 1);
     for (int action = 0; action < SOTB_KEY_COUNT; ++action) {
         CHECK(keys.count(sotb_key_actions[action].ini_key) == 1);
     }

@@ -29,6 +29,7 @@ The game package is only read. Reinstalling replaces the game folder and leaves 
 | Window size | `window_width`, `window_height` | heights 720, 900, 1080, 1440 and 2160 in the Aspect Ratio's shape (16:9: 1280x720, 1600x900, 1920x1080, 2560x1440, 3840x2160), whatever the monitor. A size that does not fit the monitor is reduced proportionally only when the window is created; the saved value is not changed |
 | Monitor | `monitor` | 1-based display |
 | Aspect Ratio | `aspect_ratio` | 16:9 Original (default), 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3, 5:4; an unknown value is 16:9; applies at the next game start |
+| True Ultrawide | `true_ultrawide` | On (default), Off; only for 21:9 and 32:9 (greyed out otherwise). On opens the 3D view sideways (Hor+) in gameplay and on the title and lays the game's widgets out in a centered 16:9 area while it does; off keeps the plain Aspect Ratio; applies at the next game start |
 | Renderer | `renderer` | Vulkan (default), Auto, OpenGL (experimental), Direct3D 11 (experimental) |
 | Graphics card | `graphics_card` | the name of a usable Vulkan device (no Auto entry; the first usable device when unset) |
 | VSync | `vsync` | Off, On |

@@ -71,6 +71,8 @@ const char* sotb_text_language_key(const char* settings_file);
 int sotb_detailed_logging(const char* settings_file);
 int sotb_render_resolution(const char* settings_file);
 int sotb_aspect_ratio(const char* settings_file);
+/* 1 unless the settings file turns true_ultrawide off. */
+int sotb_true_ultrawide(const char* settings_file);
 int sotb_skip_intro(const char* settings_file);
 void sotb_log_settings_summary(const char* settings_file, const char* game_build);
 
