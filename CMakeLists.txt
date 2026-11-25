@@ -263,6 +263,12 @@ target_compile_definitions(sotb-pipeline-warmup-tests PRIVATE SOTB_SOURCE_DIR="$
 target_compile_options(sotb-pipeline-warmup-tests PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(sotb-pipeline-warmup-tests PRIVATE -pthread)
 
+add_executable(sotb-shader-cache-tests EXCLUDE_FROM_ALL tests/shader_cache_tests.cpp)
+set_target_properties(sotb-shader-cache-tests PROPERTIES CXX_STANDARD 23 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_include_directories(sotb-shader-cache-tests PRIVATE gpu/shim gpu/shadps4)
+target_compile_definitions(sotb-shader-cache-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_options(sotb-shader-cache-tests PRIVATE -Wall -Wextra -Werror)
+
 add_executable(sotb-audio-backlog-tests EXCLUDE_FROM_ALL tests/audio_backlog_tests.c)
 target_include_directories(sotb-audio-backlog-tests PRIVATE src)
 target_compile_options(sotb-audio-backlog-tests PRIVATE -Wall -Wextra -Werror)

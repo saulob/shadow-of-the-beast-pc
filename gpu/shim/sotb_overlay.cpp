@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #include "sotb_overlay.h"
+#include "sotb_background_loading.h"
 #include "sotb_exit_confirm.h"
 
 #include <algorithm>
@@ -72,6 +73,7 @@ std::atomic<float> display_scale{1.0f};
 std::atomic<bool> loading{false};
 std::atomic<u32> loading_done{0}, loading_total{0};
 std::atomic<u32> background_done{0}, background_total{0};
+Sotb::BackgroundLoadingClock background_clock;
 // ShowNotice: text guarded by imgui_mutex, shown until notice_until (steady_clock ticks).
 std::string notice_text;
 std::atomic<std::chrono::steady_clock::rep> notice_until{0};
@@ -437,6 +439,10 @@ void BackgroundLoading() {
 
 bool NoticeShown() {
     return std::chrono::steady_clock::now().time_since_epoch().count() < notice_until.load();
+}
+
+bool BackgroundLoadingShown() {
+    return background_clock.Shown(std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
 void Notice() {
@@ -854,6 +860,7 @@ bool HandleEvent(const SDL_Event& event) {
 void SetBackgroundLoading(u32 done, u32 total) {
     background_done = done;
     background_total = total;
+    background_clock.Report(total, std::chrono::steady_clock::now().time_since_epoch().count());
 }
 
 void SetLoading(bool active, u32 done, u32 total) {
@@ -869,7 +876,7 @@ void ShowNotice(const std::string& text) {
 
 bool Visible() {
     const auto& s = SotbSettings::Get();
-    return initialized && (loading || background_total || options_open || text_entry_active || choice_active ||
+    return initialized && (loading || BackgroundLoadingShown() || options_open || text_entry_active || choice_active ||
                            choice_retiring || exit_confirm_active || s.show_fps || NoticeShown());
 }
 
@@ -974,7 +981,7 @@ void BuildFrame(u32 width, u32 height, void (*new_frame)()) {
     if (SotbSettings::Get().show_fps) {
         FpsCounter();
     }
-    if (background_total && !loading) {
+    if (BackgroundLoadingShown() && !loading) {
         BackgroundLoading();
     }
     if (NoticeShown()) {
