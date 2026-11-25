@@ -870,8 +870,9 @@ int main(int argc, char **argv) {
         if (launched == SOTB_LAUNCHER_QUIT) { runtime_log_mark_clean_exit(); exit(0); }
         if (launched == SOTB_LAUNCHER_BLOCKED) exit(1);
         const int resolution = sotb_render_resolution(settings_file);
-        if (resolution >= 0 && resolution < SOTB_RESOLUTION_COUNT)
-            sotb_resolution_guard_arm(user_dir, sotb_resolutions[resolution].key);
+        const int aspect = sotb_aspect_ratio(settings_file);
+        if (resolution >= 0 && resolution < SOTB_RESOLUTION_COUNT && aspect >= 0 && aspect < SOTB_ASPECT_COUNT)
+            sotb_resolution_guard_arm_target(user_dir, sotb_resolutions[resolution].key, sotb_aspect_ratios[aspect].key);
     }
 
     {
@@ -923,7 +924,9 @@ int main(int argc, char **argv) {
     trophy_runtime_configure(app0, user_dir ? user_dir : "user");
     sotb_log_settings_summary(settings_file, game_build.label);
     const SotbResolution *render_resolution = &sotb_resolutions[sotb_render_resolution(settings_file)];
-    const int native_target = render_resolution->width == 1920 && render_resolution->height == 1080;
+    const SotbAspectRatio *aspect_ratio = &sotb_aspect_ratios[sotb_aspect_ratio(settings_file)];
+    const SotbRenderTarget render_target = sotb_render_target(render_resolution, aspect_ratio);
+    const int native_target = render_target.width == 1920 && render_target.height == 1080;
 
     if (content_profile) {
         sotb_startup_phase("content profile");
@@ -1201,7 +1204,7 @@ int main(int argc, char **argv) {
     }
     {
         char error[160];
-        if (!native_target && !guest_apply_display_size(image, size, render_resolution->width, render_resolution->height, error, sizeof(error))) {
+        if (!native_target && !guest_apply_display_size(image, size, render_target.width, render_target.height, error, sizeof(error))) {
             char message[256];
             snprintf(message, sizeof(message), "render resolution is not available: %s", error);
             fail_running(message);
@@ -1209,7 +1212,8 @@ int main(int argc, char **argv) {
         if (!guest_apply_loading_screen_layout(image, size, error, sizeof(error))) {
             printf("Display: loading screen layout scaling unavailable: %s\n", error);
         }
-        printf("Display: render resolution %dx%d (%s)\n", render_resolution->width, render_resolution->height, render_resolution->key);
+        printf("Display: render resolution %dx%d (%s), aspect ratio %s\n", render_target.width, render_target.height,
+               render_resolution->key, aspect_ratio->key);
     }
     sotb_startup_phase("patches installed");
     if (gpu_enabled) {

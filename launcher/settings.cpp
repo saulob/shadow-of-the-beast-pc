@@ -37,6 +37,7 @@ constexpr ManagedSetting kBaseSettings[] = {
     {kSharpenKey, "1"},
     {kSharpenStrengthKey, "75"},
     {kRenderResolutionKey, kNativeResolution},
+    {kAspectRatioKey, kDefaultAspectRatio},
     {kGraphicsCardKey, ""},
     {kRendererKey, kDefaultRenderer},
     {kAntiAliasingKey, "0"},
@@ -114,6 +115,10 @@ bool IsValidSetting(std::string_view key, std::string_view value) {
     if (key == kRenderResolutionKey) {
         return std::any_of(std::begin(sotb_resolutions), std::end(sotb_resolutions),
                            [&](const SotbResolution& resolution) { return value == resolution.key; });
+    }
+    if (key == kAspectRatioKey) {
+        return std::any_of(std::begin(sotb_aspect_ratios), std::end(sotb_aspect_ratios),
+                           [&](const SotbAspectRatio& aspect) { return value == aspect.key; });
     }
     if (key == kAnisotropyKey) {
         return std::find(std::begin(kAnisotropyLevels), std::end(kAnisotropyLevels), value) != std::end(kAnisotropyLevels);
@@ -236,8 +241,11 @@ std::string SettingsSummary(const LauncherSettings& settings, const char* game_b
          settings.Get(kPresentationKey, kDefaultPresentation));
     const SotbResolution& resolution =
         sotb_resolutions[sotb_resolution_index(settings.Get(kRenderResolutionKey, kNativeResolution).c_str())];
-    line("Render resolution " + std::string(resolution.key) + " " + std::to_string(resolution.width) + "x" +
-         std::to_string(resolution.height));
+    const SotbAspectRatio& aspect =
+        sotb_aspect_ratios[sotb_aspect_index(settings.Get(kAspectRatioKey, kDefaultAspectRatio).c_str())];
+    const SotbRenderTarget target = sotb_render_target(&resolution, &aspect);
+    line("Render resolution " + std::string(resolution.key) + " " + std::to_string(target.width) + "x" +
+         std::to_string(target.height) + ", aspect ratio " + aspect.key);
     line(std::string("Window ") + (settings.Get(kDisplayModeKey, "windowed") == "borderless" ? "Borderless Fullscreen"
                                                                                            : "Windowed") +
          " " + settings.Get(kWindowWidthKey, "1920") + "x" + settings.Get(kWindowHeightKey, "1080") + ", monitor " +
@@ -284,6 +292,11 @@ extern "C" int sotb_skip_intro(const char* settings_file) {
 extern "C" int sotb_render_resolution(const char* settings_file) {
     const Sotb::LauncherSettings settings(Sotb::PathFromUtf8(settings_file ? settings_file : ""));
     return sotb_resolution_index(settings.Get(Sotb::kRenderResolutionKey, Sotb::kNativeResolution).c_str());
+}
+
+extern "C" int sotb_aspect_ratio(const char* settings_file) {
+    const Sotb::LauncherSettings settings(Sotb::PathFromUtf8(settings_file ? settings_file : ""));
+    return sotb_aspect_index(settings.Get(Sotb::kAspectRatioKey, Sotb::kDefaultAspectRatio).c_str());
 }
 
 extern "C" void sotb_log_settings_summary(const char* settings_file, const char* game_build) {

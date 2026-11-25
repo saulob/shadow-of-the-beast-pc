@@ -26,8 +26,9 @@ The game package is only read. Reinstalling replaces the game folder and leaves 
 | Option | Key | Values |
 | --- | --- | --- |
 | Display mode | `display_mode` | Windowed, Borderless Fullscreen (F11 switches it in the game) |
-| Window size | `window_width`, `window_height` | 1280x720, 1600x900, 1920x1080, 2560x1440, 3840x2160, whatever the monitor. A size that does not fit the monitor is reduced proportionally only when the window is created; the saved value is not changed |
+| Window size | `window_width`, `window_height` | heights 720, 900, 1080, 1440 and 2160 in the Aspect Ratio's shape (16:9: 1280x720, 1600x900, 1920x1080, 2560x1440, 3840x2160), whatever the monitor. A size that does not fit the monitor is reduced proportionally only when the window is created; the saved value is not changed |
 | Monitor | `monitor` | 1-based display |
+| Aspect Ratio | `aspect_ratio` | 16:9 Original (default), 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3, 5:4; an unknown value is 16:9; applies at the next game start |
 | Renderer | `renderer` | Vulkan (default), Auto, OpenGL (experimental), Direct3D 11 (experimental) |
 | Graphics card | `graphics_card` | the name of a usable Vulkan device (no Auto entry; the first usable device when unset) |
 | VSync | `vsync` | Off, On |
@@ -38,6 +39,31 @@ The game package is only read. Reinstalling replaces the game folder and leaves 
 Auto renderer uses Vulkan and falls back to OpenGL only when this system cannot run Vulkan. A renderer chosen by name
 starts or fails as itself. A saved graphics card that is no longer installed is replaced by the first usable one when the launcher opens. FSR 1, Sharpening and
 Anti-aliasing run in the Vulkan renderer only.
+
+**Aspect Ratio** sets the shape of the game's render target and of the Window size choices; it does not stretch the 16:9
+picture. Changing it moves the saved Window size to the same height in the new shape. The target keeps the Render
+resolution's height and takes the width of the shape at that height, aligned to 8 pixels; a target above 3840 x 2160 pixels
+loses height in steps of 8 until it fits (32:9 at 4K is 5408 x 1520, never 7680 x 2160). 16:9 Original leaves the Render
+resolution as it is. The camera, HUD and prerendered videos are not adjusted: a different shape can show more or less of
+the scene or bars on videos. The Resolution Guard judges the real target: one above 2560 x 1440 pixels is guarded, and a
+failed startup restores the largest of 1440p, Native, 720p and 480p whose target is not above it for that shape.
+
+## Launcher window
+
+The launcher draws at 60 frames a second whatever the display's refresh rate, paced by a monotonic deadline; a minimized
+window sleeps and keeps its events and background work. On Windows it uses Direct3D 11 and falls back to SDL's software
+renderer when Direct3D 11 is unavailable; `d3d11.dll` and `dxgi.dll` are loaded once and pinned for the life of the process
+because SDL unloads `d3d11.dll` right after the device's last release while a driver thread may still be returning through
+it. `SOTB_LAUNCHER_RENDERER=software` forces the software renderer. Elsewhere SDL's first working renderer is used, with
+software as the fallback. VSync stays on only where the display really paces; a software renderer's simulated VSync is
+turned off and the 60 Hz cap alone paces the loop. The log has `renderer_selected`, `frame_pacing` and `loop_sample` lines
+with the requested and effective renderer, fallback, requested and effective VSync, pacing mode and target Hz; a present
+that stalls is reported once per incident.
+
+In a window too short for every page, only the sidebar's page list scrolls, with the launcher's usual scrollbar in place of
+its right padding (`gpu/patches/trg-launcher/0020-sidebar-scroll.patch`). The wheel over the sidebar scrolls it, the rows are
+keyboard and controller targets that ImGui keeps in view, and the current page is brought into view when it changes or the
+window is resized; otherwise the scroll stays where the player left it. With every page in view there is no scrollbar.
 
 ## Graphics
 

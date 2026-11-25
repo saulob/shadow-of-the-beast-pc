@@ -15,6 +15,8 @@ struct ResolutionRecovery {
     bool recovered = false;
     bool attempted = false;
     std::string requested;
+    std::string aspect = "16:9";
+    std::string restored;
     std::string reason;
     std::string stage;
 };

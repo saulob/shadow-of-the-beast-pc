@@ -13,6 +13,46 @@ int sotb_resolution_index(const char *key) {
     return 0;
 }
 
+const SotbAspectRatio sotb_aspect_ratios[SOTB_ASPECT_COUNT] = {
+    {"16:9", "16:9 Original", 16, 9}, {"16:10", "16:10", 16, 10},          {"21:9", "21:9 Ultrawide", 21, 9},
+    {"32:9", "32:9 Super Ultrawide", 32, 9}, {"4:3", "4:3", 4, 3}, {"5:4", "5:4", 5, 4},
+};
+
+int sotb_aspect_index(const char *key) {
+    for (int i = 0; key && i < SOTB_ASPECT_COUNT; ++i)
+        if (!strcmp(key, sotb_aspect_ratios[i].key)) return i;
+    return 0;
+}
+
+static int aligned_width(int height, const SotbAspectRatio *aspect) {
+    const int64_t width = ((int64_t)height * aspect->width * 2 + aspect->height) / (2 * aspect->height);
+    return (int)((width + SOTB_TARGET_ALIGNMENT / 2) / SOTB_TARGET_ALIGNMENT * SOTB_TARGET_ALIGNMENT);
+}
+
+SotbRenderTarget sotb_render_target(const SotbResolution *resolution, const SotbAspectRatio *aspect) {
+    SotbRenderTarget target = {resolution->width, resolution->height};
+    if (!aspect || (aspect->width == 16 && aspect->height == 9)) return target;
+    int height = resolution->height;
+    while (height > SOTB_TARGET_ALIGNMENT && (int64_t)aligned_width(height, aspect) * height > SOTB_TARGET_PIXEL_BUDGET)
+        height -= SOTB_TARGET_ALIGNMENT;
+    target.width = aligned_width(height, aspect);
+    target.height = height;
+    return target;
+}
+
+int sotb_target_is_heavy(SotbRenderTarget target) {
+    return (int64_t)target.width * target.height > SOTB_SAFE_TARGET_PIXELS;
+}
+
+int sotb_safe_resolution_index(const SotbAspectRatio *aspect) {
+    static const char *const candidates[] = {"1440p", "native", "720p", "480p"};
+    for (size_t i = 0; i < sizeof(candidates) / sizeof(*candidates); ++i) {
+        const int index = sotb_resolution_index(candidates[i]);
+        if (!sotb_target_is_heavy(sotb_render_target(&sotb_resolutions[index], aspect))) return index;
+    }
+    return sotb_resolution_index("480p");
+}
+
 typedef struct {
     uint32_t offset;
     uint8_t length;

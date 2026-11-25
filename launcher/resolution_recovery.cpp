@@ -3,6 +3,7 @@
 #include <fstream>
 #include <iterator>
 
+#include "guest_display.h"
 #include "settings.h"
 #include "utf8.h"
 
@@ -28,14 +29,15 @@ ResolutionRecovery RecoverFailedRenderResolution(LauncherSettings& settings, con
                                                 const std::filesystem::path& logs_dir,
                                                 const std::filesystem::path& running_log) {
     ResolutionRecovery result;
-    char key[64];
+    char key[64], aspect[32];
     const std::string user = Utf8(user_dir);
-    if (!sotb_resolution_guard_pending(user.c_str(), key, sizeof(key))) {
+    if (!sotb_resolution_guard_pending_target(user.c_str(), key, sizeof(key), aspect, sizeof(aspect))) {
         sotb_resolution_guard_clear(user.c_str());
         return result;
     }
     result.attempted = true;
     result.requested = key;
+    result.aspect = aspect;
 
     const std::vector<GameLog> logs = FindGameLogs(logs_dir, running_log, 1);
     const GameLog* last = nullptr;
@@ -51,7 +53,8 @@ ResolutionRecovery RecoverFailedRenderResolution(LauncherSettings& settings, con
         result.stage = last->outcome.stage;
         result.reason = SessionEndKey(last->outcome.end);
         if (ShouldRestoreSafeResolution(last->outcome, LogHasGameplayMarker(last->path))) {
-            settings.Set(kRenderResolutionKey, SOTB_RESOLUTION_GUARD_SAFE_KEY);
+            result.restored = sotb_resolutions[sotb_safe_resolution_index(&sotb_aspect_ratios[sotb_aspect_index(aspect)])].key;
+            settings.Set(kRenderResolutionKey, result.restored);
             result.recovered = settings.Save();
             if (!result.recovered) result.reason = "settings not saved";
         }

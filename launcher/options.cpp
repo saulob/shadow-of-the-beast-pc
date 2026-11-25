@@ -19,10 +19,15 @@ std::string DefaultKeyName(SotbKeyAction action) {
 
 } // namespace
 
-std::vector<WindowSize> WindowSizes() {
+WindowSize WindowSizeOf(int height, const SotbAspectRatio& aspect) {
+    const long width = (static_cast<long>(height) * aspect.width * 2 + aspect.height) / (2 * aspect.height);
+    return {static_cast<int>(width), height};
+}
+
+std::vector<WindowSize> WindowSizesFor(const SotbAspectRatio& aspect) {
     std::vector<WindowSize> sizes;
     for (const int height : kWindowHeights) {
-        sizes.push_back({(height * 16 + 4) / 9, height});
+        sizes.push_back(WindowSizeOf(height, aspect));
     }
     return sizes;
 }

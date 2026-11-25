@@ -78,4 +78,16 @@ immediates with the selected 16:9 resolution, so the engine sizes its viewport, 
 core takes the frame size from the registered flip buffer and scales it to the window. Every site is compared with its
 original 10 bytes first and nothing is written unless all six match.
 
-Not proven without running the game: that the game's memory budget holds 1440p and above.
+The six sites hold the same bytes at the same offsets in CUSA03762, CUSA02871 and CUSA00951 (`tests/aspect_ratio_tests.cpp`
+reads all three), so one table serves them and any altered image is refused.
+
+**Aspect Ratio** (`aspect_ratio`) reuses the same sites with a width and a height of any shape. The height is the Render
+resolution's; the width is the shape's at that height rounded to a multiple of 8, and the height drops in steps of 8 until
+the target fits 3840 x 2160 pixels. 16:9 passes the Render resolution through untouched (854 x 480 included) and Native in
+16:9 still patches nothing. The run log prints `Display: render resolution WxH (key), aspect ratio R`. The presenter takes the
+frame's shape from the game's registered image, and SMAA and FSR 1 take its size as their input, so nothing in the host
+assumes 16:9. The loading screen hint is laid out in its 1920 x 1080 design space, centred, in any shape. Camera, field of
+view, HUD and prerendered videos are left to the game.
+
+Not proven without running the game: that the game's memory budget holds 1440p and above, and how the game's camera and
+HUD behave in a shape other than 16:9.

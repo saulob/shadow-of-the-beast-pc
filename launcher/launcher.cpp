@@ -180,16 +180,15 @@ public:
             settings_, user_dir_, logs_dir_, PathFromUtf8(config.log_file ? config.log_file : ""));
         if (recovery.attempted) {
             const std::string stage = recovery.stage.empty() ? "" : " at '" + recovery.stage + "'";
+            const std::string attempt = recovery.requested + " " + recovery.aspect;
             if (recovery.recovered) {
-                std::printf("Resolution guard: %s failed during startup (%s%s); restored %s\n",
-                            recovery.requested.c_str(), recovery.reason.c_str(), stage.c_str(),
-                            SOTB_RESOLUTION_GUARD_SAFE_KEY);
+                std::printf("Resolution guard: %s failed during startup (%s%s); restored %s\n", attempt.c_str(),
+                            recovery.reason.c_str(), stage.c_str(), recovery.restored.c_str());
             } else if (recovery.reason == "no game log") {
-                std::printf("Resolution guard: %s attempt has no game log; resolution kept\n",
-                            recovery.requested.c_str());
+                std::printf("Resolution guard: %s attempt has no game log; resolution kept\n", attempt.c_str());
             } else {
-                std::printf("Resolution guard: %s attempt ended %s%s; resolution kept\n",
-                            recovery.requested.c_str(), recovery.reason.c_str(), stage.c_str());
+                std::printf("Resolution guard: %s attempt ended %s%s; resolution kept\n", attempt.c_str(),
+                            recovery.reason.c_str(), stage.c_str());
             }
         }
         Refresh();
@@ -465,10 +464,20 @@ private:
     void DrawDisplay(trg::Ui& ui) {
         ui.Choice("Display mode", kDisplayModeHelp, kDisplayModeKey, "windowed",
                   {{"windowed", "Windowed"}, {"borderless", "Borderless Fullscreen"}}, 2);
+        const SotbAspectRatio& previous_aspect = SavedAspectRatio();
         ui.Row("Window size", kWindowSizeHelp);
         WindowSizeCombo();
         ui.Row("Monitor", kMonitorHelp);
         MonitorCombo();
+        std::vector<trg::Option> aspects;
+        for (const SotbAspectRatio& aspect : sotb_aspect_ratios) {
+            aspects.push_back({aspect.key, aspect.name});
+        }
+        ui.Combo("Aspect Ratio", kAspectRatioHelp, kAspectRatioKey, kDefaultAspectRatio, aspects);
+        if (&SavedAspectRatio() != &previous_aspect) {
+            const int height = settings_.GetInt(kWindowHeightKey, kDefaultWindowHeight);
+            settings_.SetInt(kWindowWidthKey, WindowSizeOf(height, SavedAspectRatio()).width);
+        }
         std::vector<trg::Option> renderers;
         for (const Choice& choice : kRendererChoices) {
             renderers.push_back({std::string(choice.key), std::string(choice.name)});
@@ -630,6 +639,10 @@ private:
         ui.Link(kPortRepository, std::string("https://") + kPortRepository);
     }
 
+    const SotbAspectRatio& SavedAspectRatio() const {
+        return sotb_aspect_ratios[sotb_aspect_index(settings_.Get(kAspectRatioKey, kDefaultAspectRatio).c_str())];
+    }
+
     void WindowSizeCombo() {
         int width = settings_.GetInt(kWindowWidthKey, kDefaultWindowWidth);
         int height = settings_.GetInt(kWindowHeightKey, kDefaultWindowHeight);
@@ -639,7 +652,7 @@ private:
         }
         const WindowSize current{width, height};
         if (ImGui::BeginCombo("##window_size", WindowSizeLabel(current).c_str())) {
-            for (const WindowSize size : WindowSizes()) {
+            for (const WindowSize size : WindowSizesFor(SavedAspectRatio())) {
                 const bool selected = size == current;
                 if (ImGui::Selectable(WindowSizeLabel(size).c_str(), selected) && !selected) {
                     settings_.SetInt(kWindowWidthKey, size.width);

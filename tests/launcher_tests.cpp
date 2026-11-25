@@ -370,7 +370,7 @@ void TestManagedSettings() {
         CHECK(keys.count(key) == 1);
     }
     CHECK(keys.count("overlay_corner") == 0 && keys.count("overlay_scale") == 0);
-    CHECK(keys.count(kRenderResolutionKey) == 1 && keys.count("aspect_ratio") == 0 && keys.count("true_ultrawide") == 0);
+    CHECK(keys.count(kRenderResolutionKey) == 1 && keys.count(kAspectRatioKey) == 1 && keys.count("true_ultrawide") == 0);
     for (int action = 0; action < SOTB_KEY_COUNT; ++action) {
         CHECK(keys.count(sotb_key_actions[action].ini_key) == 1);
     }
@@ -534,8 +534,9 @@ void TestRenderResolutions(const fs::path& base) {
     }
     CHECK(sotb_resolution_index("bogus") == 0 && sotb_resolution_index(nullptr) == 0);
     CHECK(!IsValidSetting(kRenderResolutionKey, "bogus"));
-    CHECK(WindowSizes().size() == 5 && (WindowSizes()[0] == WindowSize{1280, 720}) && (WindowSizes()[4] == WindowSize{3840, 2160}));
-    for (const WindowSize size : WindowSizes()) {
+    const std::vector<WindowSize> original_sizes = WindowSizesFor(sotb_aspect_ratios[0]);
+    CHECK(original_sizes.size() == 5 && (original_sizes[0] == WindowSize{1280, 720}) && (original_sizes[4] == WindowSize{3840, 2160}));
+    for (const WindowSize size : original_sizes) {
         CHECK(size.width * 9 == size.height * 16 || size.width == 1600);
     }
 
@@ -544,13 +545,12 @@ void TestRenderResolutions(const fs::path& base) {
     LauncherSettings settings(file);
     CHECK(settings.Get(kRenderResolutionKey, "native") == "720p");
     CHECK(sotb_resolution_index(settings.Get(kRenderResolutionKey, "native").c_str()) == 2);
-    CHECK(SettingsSummary(settings, nullptr).find("aspect") == std::string::npos);
-    CHECK(SettingsSummary(settings, nullptr).find("Render resolution 720p 1280x720") != std::string::npos);
+    CHECK(SettingsSummary(settings, nullptr).find("Render resolution 720p 1680x720, aspect ratio 21:9") != std::string::npos);
     CHECK(sotb_render_resolution(file.string().c_str()) == 2);
     settings.ResetToDefaults();
     CHECK(settings.Save());
     const std::string text = ReadAll(file);
-    CHECK(Contains(text, "aspect_ratio = 21:9") && Contains(text, "true_ultrawide = 1"));
+    CHECK(Contains(text, "aspect_ratio = 16:9") && Contains(text, "true_ultrawide = 1"));
     CHECK(settings.Get(kRenderResolutionKey, "x") == kNativeResolution);
 }
 

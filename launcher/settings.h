@@ -25,6 +25,7 @@ inline constexpr char kSharpenStrengthKey[] = "rcas_strength";
 inline constexpr char kRendererKey[] = "renderer";
 inline constexpr char kGraphicsCardKey[] = "graphics_card";
 inline constexpr char kRenderResolutionKey[] = "render_resolution";
+inline constexpr char kAspectRatioKey[] = "aspect_ratio";
 inline constexpr char kAntiAliasingKey[] = "smaa";
 inline constexpr char kAnisotropyKey[] = "anisotropy";
 inline constexpr char kSkipIntroKey[] = "skip_intro";
@@ -48,6 +49,7 @@ inline constexpr char kDefaultRenderer[] = "vulkan";
 inline constexpr char kDefaultPresentation[] = "letterbox";
 inline constexpr char kDefaultMenuButtonLayout[] = "western";
 inline constexpr char kNativeResolution[] = "native";
+inline constexpr char kDefaultAspectRatio[] = "16:9";
 
 struct Choice {
     std::string_view key;
@@ -84,6 +86,8 @@ inline constexpr char kWindowSizeHelp[] =
 inline constexpr char kRenderResolutionHelp[] =
     "The resolution the game renders at. It is separate from the window size; the picture is scaled to the window. "
     "1440p and above need a powerful graphics card.";
+inline constexpr char kAspectRatioHelp[] =
+    "Sets the game's target rendering format and the Window size choices. Applies at the next game start.";
 inline constexpr char kMonitorHelp[] = "The display the game opens on.";
 inline constexpr char kVSyncHelp[] =
     "On prevents tearing. Off allows it, for the lowest latency and G-Sync/FreeSync.";

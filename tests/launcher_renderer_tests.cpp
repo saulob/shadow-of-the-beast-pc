@@ -1,5 +1,5 @@
 // Launcher renderer policy: which SDL renderer is asked for, fallback, failure and reporting as a pure model, plus the
-// source wiring that keeps the Windows default on the software renderer. No window, no SDL, no GPU.
+// source wiring that prefers Direct3D 11 on Windows with its module pins. No window, no SDL, no GPU.
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -48,56 +48,57 @@ size_t Count(const std::string& text, const char* needle) {
 std::string Name(const RendererPlan& plan, size_t i) { return std::string(plan.names[i]); }
 
 void TestDefaultPolicy() {
-    const RendererPlan windows = PlanLauncherRenderer(true, nullptr);
-    CHECK(windows.count == 1 && Name(windows, 0) == "software");
-    CHECK(!windows.experimental && !windows.ignored_request);
-    const RendererPlan empty = PlanLauncherRenderer(true, "");
-    CHECK(empty.count == 1 && Name(empty, 0) == "software" && !empty.ignored_request);
+    for (const char* value : {static_cast<const char*>(nullptr), "", "direct3d11", "Direct3D11", "DIRECT3D11"}) {
+        const RendererPlan windows = PlanLauncherRenderer(true, value);
+        CHECK(windows.count == 2 && Name(windows, 0) == "direct3d11" && Name(windows, 1) == "software");
+        CHECK(!windows.ignored_request);
+    }
     const RendererPlan other = PlanLauncherRenderer(false, nullptr);
     CHECK(other.count == 2 && Name(other, 0).empty() && Name(other, 1) == "software");
-    CHECK(!other.experimental && !other.ignored_request);
+    CHECK(!other.ignored_request);
 }
 
 void TestSoftwareStaysAvailable() {
     const RendererPlan windows = PlanLauncherRenderer(true, "software");
-    CHECK(windows.count == 1 && Name(windows, 0) == "software" && !windows.ignored_request && !windows.experimental);
+    CHECK(windows.count == 1 && Name(windows, 0) == "software" && !windows.ignored_request);
     const RendererPlan other = PlanLauncherRenderer(false, "SOFTWARE");
     CHECK(other.count == 1 && Name(other, 0) == "software" && !other.ignored_request);
     for (const bool windows_platform : {true, false}) {
-        const RendererPlan plan = PlanLauncherRenderer(windows_platform, "direct3d11");
-        bool has_software = false;
-        for (size_t i = 0; i < plan.count; ++i) {
-            has_software = has_software || plan.names[i] == "software";
+        for (const char* value : {static_cast<const char*>(nullptr), "direct3d11", "bogus"}) {
+            const RendererPlan plan = PlanLauncherRenderer(windows_platform, value);
+            CHECK(plan.count == 2 && Name(plan, 1) == "software");
         }
-        CHECK(has_software);
     }
 }
 
-void TestOptIn() {
-    for (const char* value : {"direct3d11", "Direct3D11", "DIRECT3D11"}) {
-        const RendererPlan plan = PlanLauncherRenderer(true, value);
-        CHECK(plan.count == 2 && Name(plan, 0) == "direct3d11" && Name(plan, 1) == "software");
-        CHECK(plan.experimental && !plan.ignored_request);
-    }
+void TestDirect3D11OnlyOnWindows() {
     const RendererPlan elsewhere = PlanLauncherRenderer(false, "direct3d11");
-    CHECK(elsewhere.count == 2 && Name(elsewhere, 0).empty() && elsewhere.ignored_request && !elsewhere.experimental);
+    CHECK(elsewhere.count == 2 && Name(elsewhere, 0).empty() && Name(elsewhere, 1) == "software" && elsewhere.ignored_request);
+    for (const char* value : {static_cast<const char*>(nullptr), "", "software", "opengl"}) {
+        const RendererPlan plan = PlanLauncherRenderer(false, value);
+        for (size_t i = 0; i < plan.count; ++i) {
+            CHECK(Name(plan, i) != "direct3d11");
+        }
+    }
 }
 
 void TestUnsafeRequestsRejected() {
     for (const char* value : {"direct3d12", "direct3d", "opengl", "opengles2", "vulkan", "gpu", "metal", "garbage", " direct3d11",
                               "direct3d11 ", "direct3d11,software", "d3d11", "direct3d11\n"}) {
         const RendererPlan plan = PlanLauncherRenderer(true, value);
-        CHECK(plan.count == 1 && Name(plan, 0) == "software");
-        CHECK(plan.ignored_request && !plan.experimental);
+        CHECK(plan.count == 2 && Name(plan, 0) == "direct3d11" && Name(plan, 1) == "software");
+        CHECK(plan.ignored_request);
     }
 }
 
-void TestDragonRegression() {
-    // On Windows no value of the environment can put a Direct3D renderer ahead of software except the explicit
-    // Direct3D 11 opt-in, which always keeps software behind it and always pins its modules.
-    for (const char* value : {static_cast<const char*>(nullptr), "", "software", "opengl", "vulkan", "direct3d12", "x"}) {
+void TestWindowsPreference() {
+    // Only Direct3D 11 and software can be on the Windows plan, and Direct3D 11 is always first with software behind it.
+    for (const char* value : {static_cast<const char*>(nullptr), "", "software", "opengl", "vulkan", "direct3d12", "x", "direct3d11"}) {
         const RendererPlan plan = PlanLauncherRenderer(true, value);
-        CHECK(Name(plan, 0) == "software");
+        for (size_t i = 0; i < plan.count; ++i) {
+            CHECK(Name(plan, i) == "direct3d11" || Name(plan, i) == "software");
+            CHECK(Name(plan, i) != "direct3d11" || (i == 0 && plan.count == 2 && Name(plan, 1) == "software"));
+        }
     }
     const std::vector<std::string_view> pinned = RendererModulesToPin("direct3d11");
     CHECK(pinned.size() == 2 && pinned[0] == "d3d11.dll" && pinned[1] == "dxgi.dll");
@@ -119,29 +120,29 @@ struct Attempts {
 };
 
 void TestSelection() {
-    const RendererPlan opt_in = PlanLauncherRenderer(true, "direct3d11");
+    const RendererPlan standard = PlanLauncherRenderer(true, nullptr);
 
     Attempts first{{}, {"direct3d11", "software"}};
-    RendererSelection selection = SelectRenderer(opt_in, first);
+    RendererSelection selection = SelectRenderer(standard, first);
     CHECK(selection.created && selection.actual == "direct3d11" && !selection.fallback && selection.failures == 0);
     CHECK(first.tried.size() == 1);
 
     Attempts fallback{{}, {"software"}};
-    selection = SelectRenderer(opt_in, fallback);
+    selection = SelectRenderer(standard, fallback);
     CHECK(selection.created && selection.actual == "software" && selection.fallback && selection.failures == 1);
     CHECK(fallback.tried.size() == 2 && fallback.tried[0] == "direct3d11" && fallback.tried[1] == "software");
 
-    const RendererPlan standard = PlanLauncherRenderer(true, nullptr);
+    const RendererPlan forced = PlanLauncherRenderer(true, "software");
     Attempts software{{}, {"software", "direct3d11"}};
-    selection = SelectRenderer(standard, software);
+    selection = SelectRenderer(forced, software);
     CHECK(selection.created && selection.actual == "software" && !selection.fallback && software.tried.size() == 1);
 
     Attempts nothing{{}, {}};
-    selection = SelectRenderer(standard, nothing);
+    selection = SelectRenderer(forced, nothing);
     CHECK(!selection.created && selection.failures == 1 && nothing.tried.size() == 1);
-    Attempts nothing_opt{{}, {}};
-    selection = SelectRenderer(opt_in, nothing_opt);
-    CHECK(!selection.created && selection.failures == 2 && nothing_opt.tried.size() == 2);
+    Attempts nothing_standard{{}, {}};
+    selection = SelectRenderer(standard, nothing_standard);
+    CHECK(!selection.created && selection.failures == 2 && nothing_standard.tried.size() == 2);
 
     const RendererPlan unix_default = PlanLauncherRenderer(false, nullptr);
     Attempts unix_software{{}, {"software"}};
@@ -183,30 +184,29 @@ void TestReporting() {
     const RendererPlan standard = PlanLauncherRenderer(true, nullptr);
     RendererSelection selection;
     selection.created = true;
-    selection.actual = "software";
-    std::string line = RendererSelectedLine(standard, selection, 0);
-    CHECK(Contains(line, "renderer_selected requested=software actual=software class=software fallback=0 failures=0"));
-    CHECK(Contains(line, "experimental=0 ignored_request=0 pinned_modules=0"));
+    selection.actual = "direct3d11";
+    std::string line = RendererSelectedLine(standard, selection, 2);
+    CHECK(Contains(line, "renderer_selected requested=direct3d11 actual=direct3d11 class=accelerated fallback=0 failures=0"));
+    CHECK(Contains(line, "ignored_request=0 pinned_modules=2") && !Contains(line, "experimental"));
 
-    const RendererPlan opt_in = PlanLauncherRenderer(true, "direct3d11");
     selection.fallback = true;
     selection.failures = 1;
-    line = RendererSelectedLine(opt_in, selection, 1);
-    CHECK(Contains(line, "requested=direct3d11 actual=software class=software fallback=1 failures=1 experimental=1"));
+    selection.actual = "software";
+    line = RendererSelectedLine(standard, selection, 2);
+    CHECK(Contains(line, "requested=direct3d11 actual=software class=software fallback=1 failures=1 ignored_request=0"));
 
+    const RendererPlan forced = PlanLauncherRenderer(true, "software");
     selection.fallback = false;
     selection.failures = 0;
-    selection.actual = "direct3d11";
-    line = RendererSelectedLine(opt_in, selection, 2);
-    CHECK(Contains(line, "requested=direct3d11 actual=direct3d11 class=accelerated fallback=0") && Contains(line, "pinned_modules=2"));
+    line = RendererSelectedLine(forced, selection, 0);
+    CHECK(Contains(line, "requested=software actual=software class=software fallback=0") && Contains(line, "pinned_modules=0"));
 
     const RendererPlan ignored = PlanLauncherRenderer(true, "vulkan");
-    selection.actual = "software";
     CHECK(Contains(RendererSelectedLine(ignored, selection, 0), "ignored_request=1"));
 
     RendererSelection failed;
     failed.failures = 2;
-    line = RendererFailedLine(opt_in, failed);
+    line = RendererFailedLine(standard, failed);
     CHECK(line == "Launcher telemetry: renderer_failed requested=direct3d11 tried=2");
     CHECK(RendererFailedLine(PlanLauncherRenderer(false, nullptr), failed) == "Launcher telemetry: renderer_failed requested=default tried=2");
 
@@ -230,10 +230,20 @@ void TestSourceWiring() {
     const size_t begin = host.find("void LauncherHost::BeginFrame()");
     CHECK(begin != std::string::npos && host.find("SDL_CreateRenderer", begin) == std::string::npos);
 
-    // Windows default is the plan's software entry; the host asks no backend by name and holds no renderer flags.
+    // The Windows plan is Direct3D 11 then software; the host asks no backend by name and holds no renderer flags.
     CHECK(Contains(host, "PlanLauncherRenderer(kWindows, std::getenv(kLauncherRendererVariable))"));
     CHECK(!Contains(host, "direct3d11") && !Contains(host, "SDL_SOFTWARE_RENDERER") && !Contains(host, "SDL_HINT_RENDER_DRIVER"));
-    CHECK(Contains(policy, "plan.names = {\"software\", \"\"};") && Contains(policy, "SOTB_LAUNCHER_RENDERER"));
+    CHECK(Contains(policy, "{\"direct3d11\", \"software\"}") && Contains(policy, "SOTB_LAUNCHER_RENDERER"));
+    CHECK(Contains(policy, "return {\"d3d11.dll\", \"dxgi.dll\"};"));
+    CHECK(Contains(host, "GET_MODULE_HANDLE_EX_FLAG_PIN") && !Contains(host, "FreeLibrary") && !Contains(policy, "FreeLibrary"));
+    CHECK(!Contains(host, "GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT"));
+    CHECK(!Contains(host, "DEBUG_" "SAULO") && !Contains(policy, "DEBUG_" "SAULO") &&
+          !Contains(ReadAll(root / "launcher/launcher_pacing.h"), "DEBUG_" "SAULO"));
+
+    // One wait per frame, in the loop gate only; VSync is switched off only where it is not real, never on top of the cap.
+    CHECK(Count(host, "SDL_DelayNS(") == 2 && !Contains(host, "SDL_Delay("));
+    CHECK(Contains(host, "if (set && !state.effective) {\n        SDL_SetRenderVSync(renderer_, 0);"));
+    CHECK(Contains(host, "ClassifyRenderer(renderer_name_) != RendererKind::kSoftware ||"));
 
     // Requested and actual renderer are reported once at creation; a failure is reported once and the window closes.
     CHECK(Count(host, "RendererSelectedLine(plan, selection, pinned)") == 1 && Count(host, "RendererFailedLine(plan, selection)") == 1);
@@ -271,9 +281,9 @@ void TestSourceWiring() {
 int main() {
     TestDefaultPolicy();
     TestSoftwareStaysAvailable();
-    TestOptIn();
+    TestDirect3D11OnlyOnWindows();
     TestUnsafeRequestsRejected();
-    TestDragonRegression();
+    TestWindowsPreference();
     TestSelection();
     TestNoLoops();
     TestClassification();

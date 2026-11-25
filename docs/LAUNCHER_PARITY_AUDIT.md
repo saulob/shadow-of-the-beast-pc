@@ -19,6 +19,7 @@ not on every path), PLACEBO (saved or shown, nothing reads it), MISSING. Test cl
 | Anti-aliasing SMAA | `smaa` | `vk_presenter` only | PARTIAL | help says Vulkan only | H parse, U |
 | Texture filtering | `anisotropy` | Vulkan and OpenGL rasterizers | FUNCTIONAL | kept | H parse, U |
 | Render resolution | `render_resolution` | `src/guest_display.c` display size sites, fingerprinted | PLACEBO (one choice, Native) | six choices, patches the game's display size | H targets and fingerprints, U |
+| Aspect Ratio | `aspect_ratio` | `src/guest_display.c` the same sites, any width and height | FUNCTIONAL, at start | six shapes, render target and Window size follow, no camera, HUD or video change | H targets, fingerprints on three builds, guard, U |
 | Frame rate | `frame_rate` | `videoout/driver.cpp` pacing | FUNCTIONAL | kept | H parse and list, U |
 | Frame rate in title | `show_fps_title` | `window.cpp` | FUNCTIONAL | kept | H parse, U |
 | Render resolution in title | `show_resolution_title` | `window.cpp` | FUNCTIONAL | kept | H parse, U |
@@ -60,7 +61,8 @@ the guest honours each system language id is for the player to check.
 - `renderer_factory.cpp`, `renderer_backend.h` and `sotb_renderer.h` are identical to Dragon after renaming; the OpenGL
   and ANGLE files differ only in message-box titles and a Shadow-specific area-sampling shader.
 - Render resolution: the six display-metrics sites were found in the mapped boot image with `objdump`; every size is 16:9.
-  Aspect Ratio and wide-screen support were removed from this version.
+  Aspect Ratio is back as the shape of the render target only (see docs/GRAPHICS.md); true ultrawide camera, HUD and
+  background support are not part of it.
 
 ## Window fit, languages and icons round
 
