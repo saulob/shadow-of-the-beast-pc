@@ -18,6 +18,7 @@ const MAX_CHUNK_BODY_BYTES = Math.ceil(REPORT.dumpChunkBytes / 3) * 4 + 1024;
 const STATUS_OF_CODE = {
   ok: 200,
   bad_request: 400,
+  unknown_field: 400,
   not_found: 404,
   conflict: 409,
   too_large: 413,
@@ -36,9 +37,10 @@ export function reply(body, status = 200, extra = {}) {
   });
 }
 
+// The protocol lets a launcher's log tell an outdated service from a refused report.
 function failure(code, detail) {
   const status = STATUS_OF_CODE[code] ?? 500;
-  return reply(detail === undefined ? { error: code } : { error: code, detail }, status,
+  return reply({ error: code, ...(detail !== undefined && { detail }), protocol: PROTOCOL }, status,
     status === 429 ? { 'Retry-After': RETRY_AFTER_SECONDS } : {});
 }
 

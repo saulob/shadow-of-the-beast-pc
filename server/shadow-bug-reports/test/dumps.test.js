@@ -229,7 +229,7 @@ test('the announcement names exactly the selected log\'s dump, within the size l
   assert.equal(readReport({ ...fixture(), ...announce(bytes), dump_bytes: REPORT.dumpBytes }).dump.bytes, REPORT.dumpBytes);
   const partial = { ...fixture(), dump_file: DUMP_NAME };
   assert.equal(readReport(partial).code, 'bad_request');
-  assert.equal(readReport({ ...fixture(), dump_path: '/etc/passwd' }).code, 'bad_request');
+  assert.equal(readReport({ ...fixture(), dump_path: '/etc/passwd' }).code, 'unknown_field');
 });
 
 test('a repeated request with the same submission key returns the report already filed', async () => {

@@ -6,7 +6,7 @@ import { toHex } from './sha256.js';
 
 export const SERVICE = 'shadow-bug-reports';
 export const PROTOCOL = 2;
-export const WORKER_BUILD = '2026-11-20-shadow-bug-reports';
+export const WORKER_BUILD = '2026-11-25-shadow-bug-reports';
 
 const progressOf = (dump, stored) => ({ stored: dump.complete ? dump.bytes : stored, bytes: dump.bytes, complete: Boolean(dump.complete) });
 const NO_DUMP = { code: 'bad_request', detail: 'no crash dump was announced for this report' };

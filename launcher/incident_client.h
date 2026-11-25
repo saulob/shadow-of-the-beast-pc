@@ -33,14 +33,33 @@ struct ServiceConfig {
     PostJson post = PostJsonHttps;
     HttpLimits limits;
     std::shared_ptr<std::atomic<bool>> cancel; // set when the launcher closes
-    std::function<void(const std::string&)> log; // never receives a receipt or any report text
+    std::function<void(const std::string&)> log; // never receives a receipt or any report text; called from worker threads
 };
 
-enum class ReportOutcome { kSent, kRecentLimit, kDailyLimit, kUnreachable, kTimedOut, kCertificate, kRefused, kServiceError, kNotConfigured, kClientMissing, kCancelled };
+// kRefused: the service refused something the player cannot change (a field the launcher fills, an unknown field, the
+// request's form). kDescriptionRefused and kLogRefused name what the player can change.
+enum class ReportOutcome {
+    kSent,
+    kRecentLimit,
+    kDailyLimit,
+    kUnreachable,
+    kTimedOut,
+    kCertificate,
+    kRefused,
+    kDescriptionRefused,
+    kLogRefused,
+    kServiceError,
+    kNotConfigured,
+    kClientMissing,
+    kCancelled
+};
 
-// What a failed transfer or an answer code means for the page.
+// What a failed transfer or an answer means for the page. `detail` is the service's own name for what it refused.
 ReportOutcome OutcomeOfFailure(HttpFailure failure);
-ReportOutcome OutcomeOfAnswer(int status, std::string_view error_code);
+ReportOutcome OutcomeOfAnswer(int status, std::string_view error_code, std::string_view detail = {});
+// One log line about an answer that was not a success: status, the service's error code and detail, whether the body was
+// JSON, and the service's protocol. Only short ASCII names from the body are kept, never report text.
+std::string AnswerDiagnostic(std::string_view operation, int status, std::string_view body);
 // What the page tells the player about a request that did not go through. English, for Tr; nullptr for kSent.
 const char* OutcomeTitle(ReportOutcome outcome);
 const char* OutcomeAdvice(ReportOutcome outcome);

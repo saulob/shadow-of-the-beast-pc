@@ -146,6 +146,7 @@ IncidentPage::IncidentPage(Places places)
     : places_(std::move(places)), my_reports_(places_.user_dir / kReportHistoryFile) {
     service_.endpoint = ResolveEndpoint(kBugReportServiceUrl, EnvironmentValue(kBugReportUrlVariable));
     service_.cancel = std::make_shared<std::atomic<bool>>(false);
+    service_.log = places_.log;
     Log(service_.endpoint.configured() ? "Bug report: service " + service_.endpoint.url : "Bug report: service address not valid");
 }
 

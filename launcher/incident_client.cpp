@@ -55,8 +55,30 @@ struct Answer {
     int status = 0;
     int retry_after_seconds = 0;
     std::optional<json::Value> body;
-    std::string error_code;
 };
+
+const char* FailureName(HttpFailure failure) {
+    switch (failure) {
+    case HttpFailure::kNone: return "none";
+    case HttpFailure::kTimedOut: return "timed out";
+    case HttpFailure::kCertificate: return "certificate";
+    case HttpFailure::kInvalidAddress: return "invalid address";
+    case HttpFailure::kClientMissing: return "curl missing";
+    case HttpFailure::kCancelled: return "cancelled";
+    case HttpFailure::kUnreachable: break;
+    }
+    return "unreachable";
+}
+
+// The service's codes and field names are short words; any other text from a body is never copied into the log.
+std::string SafeName(std::string_view text, size_t most) {
+    if (text.empty()) return "-";
+    const auto plain = [](char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == ',' || c == ' '; };
+    if (text.size() > most || !std::all_of(text.begin(), text.end(), plain)) return "?";
+    std::string out(text);
+    std::replace(out.begin(), out.end(), ' ', '_');
+    return out;
+}
 
 // A reply is trusted only when the transfer finished and the body is JSON.
 Answer Ask(const ServiceConfig& config, const char* path, const std::string& body, const char* what) {
@@ -74,19 +96,19 @@ Answer Ask(const ServiceConfig& config, const char* path, const std::string& bod
     const HttpReply reply = config.post(config.endpoint.url + path, body, limits);
     if (reply.failure != HttpFailure::kNone) {
         answer.failure = OutcomeOfFailure(reply.failure);
-        Say(config, std::string("Bug report: ") + what + ": no answer (" + std::to_string(int(reply.failure)) + ")");
+        Say(config, std::string("Bug report: ") + what + " got no answer (" + FailureName(reply.failure) + ")");
         return answer;
     }
     answer.status = reply.status;
     answer.retry_after_seconds = reply.retry_after_seconds;
     answer.body = json::Parse(reply.body);
-    if (answer.body) answer.error_code = answer.body->StringOr("error");
     if (reply.status < 200 || reply.status >= 300) {
-        answer.failure = OutcomeOfAnswer(reply.status, answer.error_code);
-        Say(config, std::string("Bug report: ") + what + ": the service answered " + std::to_string(reply.status));
+        const bool object = answer.body && answer.body->IsObject();
+        answer.failure = OutcomeOfAnswer(reply.status, object ? answer.body->StringOr("error") : "", object ? answer.body->StringOr("detail") : "");
+        Say(config, AnswerDiagnostic(what, reply.status, reply.body));
     } else if (!answer.body || !answer.body->IsObject()) {
         answer.failure = ReportOutcome::kServiceError;
-        Say(config, std::string("Bug report: ") + what + ": the answer could not be read");
+        Say(config, std::string("Bug report: ") + what + " failed status=" + std::to_string(reply.status) + " json=no");
     }
     return answer;
 }
@@ -204,13 +226,28 @@ ReportOutcome OutcomeOfFailure(HttpFailure failure) {
     return ReportOutcome::kUnreachable;
 }
 
-ReportOutcome OutcomeOfAnswer(int status, std::string_view error_code) {
+ReportOutcome OutcomeOfAnswer(int status, std::string_view error_code, std::string_view detail) {
     if (status >= 200 && status < 300) return ReportOutcome::kSent;
     if (error_code == "hourly_limit" || error_code == "limit") return ReportOutcome::kRecentLimit;
     if (error_code == "daily_limit") return ReportOutcome::kDailyLimit;
-    if (status == 400 || status == 403 || status == 413 || status == 415) return ReportOutcome::kRefused;
     if (status == 429) return ReportOutcome::kRecentLimit;
-    return ReportOutcome::kServiceError;
+    if (status != 400 && status != 403 && status != 413 && status != 415) return ReportOutcome::kServiceError;
+    if (error_code == "bad_request" || error_code == "too_large") {
+        if (detail == "description" || detail == "description too short") return ReportOutcome::kDescriptionRefused;
+        if (detail == "log_text" || detail == "empty log") return ReportOutcome::kLogRefused;
+    }
+    return ReportOutcome::kRefused;
+}
+
+std::string AnswerDiagnostic(std::string_view operation, int status, std::string_view body) {
+    const std::optional<json::Value> parsed = json::Parse(body);
+    const bool object = parsed && parsed->IsObject();
+    const json::Value* protocol = object ? parsed->Find("protocol") : nullptr;
+    const bool known_protocol = protocol && protocol->IsNumber() && protocol->number > 0 && protocol->number < 10000;
+    return "Bug report: " + std::string(operation) + (status >= 400 && status < 500 ? " rejected" : " failed") +
+           " status=" + std::to_string(status) + " code=" + SafeName(object ? parsed->StringOr("error") : "", 32) +
+           " detail=" + SafeName(object ? parsed->StringOr("detail") : "", 48) + " json=" + (object ? "yes" : "no") +
+           " service_protocol=" + (known_protocol ? std::to_string(protocol->number) : "-");
 }
 
 const char* OutcomeTitle(ReportOutcome outcome) {
@@ -221,7 +258,9 @@ const char* OutcomeTitle(ReportOutcome outcome) {
     case ReportOutcome::kUnreachable: return "Cannot reach the report service";
     case ReportOutcome::kTimedOut: return "The report service did not answer in time";
     case ReportOutcome::kCertificate: return "The report service's security certificate was not accepted";
-    case ReportOutcome::kRefused: return "The report was not accepted";
+    case ReportOutcome::kRefused: return "The report service did not accept this report";
+    case ReportOutcome::kDescriptionRefused: return "The report service did not accept the description";
+    case ReportOutcome::kLogRefused: return "The report service did not accept the selected log";
     case ReportOutcome::kServiceError: return "The report service could not take the report";
     case ReportOutcome::kNotConfigured: return "The report service is not available";
     case ReportOutcome::kClientMissing: return "Sending a report needs curl";
@@ -241,7 +280,11 @@ const char* OutcomeAdvice(ReportOutcome outcome) {
     case ReportOutcome::kTimedOut: return "Check your connection and press Send report again; your text is kept.";
     case ReportOutcome::kCertificate:
         return "Nothing was sent. The clock of this PC, a proxy or a security program may be interfering with secure connections.";
-    case ReportOutcome::kRefused: return "Change the description or choose another log, then send it again.";
+    case ReportOutcome::kRefused:
+        return "This is not your fault, and changing the text will not help. Your text is kept: save the report on this PC and "
+               "attach it to a GitHub issue instead.";
+    case ReportOutcome::kDescriptionRefused: return "Change the description, then send it again; your text is kept.";
+    case ReportOutcome::kLogRefused: return "Choose another log, then send it again; your text is kept.";
     case ReportOutcome::kServiceError: return "This is not your fault. Try again in a few minutes; your text is kept.";
     case ReportOutcome::kNotConfigured:
         return "Nothing was sent. This version has no valid report service address (SOTB_BUG_REPORT_URL overrides it). Save the report on this PC and attach it to a GitHub issue instead.";
@@ -298,10 +341,10 @@ ReportReceipt FileReport(const ServiceConfig& config, const IncidentPackage& pac
     const std::string ticket = answer.body->StringOr("ticket");
     const std::string credential = answer.body->StringOr("receipt");
     if (!IsTicket(ticket) || !IsReceipt(credential)) {
+        Say(config, "Bug report: send failed status=" + std::to_string(answer.status) + " json=yes reason=no valid Report ID");
         receipt.outcome = ReportOutcome::kServiceError;
         return receipt;
     }
-    Say(config, "Bug report: sent as " + ticket);
     receipt.outcome = ReportOutcome::kSent;
     receipt.ticket = ticket;
     receipt.credential = credential;

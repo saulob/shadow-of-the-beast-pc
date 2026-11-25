@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { handleAdmin, resetAdminLimits, tokenMatches } from '../src/admin.js';
 import { handlePublic } from '../src/api.js';
+import { PROTOCOL } from '../src/service.js';
 import { PROTECTION, RateLimiter, ipGroup } from '../src/limits.js';
 import { REPORT } from '../src/reports.js';
 import { ENV, TOKEN, makeEnv, post, submit } from './harness.js';
@@ -126,7 +127,7 @@ test('lookups have a global burst and a budget per address, each with Retry-Afte
   const perAddress = await status(env, '203.0.113.1');
   assert.equal(perAddress.status, 429);
   assert.equal(perAddress.headers.get('Retry-After'), '60');
-  assert.deepEqual(await perAddress.json(), { error: 'limit' });
+  assert.deepEqual(await perAddress.json(), { error: 'limit', protocol: PROTOCOL });
 
   for (let i = 0; i < PROTECTION.readAddress.burst; i++) assert.equal((await read(env, '203.0.113.2')).status, 404);
   assert.equal((await read(env, '203.0.113.2')).status, 429);

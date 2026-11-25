@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { handleAdmin, resetAdminLimits } from '../src/admin.js';
 import { handlePublic } from '../src/api.js';
+import { PROTOCOL } from '../src/service.js';
 import { ReportDesk, readReport } from '../src/reports.js';
 import { sqliteStore } from '../local/host.js';
 import { ENV, TOKEN, fixture, makeEnv, post, submit } from './harness.js';
@@ -73,9 +74,9 @@ test('a deleted report stops being answered for: the status batch leaves it out 
   assert.deepEqual(status.reports.map((r) => r.ticket), [kept.body.ticket]);
   const read = await ask(env, '/v1/reports/read', claim(gone));
   assert.equal(read.status, 404);
-  assert.deepEqual(await read.json(), { error: 'not_found' });
+  assert.deepEqual(await read.json(), { error: 'not_found', protocol: PROTOCOL });
   const same = await ask(env, '/v1/reports/read', { ticket: 'SOB-ZZZZZZ', receipt: 'f'.repeat(64) });
-  assert.deepEqual(await same.json(), { error: 'not_found' });
+  assert.deepEqual(await same.json(), { error: 'not_found', protocol: PROTOCOL });
   assert.equal((await ask(env, '/v1/reports/read', claim(kept))).status, 200);
 });
 

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 
 import { handlePublic, readBounded } from '../src/api.js';
+import { PROTOCOL } from '../src/service.js';
 import { REPORT } from '../src/reports.js';
 import { fixture, makeEnv, post, report, submit } from './harness.js';
 
@@ -44,7 +45,7 @@ test('a request from a web page, another type or another path never reaches the 
   const { desk, calls } = countingDesk(env);
   const fromPage = await call(post('/v1/reports', report(), { headers: { Origin: 'https://evil.example' } }), {}, desk);
   assert.equal(fromPage.status, 403);
-  assert.deepEqual(await fromPage.json(), { error: 'origin_not_allowed' });
+  assert.deepEqual(await fromPage.json(), { error: 'origin_not_allowed', protocol: PROTOCOL });
   const plain = await call(post('/v1/reports', report(), { headers: { 'Content-Type': 'text/plain' } }), {}, desk);
   assert.equal(plain.status, 415);
   const form = await call(post('/v1/reports', report(), { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }), {}, desk);
@@ -115,7 +116,7 @@ test('an unavailable desk answers 502 without a stack or detail', async () => {
   const failing = { submit: async () => { throw new Error('storage exploded at line 12'); } };
   const response = await handlePublic(post('/v1/reports', report()), {}, failing, (text) => logs.push(text));
   assert.equal(response.status, 502);
-  assert.equal(await response.text(), '{"error":"unavailable"}');
+  assert.equal(await response.text(), `{"error":"unavailable","protocol":${PROTOCOL}}`);
   assert.ok(logs.length === 1 && !logs[0].includes(report().description));
 });
 

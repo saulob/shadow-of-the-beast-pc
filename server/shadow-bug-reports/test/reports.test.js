@@ -3,6 +3,7 @@ import { test } from 'node:test';
 
 import { handlePublic } from '../src/api.js';
 import { READERS, REPORT, isTicket, readClaims, readReport, readStatusChange, ticketCode } from '../src/reports.js';
+import { PROTOCOL } from '../src/service.js';
 import { DAY, HOUR, MARKER, fixture, makeEnv, post, report, submit } from './harness.js';
 
 const claim = (filed) => ({ ticket: filed.body.ticket, receipt: filed.body.receipt });
@@ -73,7 +74,7 @@ test('description, metadata and log are validated and nothing is rewritten', () 
   bad({ log_text: '   \n  ' }, 'bad_request', /empty log/);
   bad({ log_text: 'one\r\ntwo' }, 'bad_request');
   bad({ log_text: 'a\u0000b' }, 'bad_request');
-  bad({ unexpected: 'x' }, 'bad_request', /unexpected/);
+  bad({ unexpected: 'x' }, 'unknown_field', /^unexpected$/);
   assert.equal(readReport({ ...fixture(), log_text: 'tab\tand\nnewline\n' }).report.log_text, 'tab\tand\nnewline\n');
   const missing = fixture();
   delete missing.log_text;
@@ -114,7 +115,7 @@ test('the quota windows roll: three an hour per address, others unaffected', asy
   for (let i = 0; i < 3; i++) assert.equal((await submit(env, {}, { ip })).response.status, 201);
   const hourly = await submit(env, {}, { ip });
   assert.equal(hourly.response.status, 429);
-  assert.deepEqual(hourly.body, { error: 'hourly_limit' });
+  assert.deepEqual(hourly.body, { error: 'hourly_limit', protocol: PROTOCOL });
   assert.equal(hourly.response.headers.get('Retry-After'), '60');
   assert.equal((await submit(env, {}, { ip: '203.0.113.10' })).response.status, 201);
   env.advance(HOUR + 1000);
@@ -201,7 +202,7 @@ test('only the owner reads a report back, and only while its log is kept', async
   assert.equal(body.report.ticket, mine.body.ticket);
   const denied = await lookup(env, '/v1/reports/read', { ticket: mine.body.ticket, receipt: 'e'.repeat(64) });
   assert.equal(denied.status, 404);
-  assert.deepEqual(await denied.json(), { error: 'not_found' });
+  assert.deepEqual(await denied.json(), { error: 'not_found', protocol: PROTOCOL });
   env.advance(REPORT.keptDays * DAY + 1000);
   assert.equal((await lookup(env, '/v1/reports/read', claim(mine))).status, 404);
   const status = await (await lookup(env, '/v1/reports/status', { reports: [claim(mine)] })).json();

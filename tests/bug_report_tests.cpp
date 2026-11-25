@@ -480,7 +480,8 @@ void TestClient(const fs::path& scratch) {
     CHECK(wire.calls[0].second == IncidentRequestJson(package));
     CHECK(wire.limits.connect_ms <= 15000 && wire.limits.total_ms <= 60000 && wire.limits.total_ms > 0 && wire.limits.most_reply_bytes <= 1 << 20);
     for (const std::string& line : lines) CHECK(!Has(line, kReceipt) && !Has(line, "froze") && !Has(line, package.Value("log_text").substr(0, 20)));
-    CHECK(!lines.empty());
+    // The page logs the success once; the client logs only answers that were not a success.
+    CHECK(lines.empty());
 
     const struct {
         HttpFailure failure;
@@ -498,8 +499,17 @@ void TestClient(const fs::path& scratch) {
         {HttpFailure::kNone, 429, R"({"error":"daily_limit"})", ReportOutcome::kDailyLimit},
         {HttpFailure::kNone, 429, "not json", ReportOutcome::kRecentLimit},
         {HttpFailure::kNone, 400, R"({"error":"bad_request"})", ReportOutcome::kRefused},
+        {HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"session_end"})", ReportOutcome::kRefused},
+        {HttpFailure::kNone, 400, R"({"error":"unknown_field","detail":"session_end","protocol":2})", ReportOutcome::kRefused},
+        {HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"invalid JSON","protocol":2})", ReportOutcome::kRefused},
+        {HttpFailure::kNone, 400, "not json", ReportOutcome::kRefused},
+        {HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"description too short","protocol":2})", ReportOutcome::kDescriptionRefused},
+        {HttpFailure::kNone, 413, R"({"error":"too_large","detail":"description","protocol":2})", ReportOutcome::kDescriptionRefused},
+        {HttpFailure::kNone, 413, R"({"error":"too_large","detail":"log_text","protocol":2})", ReportOutcome::kLogRefused},
+        {HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"empty log","protocol":2})", ReportOutcome::kLogRefused},
         {HttpFailure::kNone, 413, R"({"error":"too_large"})", ReportOutcome::kRefused},
         {HttpFailure::kNone, 403, R"({"error":"origin_not_allowed"})", ReportOutcome::kRefused},
+        {HttpFailure::kNone, 415, R"({"error":"unsupported_media_type","protocol":2})", ReportOutcome::kRefused},
         {HttpFailure::kNone, 500, "oops", ReportOutcome::kServiceError},
         {HttpFailure::kNone, 502, R"({"error":"unavailable"})", ReportOutcome::kServiceError},
         {HttpFailure::kNone, 201, "not json", ReportOutcome::kServiceError},
@@ -523,6 +533,9 @@ void TestClient(const fs::path& scratch) {
     CHECK(std::string(OutcomeTitle(ReportOutcome::kServiceError)) == "The report service could not take the report");
     CHECK(Has(OutcomeTitle(ReportOutcome::kClientMissing), "curl") && Has(OutcomeAdvice(ReportOutcome::kClientMissing), "Install curl") &&
           Has(OutcomeAdvice(ReportOutcome::kClientMissing), "your text is kept"));
+    CHECK(Has(OutcomeAdvice(ReportOutcome::kDescriptionRefused), "Change the description") && !Has(OutcomeAdvice(ReportOutcome::kDescriptionRefused), "log"));
+    CHECK(Has(OutcomeAdvice(ReportOutcome::kLogRefused), "Choose another log") && !Has(OutcomeAdvice(ReportOutcome::kLogRefused), "description"));
+    CHECK(Has(OutcomeAdvice(ReportOutcome::kRefused), "not your fault") && !Has(OutcomeAdvice(ReportOutcome::kRefused), "Change the description"));
     for (const ReportOutcome outcome : {ReportOutcome::kUnreachable, ReportOutcome::kServiceError, ReportOutcome::kNotConfigured, ReportOutcome::kRefused}) {
         CHECK(!Has(OutcomeTitle(outcome), "online service") && !Has(OutcomeAdvice(outcome), "not set up") && !Has(OutcomeAdvice(outcome), "not deployed"));
     }
@@ -580,6 +593,79 @@ void TestClient(const fs::path& scratch) {
     TrackedReport remembered = TrackedReportOf(package, sent);
     CHECK(remembered.ticket == "SOB-ABCDEF" && remembered.receipt == kReceipt && remembered.status == "new" && remembered.gpu == "NVIDIA GeForce RTX 4070");
     CHECK(remembered.log_file == "shadow_of_the_beast_040.log" && remembered.description == package.Value("description"));
+}
+
+// The answer of a service that predates a field the launcher sends must reach the log with its status and code.
+void TestRefusalDiagnostics(const fs::path& scratch) {
+    const IncidentPackage package = SamplePackage(scratch);
+    Wire wire;
+    std::vector<std::string> lines;
+    const ServiceConfig config = Configured(wire, &lines);
+    const auto last_line = [&](HttpFailure failure, int status, const std::string& body) {
+        lines.clear();
+        wire.reply = {failure, status, body};
+        FileReport(config, package, std::string(64, 'c'));
+        return lines.empty() ? std::string() : lines.back();
+    };
+
+    CHECK(last_line(HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"session_end"})") ==
+          "Bug report: send rejected status=400 code=bad_request detail=session_end json=yes service_protocol=-");
+    CHECK(last_line(HttpFailure::kNone, 400, R"({"error":"unknown_field","detail":"session_end","protocol":2})") ==
+          "Bug report: send rejected status=400 code=unknown_field detail=session_end json=yes service_protocol=2");
+    CHECK(last_line(HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"description too short","protocol":2})") ==
+          "Bug report: send rejected status=400 code=bad_request detail=description_too_short json=yes service_protocol=2");
+    CHECK(last_line(HttpFailure::kNone, 415, R"({"error":"unsupported_media_type","protocol":2})") ==
+          "Bug report: send rejected status=415 code=unsupported_media_type detail=- json=yes service_protocol=2");
+    CHECK(last_line(HttpFailure::kNone, 429, R"({"error":"hourly_limit","protocol":2})") ==
+          "Bug report: send rejected status=429 code=hourly_limit detail=- json=yes service_protocol=2");
+    CHECK(last_line(HttpFailure::kNone, 502, R"({"error":"unavailable","protocol":2})") ==
+          "Bug report: send failed status=502 code=unavailable detail=- json=yes service_protocol=2");
+    CHECK(last_line(HttpFailure::kNone, 503, "<html>Service Unavailable</html>") ==
+          "Bug report: send failed status=503 code=- detail=- json=no service_protocol=-");
+    CHECK(last_line(HttpFailure::kUnreachable, 0, "") == "Bug report: send got no answer (unreachable)");
+    CHECK(last_line(HttpFailure::kTimedOut, 0, "") == "Bug report: send got no answer (timed out)");
+    CHECK(Has(last_line(HttpFailure::kNone, 201, R"({"ticket":"nonsense"})"), "send failed status=201"));
+
+    // Text in an answer that is not a short name stays out of the log, whatever the service puts there.
+    const std::string description = package.Value("description");
+    for (const std::string& body : std::vector<std::string>{R"({"error":"bad_request","detail":"C:\\Users\\ana.silva\\token"})",
+                                    R"({"error":"bad_request","detail":")" + description + R"("})",
+                                    R"({"error":"bad_request","detail":")" + std::string(200, 'x') + R"("})",
+                                    R"({"error":"Bearer )" + kReceipt + R"(","detail":"log_text"})"}) {
+        const std::string line = last_line(HttpFailure::kNone, 400, body);
+        CHECK(Has(line, "status=400") && Has(line, "json=yes"));
+        CHECK(!Has(line, "ana.silva") && !Has(line, "Users") && !Has(line, kReceipt) && !Has(line, "Bearer") && !Has(line, "xxxxxxxxxx"));
+        CHECK(!Has(line, description.substr(0, 12)) && !Has(line, package.Value("log_text").substr(0, 12)));
+    }
+    CHECK(AnswerDiagnostic("status", 404, R"({"error":"not_found","protocol":2})") ==
+          "Bug report: status rejected status=404 code=not_found detail=- json=yes service_protocol=2");
+    CHECK(Has(AnswerDiagnostic("send", 400, R"({"error":"bad_request","protocol":"2"})"), "service_protocol=-"));
+    CHECK(Has(AnswerDiagnostic("send", 400, R"({"error":"bad_request","protocol":-1})"), "service_protocol=-"));
+}
+
+// Windows and Linux build one request the same way: the same keys in the same order, only the operating system differs.
+void TestPlatformRequestParity(const fs::path& scratch) {
+    const GameLog log = LogOf(MakeLog(scratch / "parity", 41, kHead + "frame\n", 1));
+    ReportFacts windows_facts = Report(), linux_facts = Report();
+    linux_facts.operating_system = "Linux: Ubuntu 24.04.1 LTS";
+    const auto on_windows = BuildIncidentPackage("The game froze on the loading screen", log, windows_facts, PrivateFacts{});
+    const auto on_linux = BuildIncidentPackage("The game froze on the loading screen", log, linux_facts, PrivateFacts{});
+    CHECK(on_windows && on_linux && on_windows->fields.size() == on_linux->fields.size());
+    if (!on_windows || !on_linux) return;
+    for (size_t i = 0; i < on_windows->fields.size(); ++i) {
+        CHECK(on_windows->fields[i].key == on_linux->fields[i].key);
+        CHECK(on_windows->fields[i].key == "operating_system" || on_windows->fields[i].value == on_linux->fields[i].value);
+    }
+    CHECK(on_linux->Value("operating_system") == "Linux: Ubuntu 24.04.1 LTS");
+    const std::string transport = Read(fs::path(SOTB_SOURCE_DIR) / "launcher" / "http_post.cpp");
+    CHECK(Has(transport, "L\"Content-Type: application/json\\r\\n") && Has(transport, "\"Content-Type: application/json\""));
+
+    for (const char* version : {"0.1.0", "0.2.0", "1.0.0-rc.1"}) {
+        ReportFacts facts = Report();
+        facts.launcher_version = version;
+        const auto package = BuildIncidentPackage("The game froze on the loading screen", log, facts, PrivateFacts{});
+        CHECK(package && package->Value("launcher_version") == version);
+    }
 }
 
 void TestTransportAddress() {
@@ -1005,6 +1091,8 @@ int main() {
     TestDiagnostics();
     TestReport(scratch);
     TestClient(scratch);
+    TestRefusalDiagnostics(scratch);
+    TestPlatformRequestParity(scratch);
     TestTransportAddress();
     TestHistory(scratch);
     TestUnavailableReports(scratch);

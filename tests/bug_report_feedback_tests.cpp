@@ -64,8 +64,8 @@ SendState With(const ReportReceipt& receipt) {
 
 constexpr ReportOutcome kFailures[] = {ReportOutcome::kRecentLimit, ReportOutcome::kDailyLimit,  ReportOutcome::kUnreachable,
                                        ReportOutcome::kTimedOut,    ReportOutcome::kCertificate, ReportOutcome::kRefused,
-                                       ReportOutcome::kServiceError, ReportOutcome::kNotConfigured, ReportOutcome::kClientMissing,
-                                       ReportOutcome::kCancelled};
+                                       ReportOutcome::kDescriptionRefused, ReportOutcome::kLogRefused, ReportOutcome::kServiceError,
+                                       ReportOutcome::kNotConfigured, ReportOutcome::kClientMissing, ReportOutcome::kCancelled};
 
 void TestIdle() {
     CHECK(ClassifySend({}) == SendState::kIdle);
@@ -144,7 +144,12 @@ void TestFailureTexts() {
     CHECK(Contains(OutcomeAdvice(ReportOutcome::kServiceError), "not your fault"));
     CHECK(Contains(OutcomeTitle(ReportOutcome::kNotConfigured), "not available"));
     CHECK(Contains(OutcomeTitle(ReportOutcome::kUnreachable), "Cannot reach"));
-    CHECK(Contains(OutcomeTitle(ReportOutcome::kRefused), "not accepted"));
+    CHECK(Contains(OutcomeTitle(ReportOutcome::kRefused), "did not accept this report"));
+    CHECK(Contains(OutcomeTitle(ReportOutcome::kDescriptionRefused), "description"));
+    CHECK(Contains(OutcomeTitle(ReportOutcome::kLogRefused), "selected log"));
+    // A refusal the player cannot fix never asks for a new description or log.
+    CHECK(!Contains(OutcomeAdvice(ReportOutcome::kRefused), "Change the description") && !Contains(OutcomeAdvice(ReportOutcome::kRefused), "another log"));
+    CHECK(Contains(OutcomeAdvice(ReportOutcome::kRefused), "text is kept"));
     CHECK(OutcomeTitle(ReportOutcome::kSent) == nullptr);
 
     // Every failure has a short title and advice, with no path, credential, HTTP detail or stack in them.
@@ -191,6 +196,15 @@ void TestPageWiring() {
     const size_t else_branch = collect.find("} else {", sent_branch);
     const size_t cleared = collect.find("description_[0] = '\\0';", sent_branch);
     CHECK(sent_branch != std::string::npos && cleared < else_branch);
+    // Exactly one success line in the launcher: the page's, written once per collected delivery.
+    const std::string client = ReadAll(root / "launcher/incident_client.cpp");
+    const auto count = [](const std::string& text, const char* needle) {
+        size_t n = 0;
+        for (size_t at = text.find(needle); at != std::string::npos; at = text.find(needle, at + 1)) ++n;
+        return n;
+    };
+    CHECK(count(page, "\"Bug report: sent as ") == 1 && count(client, "\"Bug report: sent as ") == 0);
+    CHECK(collect.find("\"Bug report: sent as ", sent_branch) < else_branch);
     CHECK(collect.find("description_", else_branch) == std::string::npos);
     CHECK(!Contains(collect, "result_.reset()"));
     CHECK(Contains(result, "\"Report sent successfully\"") && Contains(result, "result_->ticket"));

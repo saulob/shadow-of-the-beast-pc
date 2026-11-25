@@ -42,9 +42,10 @@ else. Reports, statuses and receipt hashes live in its SQLite database.
 Requests are JSON over HTTPS (`Content-Type: application/json`). A request that carries an `Origin` header (a web page) is
 refused, there are no CORS headers, bodies are cut at 192 KiB while read, and fields are validated before the Durable
 Object is touched. A field the page could not have shown is refused, not dropped. Answers: `400 bad_request`,
+`400 unknown_field` (a field this Worker does not know: the launcher is newer than the deployed Worker),
 `403 origin_not_allowed`, `404 not_found`, `405`, `409 offset` (a dump chunk not at `stored`, with `{stored, bytes, complete}`),
 `413 too_large`, `415 unsupported_media_type`, `429 hourly_limit | daily_limit | limit` (with `Retry-After`), `502 unavailable`.
-A stack trace is never returned.
+An error body is `{error, detail?, protocol}`: `detail` names the refused field, never its value. A stack trace is never returned.
 
 A ticket is `SOB-` and six characters from a 32-letter alphabet; a receipt is 32 random bytes as 64 lowercase hex
 characters. The fields of a report are those of `READERS` in `src/reports.js`: description, launcher version, game build,

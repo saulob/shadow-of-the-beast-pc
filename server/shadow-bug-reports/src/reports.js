@@ -170,11 +170,11 @@ function readSubmission(msg) {
 }
 
 // The stored fields of a request, or { code, detail } for the answer. Nothing here trusts a size the client states, and
-// a field the page could not have shown is refused rather than dropped.
+// a field the page could not have shown is refused rather than dropped: unknown_field names a launcher newer than this.
 export function readReport(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { code: 'bad_request', detail: 'body' };
   for (const key of Object.keys(body)) {
-    if (!Object.hasOwn(READERS, key) && !REQUEST_EXTRAS.has(key)) return { code: 'bad_request', detail: key };
+    if (!Object.hasOwn(READERS, key) && !REQUEST_EXTRAS.has(key)) return { code: 'unknown_field', detail: key.slice(0, REPORT.metadataChars) };
   }
   try {
     const report = {};
