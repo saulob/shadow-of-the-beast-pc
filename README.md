@@ -18,29 +18,22 @@ This first round provides:
 
 - **TRG Launcher** with **Install game...** from your own `.pkg`
 - exact build identification before anything is unpacked
-- installation into `game\prepared\CUSA03762-1.00`, with `user\` and `logs\` kept separate
+- installation into `game\prepared\<TITLE_ID>-1.00`, with `user\` and `logs\` kept separate
 - native boot image preparation and import resolution
 - the shadPS4-derived GNM/VideoOut foundation
 - a runtime log that names the first unsupported PS4 import instead of failing silently
 
 Gameplay, movies, audio output and controller support are not declared working yet. See [Runtime status](#runtime-status).
 
-## Supported build
+## Supported builds
 
-| | |
-| --- | --- |
-| Game | Shadow of the Beast |
-| Platform | PlayStation 4 |
-| Title ID | `CUSA03762` |
-| Content ID | `HP9000-CUSA03762_00-SHADOWOFBEAST0KR` |
-| Region | Korea |
-| Category | `gd` (base game) |
-| APP_VER | `01.00` |
-| VERSION | `01.01` |
-| System version | `0x04500000` (firmware 4.50) |
-| Engine | Unreal Engine 4.8 (build `++depot+UE4-Releases+4.8`, EngineVersion `2591939`) |
-| `eboot.bin` size | 75,181,963 bytes |
-| `eboot.bin` SHA-256 | `ebf1d2fa6f44f05ab141e9b06fd8e60179db3be8b0b57b794ce79448ed133023` |
+| Title ID | Region | Content ID | APP_VER / VERSION | `eboot.bin` SHA-256 |
+| --- | --- | --- | --- | --- |
+| `CUSA03762` | Korea | `HP9000-CUSA03762_00-SHADOWOFBEAST0KR` | `01.00` / `01.01` | `ebf1d2fa6f44f05ab141e9b06fd8e60179db3be8b0b57b794ce79448ed133023` |
+| `CUSA02871` | USA | `UP9000-CUSA02871_00-SHADOWOFBEAST0US` | `01.00` / `01.01` | `ebf1d2fa6f44f05ab141e9b06fd8e60179db3be8b0b57b794ce79448ed133023` |
+| `CUSA00951` | Europe | `EP9000-CUSA00951_00-SHADOWOFBEAST0EU` | `01.00` / `01.01` | `7c35e4edc6304dc22f665182fb89385a589d04c9d4a7ac54fd8d4652e74a9343` |
+
+All three are base game (`CATEGORY = gd`) Unreal Engine 4.8 packages (`EngineVersion = 2591939`, `eboot.bin` size 75,181,963 bytes).
 
 The package is identified by `param.sfo`, not by its file name. The launcher checks TITLE_ID, CONTENT_ID, CATEGORY,
 APP_VER and VERSION before unpacking, then the executable hash before activating the installation. Any other build is

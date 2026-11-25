@@ -6,9 +6,29 @@
 
 #include "sotb_keys.h"
 
-/* CUSA03762-1.00 (KR_BD): region branch falls through to Circle-confirm keys; Western forces the Cross-confirm branch. */
 #define MENU_BUTTONS_CONTEXT 0x1659b0
 #define MENU_BUTTONS_SITE 0x1659c4
+
+typedef struct {
+    const char *build_key;
+    uint32_t context_offset;
+    uint32_t site_offset;
+    int original_circle_confirm;
+} MenuButtonsBuild;
+
+static const MenuButtonsBuild kBuilds[] = {
+    {"CUSA03762-1.00", MENU_BUTTONS_CONTEXT, MENU_BUTTONS_SITE, 1},
+    {"CUSA02871-1.00", MENU_BUTTONS_CONTEXT, MENU_BUTTONS_SITE, 0},
+    {"CUSA00951-1.00", MENU_BUTTONS_CONTEXT, MENU_BUTTONS_SITE, 0},
+};
+
+static const MenuButtonsBuild *find_build(const char *build_key) {
+    if (!build_key) return NULL;
+    for (size_t i = 0; i < sizeof(kBuilds) / sizeof(*kBuilds); ++i)
+        if (!strcmp(build_key, kBuilds[i].build_key)) return &kBuilds[i];
+    return NULL;
+}
+
 static const uint8_t kContext[] = {
     0xe8, 0x9b, 0x2d, 0x23, 0x00, 0x04, 0xfb, 0x0f, 0xb6, 0xc0, 0x48, 0x8d, 0x35,
     0xc4, 0x71, 0xf7, 0x02, 0x83, 0xf8, 0x03, 0x0f, 0x87, 0x1e, 0x01, 0x00, 0x00,
@@ -87,32 +107,42 @@ static int unavailable(const char *build, SotbMenuButtonLayout layout, const cha
     return 0;
 }
 
+int sotb_menu_buttons_effective_circle_confirm(const char *build_key, SotbMenuButtonLayout layout) {
+    if (layout != SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) return 0;
+    const MenuButtonsBuild *build = find_build(build_key);
+    return build ? build->original_circle_confirm : 0;
+}
+
 int sotb_menu_buttons_apply(uint8_t *image, size_t image_size, const char *build_key, SotbMenuButtonLayout layout) {
-    if (!build_key || strcmp(build_key, "CUSA03762-1.00")) return unavailable(build_key, layout, "not a supported build");
-    if (!image || image_size < MENU_BUTTONS_SITE + kWesternSecondKeyOffset + sizeof(kWesternSecondKey))
+    const MenuButtonsBuild *build = find_build(build_key);
+    if (!build) return unavailable(build_key, layout, "not a supported build");
+    if (!image || image_size < build->site_offset + kWesternSecondKeyOffset + sizeof(kWesternSecondKey))
         return unavailable(build_key, layout, "the image is too short");
-    if (memcmp(image + MENU_BUTTONS_CONTEXT, kContext, kContextLength))
+    if (memcmp(image + build->context_offset, kContext, kContextLength))
         return unavailable(build_key, layout, "the menu layout code does not match");
     if (site_count(image, image_size) != 1) return unavailable(build_key, layout, "the menu layout code is not unique");
 
-    if (memcmp(image + MENU_BUTTONS_SITE + kOriginalFirstKeyOffset, kOriginalFirstKey, sizeof(kOriginalFirstKey)) ||
-        memcmp(image + MENU_BUTTONS_SITE + kOriginalSecondKeyOffset, kOriginalSecondKey, sizeof(kOriginalSecondKey)) ||
-        memcmp(image + MENU_BUTTONS_SITE + kWesternFirstKeyOffset, kWesternFirstKey, sizeof(kWesternFirstKey)) ||
-        memcmp(image + MENU_BUTTONS_SITE + kWesternSecondKeyOffset, kWesternSecondKey, sizeof(kWesternSecondKey)))
+    if (memcmp(image + build->site_offset + kOriginalFirstKeyOffset, kOriginalFirstKey, sizeof(kOriginalFirstKey)) ||
+        memcmp(image + build->site_offset + kOriginalSecondKeyOffset, kOriginalSecondKey, sizeof(kOriginalSecondKey)) ||
+        memcmp(image + build->site_offset + kWesternFirstKeyOffset, kWesternFirstKey, sizeof(kWesternFirstKey)) ||
+        memcmp(image + build->site_offset + kWesternSecondKeyOffset, kWesternSecondKey, sizeof(kWesternSecondKey)))
         return unavailable(build_key, layout, "the menu key sites do not match");
 
-    const uint64_t original_first = lea_target(image, image_size, MENU_BUTTONS_SITE + kOriginalFirstKeyOffset);
-    const uint64_t original_second = lea_target(image, image_size, MENU_BUTTONS_SITE + kOriginalSecondKeyOffset);
-    const uint64_t western_first = lea_target(image, image_size, MENU_BUTTONS_SITE + kWesternFirstKeyOffset);
-    const uint64_t western_second = lea_target(image, image_size, MENU_BUTTONS_SITE + kWesternSecondKeyOffset);
+    const uint64_t original_first = lea_target(image, image_size, build->site_offset + kOriginalFirstKeyOffset);
+    const uint64_t original_second = lea_target(image, image_size, build->site_offset + kOriginalSecondKeyOffset);
+    const uint64_t western_first = lea_target(image, image_size, build->site_offset + kWesternFirstKeyOffset);
+    const uint64_t western_second = lea_target(image, image_size, build->site_offset + kWesternSecondKeyOffset);
     if (!original_first || !original_second || original_first != western_second || original_second != western_first)
         return unavailable(build_key, layout, "the menu key sites do not match");
 
     if (layout == SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) {
-        puts("Menu button layout: Original, Circle/B confirms and Cross/A cancels");
+        if (build->original_circle_confirm)
+            puts("Menu button layout: Original, Circle/B confirms and Cross/A cancels");
+        else
+            puts("Menu button layout: Original, Cross/A confirms and Circle/B cancels");
         return 1;
     }
-    memcpy(image + MENU_BUTTONS_SITE, kWesternBranch, sizeof(kWesternBranch));
+    memcpy(image + build->site_offset, kWesternBranch, sizeof(kWesternBranch));
     puts("Menu button layout: Western, Cross/A confirms and Circle/B cancels");
     return 1;
 }

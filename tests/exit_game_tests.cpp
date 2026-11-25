@@ -178,14 +178,107 @@ int main() {
     CHECK(sotb_exit_game_apply(dummy_img.data(), dummy_img.size(), "CUSA99999-1.00", cave, sizeof(cave), err,
                                sizeof(err)) == 0);
     CHECK(dummy_img == backup);
-    CHECK(sotb_exit_game_apply(dummy_img.data(), dummy_img.size(), "CUSA03762-1.00", cave, sizeof(cave), err,
-                               sizeof(err)) == 0);
-    CHECK(dummy_img == backup);
+    for (const char* build : {"CUSA03762-1.00", "CUSA02871-1.00", "CUSA00951-1.00"}) {
+        CHECK(sotb_exit_game_apply(dummy_img.data(), dummy_img.size(), build, cave, sizeof(cave), err,
+                                   sizeof(err)) == 0);
+        CHECK(dummy_img == backup);
+    }
+
+    /* Valid fingerprints patch cleanly for all 3 supported builds without touching unrelated bytes. */
+    static const uint8_t kTickBytes[] = {
+        0x4c, 0x89, 0xe7, 0xe8, 0x40, 0x1b, 0x08, 0x00, 0x48, 0x89, 0xc7, 0xe8, 0x18, 0x42, 0xfb, 0xff,
+        0x49, 0x89, 0xc6, 0x4d, 0x3b, 0xb4, 0x24, 0x60, 0x03, 0x00, 0x00, 0x74, 0x27, 0x4d, 0x89, 0xb4,
+        0x24, 0x60, 0x03, 0x00, 0x00, 0x4c, 0x89, 0xe7, 0xe8, 0x5b, 0xfc, 0xff, 0xff, 0x4d, 0x85, 0xf6,
+        0x0f, 0x84, 0xe0, 0x00, 0x00, 0x00, 0x49, 0x8b, 0x06, 0x4c, 0x89, 0xf7, 0xff, 0x90, 0x70, 0x04,
+        0x00, 0x00, 0xeb, 0x09, 0x4d, 0x85, 0xf6, 0x0f, 0x84, 0xc9, 0x00, 0x00, 0x00,
+    };
+    static const uint8_t kAddBytes[] = {
+        0x55, 0x48, 0x89, 0xe5, 0x53, 0x50, 0xb8, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x87, 0x54, 0x03, 0x00,
+        0x00, 0x48, 0x63, 0xc8, 0x4c, 0x63, 0x84, 0x8f, 0x48, 0x03, 0x00, 0x00, 0x48, 0x89, 0xc8, 0x48,
+        0xc1, 0xe0, 0x04, 0x48, 0x8b, 0x84, 0x07, 0x28, 0x03, 0x00, 0x00, 0x4a, 0x8b, 0x1c, 0xc0, 0x41,
+        0x8d, 0x40, 0x01, 0x89, 0x84, 0x8f, 0x48, 0x03, 0x00, 0x00, 0x40, 0x88, 0xb3, 0x71, 0x02, 0x00,
+        0x00, 0x48, 0x8d, 0xbb, 0x78, 0x02, 0x00, 0x00, 0x48, 0x89, 0xd6, 0xe8, 0x90, 0x01, 0x3a, 0x00,
+        0x31, 0xf6, 0x48, 0x89, 0xdf, 0xe8, 0xe6, 0xef, 0xa4, 0x00, 0x48, 0x89, 0xd8, 0x48, 0x83, 0xc4,
+        0x08, 0x5b, 0x5d, 0xc3,
+    };
+    static const uint8_t kRefreshBytes[] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x56, 0x53, 0x49, 0x89, 0xfe, 0xe8, 0x91, 0xdb, 0xff, 0xff, 0x48,
+        0x8b, 0x98, 0xf8, 0x03, 0x00, 0x00, 0x48, 0x85, 0xdb, 0x74, 0x33, 0x48, 0x8d, 0x3d, 0x64, 0xf4,
+        0xec, 0x02, 0xe8, 0x29, 0x82, 0x14, 0x00, 0x48, 0x89, 0xdf, 0x48, 0x89, 0xc6, 0xe8, 0x4e, 0x5f,
+        0x4d, 0x00, 0x84, 0xc0, 0x74, 0x18, 0x48, 0x89, 0xdf, 0xe8, 0xa2, 0xbc, 0xf7, 0xff, 0x49, 0x8b,
+        0x06, 0x4c, 0x89, 0xf7, 0x5b, 0x41, 0x5e, 0x5d, 0xff, 0xa0, 0x70, 0x04, 0x00, 0x00, 0x5b, 0x41,
+        0x5e, 0x5d, 0xc3,
+    };
+    static const uint8_t kCreateBytes[] = {
+        0x55, 0x48, 0x89, 0xe5, 0x41, 0x57, 0x41, 0x56, 0x41, 0x55, 0x41, 0x54, 0x53, 0x48,
+        0x83, 0xec, 0x48, 0x49, 0x89, 0xcf, 0x49, 0x89, 0xd4, 0x48, 0x89, 0xf3, 0x49, 0x89,
+    };
+    std::vector<uint8_t> synth(SOTB_EXIT_GAME_CREATETEXT_SITE + 512 + 64, 0);
+    auto reset_synth = [&]() {
+        std::fill(synth.begin(), synth.end(), 0);
+        std::memcpy(synth.data() + 0x1e50e8u, kTickBytes, sizeof(kTickBytes));
+        std::memcpy(synth.data() + SOTB_EXIT_GAME_ADDBUTTON_SITE, kAddBytes, sizeof(kAddBytes));
+        std::memcpy(synth.data() + 0x269090u, kRefreshBytes, sizeof(kRefreshBytes));
+        std::memcpy(synth.data() + SOTB_EXIT_GAME_CREATETEXT_SITE, kCreateBytes, sizeof(kCreateBytes));
+    };
+    const size_t img_len = SOTB_EXIT_GAME_CREATETEXT_SITE + 64;
+    for (const char* build : {"CUSA03762-1.00", "CUSA02871-1.00", "CUSA00951-1.00"}) {
+        reset_synth();
+        uint8_t* local_cave = synth.data() + img_len;
+        CHECK(sotb_exit_game_apply(synth.data(), img_len, build, local_cave, 512, err, sizeof(err)) == 1);
+        CHECK(synth[SOTB_EXIT_GAME_TICK_SITE] == 0xe8);
+        CHECK(synth[SOTB_EXIT_GAME_SETUP_SITE] == 0xe8 && synth[SOTB_EXIT_GAME_SETUP_SITE + 5] == 0x90);
+        CHECK(synth[SOTB_EXIT_GAME_REFRESH_SITE] == 0xe9);
+    }
+
+    /* Regional menu layout + Exit Game modal confirm/cancel parity across builds. */
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA03762-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 1);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA02871-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA00951-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 0);
+    modal.Open(sotb_menu_buttons_effective_circle_confirm("CUSA02871-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) != 0,
+               true, "en_US");
+    CHECK(modal.HintText() == "A Confirm     B Cancel");
+    CHECK(modal.StepPad(SotbExitConfirm::kButtonCross) == SotbExitConfirm::Action::Confirmed);
+
+    /* Non-overlap check across all native patch sites in the executable image. */
+    struct PatchRange { uint32_t start, end; };
+    const PatchRange all_patches[] = {
+        {0x1659c4u, 0x1659cau}, /* menu buttons */
+        {0x1993b0u, 0x1993b6u}, /* guest_patches show_screen */
+        {0x1a32fdu, 0x1a32ffu}, /* guest_patches map */
+        {0x1a46bau, 0x1a46c0u}, /* guest_patches popup */
+        {0x1c9f59u, 0x1c9f5fu}, /* guest_patches save flow */
+        {0x28d5c21u, 0x28d5c42u}, /* skip_intro boot sequence */
+        {0x1e50f3u, 0x1e50f8u}, /* exit_game tick */
+        {0x1e5124u, 0x1e512au}, /* exit_game setup */
+        {0x1ed540u, 0x1ed545u}, /* guest_patches options */
+        {0x1eede5u, 0x1eedebu}, /* guest_patches options social */
+        {0x2690ceu, 0x2690deu}, /* exit_game refresh */
+        {0x28b810u, 0x28b814u}, /* guest_patches login */
+        {0x3408c4u, 0x3408d2u}, /* guest_patches save defaults */
+        {0x340f1cu, 0x340f2cu}, /* guest_patches save reset */
+        {0x346ba3u, 0x346ba8u}, /* guest_patches serialize 0 */
+        {0x346bdbu, 0x346be0u}, /* guest_patches serialize 1 */
+        {0x607f0cu, 0x607f16u}, /* guest_display 0 */
+        {0x6080b7u, 0x6080c1u}, /* guest_display 1 */
+        {0x609011u, 0x60901bu}, /* guest_display 2 */
+        {0x609037u, 0x60904bu}, /* guest_display 4+5 */
+        {0x609290u, 0x60929au}, /* guest_display 3 */
+        {0x3d42610u, 0x3d42618u}, /* loading hint vtable */
+    };
+    for (size_t i = 0; i < sizeof(all_patches) / sizeof(*all_patches); ++i) {
+        CHECK(all_patches[i].start < all_patches[i].end);
+        for (size_t j = i + 1; j < sizeof(all_patches) / sizeof(*all_patches); ++j) {
+            CHECK(all_patches[i].end <= all_patches[j].start || all_patches[j].end <= all_patches[i].start);
+        }
+    }
 
 #ifdef SOTB_SOURCE_DIR
     const std::string src = read_text(std::string(SOTB_SOURCE_DIR) + "/src/sotb_exit_game.c");
     CHECK(!src.empty());
     CHECK(src.find("DEBUG_SAULO") == std::string::npos);
+    const std::string loader = read_text(std::string(SOTB_SOURCE_DIR) + "/src/loader.c");
+    CHECK(loader.find("sotb_menu_buttons_effective_circle_confirm(") != std::string::npos);
 #endif
 
     std::puts("exit_game_tests: PASS");

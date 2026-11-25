@@ -13,6 +13,7 @@
 #include "import_slots.h"
 #include "guest_display.h"
 #include "resolution_guard.h"
+#include "psn_notice.h"
 #include "skip_intro.h"
 #include "sotb_exit_game.h"
 #include "sotb_game_prompts.h"
@@ -1161,12 +1162,12 @@ int main(int argc, char **argv) {
                 snprintf(message, sizeof(message), "LZCNT compatibility: %s", lzcnt_compat_status_text(status));
                 fail(message);
             }
-            printf("CPU: LZCNT rewritten in %zu patch ranges of %s\n", build->count, build->build);
+            printf("CPU: LZCNT rewritten in %zu patch ranges of %s\n", build->count, game_build.code_key);
         }
         guest_patches_apply(image, size, cave, cave_size);
         const SotbMenuButtonLayout menu_button_layout = sotb_menu_button_layout(settings_file);
         sotb_menu_buttons_apply(image, size, game_build.code_key, menu_button_layout);
-        g_exit_layout_original = (menu_button_layout == SOTB_MENU_BUTTON_LAYOUT_ORIGINAL);
+        g_exit_layout_original = sotb_menu_buttons_effective_circle_confirm(game_build.code_key, menu_button_layout);
         if (gpu_enabled) {
             char exit_reason[160];
             sotbgpu_exit_confirm_set_save_check(runtime_savedata_write_active);
@@ -1178,15 +1179,23 @@ int main(int argc, char **argv) {
                 printf("Exit Game: unavailable for %s: %s\n", game_build.code_key, exit_reason);
             }
         }
+        {
+            char reason[160];
+            if (psn_notice_apply(image, size, cave + 3072, cave_size - 3072, reason, sizeof(reason))) {
+                puts("PlayStation Network: ConnectionSuccess text overridden with blank text");
+            } else {
+                printf("PlayStation Network: ConnectionSuccess blank text unavailable: %s\n", reason);
+            }
+        }
         if (sotb_skip_intro(settings_file)) {
             char reason[160];
-            if (skip_intro_apply(image, size, cave + 1024, cave_size - 1024, reason, sizeof(reason))) {
-                printf("Skip Intro: on, startup presentation hidden\n");
+            if (skip_intro_apply(image, size, reason, sizeof(reason))) {
+                puts("Skip Intro: on, publisher and developer boot screens bypassed");
             } else {
                 printf("Skip Intro: requested but unavailable: %s\n", reason);
             }
         } else {
-            printf("Skip Intro: off\n");
+            puts("Skip Intro: off");
         }
         protect(cave, round_page(cave_size + lzcnt_stubs), 5);
     }

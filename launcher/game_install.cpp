@@ -453,26 +453,41 @@ InstallStatus FromPackage(PackageResult::Code code) {
     return InstallStatus::kReadFailed;
 }
 
-// A package whose build is already completely and correctly prepared needs no (re)installing. Which build is
-// effectively active is decided separately, by precedence (LastPreparedBuild): installing an older, already-prepared
-// build here never changes it. Nothing is returned when the build still has to be installed.
+const GameBuild* ActiveValidBuild(const GameRoots& roots, std::span<const GameBuild> builds) {
+    const GameBuild* active = LastPreparedBuild(roots, builds);
+    if (!active) {
+        return nullptr;
+    }
+    const GameCheck check = CheckGameFiles(BuildPaths(roots, *active), builds);
+    return check.state == GameFileState::kValid && check.build == active ? active : nullptr;
+}
+
+bool ActivatePrepared(const fs::path& app0) {
+    std::error_code ec;
+    fs::last_write_time(app0 / kPreparedMarker, fs::file_time_type::clock::now(), ec);
+    return !ec;
+}
+
 std::optional<InstallResult> ReuseInstalledBuild(const GameRoots& roots, std::span<const GameBuild> builds,
                                                  const GameBuild& build, bool replace_active) {
-    if (replace_active) {
-        return std::nullopt; // repairing the active build by reinstalling it is still allowed
+    if (ActiveValidBuild(roots, builds) == &build) {
+        if (replace_active) {
+            return std::nullopt;
+        }
+        return Failure(InstallStatus::kUpToDate, build.label);
     }
     const GamePaths target = BuildPaths(roots, build);
     const GameCheck prepared = CheckGameFiles(target, builds);
     if (prepared.state != GameFileState::kValid || prepared.build != &build) {
         return std::nullopt;
     }
-    // Installing an installed build of another region switches to that region; its files are already in place.
-    if (const GameBuild* active = LastPreparedBuild(roots, builds);
-        active && std::string_view(active->title_id) != build.title_id) {
-        std::error_code ec;
-        fs::last_write_time(target.app0 / kPreparedMarker, fs::file_time_type::clock::now(), ec);
+    if (!ActivatePrepared(target.app0)) {
+        return Failure(InstallStatus::kWriteFailed, "cannot activate " + Utf8(target.app0));
     }
-    return Failure(InstallStatus::kUpToDate, build.label);
+    InstallResult result;
+    result.status = InstallStatus::kActivated;
+    result.build = &build;
+    return result;
 }
 
 // Install update upgrades the active game: an update of another title is refused, whatever other region is installed.
@@ -1014,6 +1029,8 @@ InstallMessage DescribeInstall(InstallStatus status) {
                    "first, then install the update.")};
     case InstallStatus::kUpToDate:
         return {Tr("Already installed"), Tr("This version is already installed.")};
+    case InstallStatus::kActivated:
+        return {Tr("Game build selected"), Tr("This installed build is now active.")};
     case InstallStatus::kExpectedBasePackage:
         return {Tr("This is an update package"),
                 Tr("Install game needs the base game. Use Install update for an update package.")};

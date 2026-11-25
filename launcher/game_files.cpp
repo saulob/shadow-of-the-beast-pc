@@ -624,5 +624,6 @@ extern "C" int sotb_game_build(const char* image_dir, SotbGameBuild* out) {
     out->version = build->version;
     out->code_key = build->code_build;
     out->region = build->region;
+    out->original_circle_confirm = build->original_circle_confirm ? 1 : 0;
     return 1;
 }

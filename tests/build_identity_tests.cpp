@@ -3,6 +3,7 @@
 // before any guest code. Synthetic evidence, SELF headers and folders; the real prepared image is only read, and skipped
 // when absent. No window, no game launch, no network.
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -59,8 +60,7 @@ const GameBuild& Supported() {
     return SupportedBuilds().front();
 }
 
-BuildEvidence SupportedEvidence() {
-    const GameBuild& build = Supported();
+BuildEvidence EvidenceFor(const GameBuild& build) {
     const PackageLayer& layer = FinishedLayer(build);
     BuildEvidence evidence;
     evidence.source = "synthetic";
@@ -75,6 +75,10 @@ BuildEvidence SupportedEvidence() {
     evidence.code = build.executable.code;
     evidence.data = build.executable.data;
     return evidence;
+}
+
+BuildEvidence SupportedEvidence() {
+    return EvidenceFor(Supported());
 }
 
 std::string Sha(char digit) {
@@ -156,6 +160,40 @@ void TestSupportedIdentity() {
     CHECK(header.entry == Supported().executable.entry && header.image_extent == Supported().executable.image_extent);
     AddExecutable(from_self, header, Supported().executable.file_size, Supported().eboot_sha256);
     CHECK(AssessBuild(from_self).verdict == BuildVerdict::kSupported);
+
+    CHECK(SupportedBuilds().size() == 3);
+    CHECK(Has(SupportedBuildsText(), "CUSA03762 1.00 Korea"));
+    CHECK(Has(SupportedBuildsText(), "CUSA02871 1.00 USA"));
+    CHECK(Has(SupportedBuildsText(), "CUSA00951 1.00 Europe"));
+    const std::string profiles_py = ReadAll("scripts/game_profiles.py");
+    for (const GameBuild& build : SupportedBuilds()) {
+        const BuildEvidence ev = EvidenceFor(build);
+        const BuildAssessment assessed = AssessBuild(ev);
+        CHECK(assessed.verdict == BuildVerdict::kSupported);
+        CHECK(assessed.closest == &build);
+        CHECK(assessed.matched == assessed.fields.size() && assessed.differed == 0);
+        CHECK(BuildMetadataText(build) == "APP_VER 1.00 \xC2\xB7 VERSION 1.01");
+        CHECK(Has(profiles_py, build.title_id) && Has(profiles_py, build.content_id) &&
+              Has(profiles_py, build.eboot_sha256) && Has(profiles_py, build.folder));
+        const bool expected_circle = std::string(build.title_id) == "CUSA03762";
+        CHECK(build.original_circle_confirm == expected_circle);
+    }
+
+    // Cross-build executable mismatch (Europe metadata with Korea/USA SHA) is never SUPPORTED.
+    const GameBuild* europe = nullptr;
+    for (const GameBuild& build : SupportedBuilds()) {
+        if (std::string(build.title_id) == "CUSA00951") {
+            europe = &build;
+        }
+    }
+    CHECK(europe != nullptr);
+    if (europe) {
+        BuildEvidence mixed = EvidenceFor(*europe);
+        mixed.eboot_sha256 = Supported().eboot_sha256;
+        const BuildAssessment mixed_result = AssessBuild(mixed);
+        CHECK(mixed_result.verdict == BuildVerdict::kPossibleCandidate);
+        CHECK(mixed_result.closest == europe);
+    }
 
     // Evidence that records less is never SUPPORTED without the executable's fingerprint.
     BuildEvidence names_only = SupportedEvidence();
@@ -391,9 +429,46 @@ void TestImageReport() {
     sotb_game_build_report((folder.path / "exact").string().c_str(), [](const char* line) { sink->push_back(line); });
     CHECK(Has(Join(lines), "Build verdict: SUPPORTED"));
 
+    for (const GameBuild& build : SupportedBuilds()) {
+        const std::string sub = std::string("exact-") + build.title_id;
+        folder.Write(sub + "/image.json",
+                     std::string("{\n  \"title_id\": \"") + build.title_id + "\",\n  \"app_ver\": \"" +
+                         FinishedLayer(build).app_ver + "\",\n  \"eboot_sha256\": \"" + build.eboot_sha256 +
+                         "\",\n  \"entry\": \"0x19105d0\",\n  \"image_bytes\": 72139772,\n  \"eboot_image_bytes\": " +
+                         std::to_string(build.executable.image_extent) + "\n}\n");
+        SotbGameBuild build_info{};
+        CHECK(sotb_game_build((folder.path / sub).string().c_str(), &build_info) == 1);
+        CHECK(std::string(build_info.title_id) == build.title_id);
+        CHECK(std::string(build_info.code_key) == build.code_build);
+        CHECK(build_info.original_circle_confirm == (build.original_circle_confirm ? 1 : 0));
+    }
+
+    // Multi-build active routing: each build has its own folder and the most recently prepared build wins.
+    {
+        const GameRoots roots{folder.path / "prepared", folder.path / "image"};
+        const GameBuild& kr = SupportedBuilds()[0];
+        const GameBuild& us = SupportedBuilds()[1];
+        const GameBuild& eu = SupportedBuilds()[2];
+        const auto mark = [&](const GameBuild& b, int seconds_offset) {
+            const fs::path marker = BuildPaths(roots, b).app0 / kPreparedMarker;
+            fs::create_directories(marker.parent_path());
+            std::ofstream(marker, std::ios::binary) << "{\"version\": \"1.00\", \"scope\": \"full\"}\n";
+            fs::last_write_time(marker, fs::file_time_type::clock::now() + std::chrono::seconds(seconds_offset));
+        };
+        mark(kr, -20);
+        mark(us, -10);
+        CHECK(LastPreparedBuild(roots) == &us);
+        CHECK(ActiveBuildPaths(roots).app0 == BuildPaths(roots, us).app0);
+        mark(eu, 0);
+        CHECK(LastPreparedBuild(roots) == &eu);
+        CHECK(PreparedBuilds(roots).size() == 3);
+        mark(kr, 10);
+        CHECK(LastPreparedBuild(roots) == &kr);
+    }
+
     char problem[512] = "";
     sotb_game_build_problem((folder.path / "altered").string().c_str(), problem, sizeof(problem));
-    CHECK(Has(problem, "(POSSIBLE CANDIDATE)") && Has(problem, "is not the executable of CUSA03762 base 01.00"));
+    CHECK(Has(problem, "(POSSIBLE CANDIDATE)") && Has(problem, "is not the executable of " + SupportedBuildsText()));
     lines.clear();
     sotb_game_build_report((folder.path / "missing").string().c_str(), [](const char* line) { sink->push_back(line); });
     CHECK(Has(Join(lines), "Build verdict: UNSUPPORTED"));
@@ -420,36 +495,44 @@ void TestRefusedBeforeGuest() {
 }
 
 void TestRealImage() {
-    const fs::path eboot = fs::path(SOTB_SOURCE_DIR) / "game" / "prepared" / Supported().folder / "eboot.bin";
-    std::error_code ec;
-    if (!fs::is_regular_file(eboot, ec)) {
-        std::printf("real image: SKIPPED (%s is not prepared)\n", eboot.string().c_str());
-        return;
+    size_t checked = 0;
+    for (const GameBuild& build : SupportedBuilds()) {
+        const fs::path eboot = fs::path(SOTB_SOURCE_DIR) / "game" / "prepared" / build.folder / "eboot.bin";
+        std::error_code ec;
+        if (!fs::is_regular_file(eboot, ec)) {
+            continue;
+        }
+        ++checked;
+        std::ifstream in(eboot, std::ios::binary);
+        std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        uint8_t digest[32];
+        CHECK(crypto::Sha256(bytes.data(), bytes.size(), digest));
+        static const char digits[] = "0123456789abcdef";
+        std::string sha;
+        for (const uint8_t byte : digest) {
+            sha += digits[byte >> 4];
+            sha += digits[byte & 15];
+        }
+        BuildEvidence evidence = EvidenceFor(build);
+        evidence.source = "real eboot.bin";
+        evidence.entry.reset();
+        evidence.image_extent.reset();
+        evidence.code.reset();
+        evidence.data.reset();
+        const ExecutableHeader header = ReadExecutableHeader({bytes.data(), std::min<size_t>(bytes.size(), 16 * 1024)});
+        CHECK(header.valid);
+        AddExecutable(evidence, header, bytes.size(), sha);
+        const BuildAssessment assessment = AssessBuild(evidence);
+        CHECK(assessment.verdict == BuildVerdict::kSupported);
+        CHECK(assessment.closest == &build);
+        CHECK(assessment.matched == assessment.fields.size());
+        std::printf("real image: %s %s, %zu fields match (entry 0x%llx, %zu bytes)\n", build.folder,
+                    VerdictName(assessment.verdict), assessment.matched, static_cast<unsigned long long>(header.entry),
+                    bytes.size());
     }
-    std::ifstream in(eboot, std::ios::binary);
-    std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-    uint8_t digest[32];
-    CHECK(crypto::Sha256(bytes.data(), bytes.size(), digest));
-    static const char digits[] = "0123456789abcdef";
-    std::string sha;
-    for (const uint8_t byte : digest) {
-        sha += digits[byte >> 4];
-        sha += digits[byte & 15];
+    if (checked == 0) {
+        std::printf("real image: SKIPPED (no supported build is prepared)\n");
     }
-    BuildEvidence evidence = SupportedEvidence();
-    evidence.source = "real eboot.bin";
-    evidence.entry.reset();
-    evidence.image_extent.reset();
-    evidence.code.reset();
-    evidence.data.reset();
-    const ExecutableHeader header = ReadExecutableHeader({bytes.data(), std::min<size_t>(bytes.size(), 16 * 1024)});
-    CHECK(header.valid);
-    AddExecutable(evidence, header, bytes.size(), sha);
-    const BuildAssessment assessment = AssessBuild(evidence);
-    CHECK(assessment.verdict == BuildVerdict::kSupported);
-    CHECK(assessment.matched == assessment.fields.size());
-    std::printf("real image: %s, %zu fields match (entry 0x%llx, %zu bytes)\n", VerdictName(assessment.verdict), assessment.matched,
-                static_cast<unsigned long long>(header.entry), bytes.size());
 }
 
 } // namespace

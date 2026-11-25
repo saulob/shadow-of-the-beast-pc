@@ -12776,5 +12776,13 @@ const SotbPromptSet sotb_prompt_sets[] = {
      6634484704ull, 6633116901ull, 1367759u, 0x7259963bu,
      assets, sizeof(assets) / sizeof(*assets), runs, sizeof(runs) / sizeof(*runs),
      blob, 334538, 2227765, 0x0a962b61u},
+    {"CUSA02871-1.00", "/app0/beast/content/paks/pakchunk0-ps4.pak",
+     6902920160ull, 6901552357ull, 1367759u, 0xa1cd828cu,
+     assets, sizeof(assets) / sizeof(*assets), runs, sizeof(runs) / sizeof(*runs),
+     blob, 334538, 2227765, 0x0a962b61u},
+    {"CUSA00951-1.00", "/app0/beast/content/paks/pakchunk0-ps4.pak",
+     6902920160ull, 6901552357ull, 1367759u, 0xa1cd828cu,
+     assets, sizeof(assets) / sizeof(*assets), runs, sizeof(runs) / sizeof(*runs),
+     blob, 334538, 2227765, 0x0a962b61u},
 };
 const size_t sotb_prompt_set_count = sizeof(sotb_prompt_sets) / sizeof(*sotb_prompt_sets);

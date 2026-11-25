@@ -32,7 +32,7 @@ typedef struct {
     uint8_t pad[3];
 } GuestSlateGeometry;
 
-/* Every site is checked first; nothing is written unless all of them hold the original bytes of CUSA03762 1.00. */
+/* Every site is checked first; nothing is written unless all of them hold the original bytes of a supported build. */
 int guest_apply_display_size(uint8_t *image, size_t image_size, int width, int height, char *error, size_t error_size);
 
 GuestSlateGeometry guest_scale_loading_geometry(const GuestSlateGeometry *allotted);

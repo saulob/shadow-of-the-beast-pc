@@ -31,6 +31,7 @@ enum class InstallStatus {
     kPrepareFailed,
     kUpdateNeedsBase,
     kUpToDate,
+    kActivated,
     kUnsupportedBuild,
     kExpectedBasePackage,
     kExpectedUpdatePackage,
@@ -50,7 +51,8 @@ struct InstallResult {
     size_t files = 0, linked = 0;
     const GameBuild* build = nullptr; // the build that was installed
     bool ok() const {
-        return status == InstallStatus::kInstalled || status == InstallStatus::kUpToDate;
+        return status == InstallStatus::kInstalled || status == InstallStatus::kUpToDate ||
+               status == InstallStatus::kActivated;
     }
 };
 

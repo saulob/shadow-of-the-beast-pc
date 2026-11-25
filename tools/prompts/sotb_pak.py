@@ -38,6 +38,13 @@ class PakIdentity:
     index_crc32: int
 
 
+BUILD_PAK_IDENTITIES: tuple[tuple[str, PakIdentity], ...] = (
+    ("CUSA03762-1.00", PakIdentity(6634484704, 3, 6633116901, 1367759, 0x7259963B)),
+    ("CUSA02871-1.00", PakIdentity(6902920160, 3, 6901552357, 1367759, 0xA1CD828C)),
+    ("CUSA00951-1.00", PakIdentity(6902920160, 3, 6901552357, 1367759, 0xA1CD828C)),
+)
+
+
 def _fstring(blob: bytes, pos: int) -> tuple[str, int]:
     (length,) = struct.unpack_from("<i", blob, pos)
     pos += 4

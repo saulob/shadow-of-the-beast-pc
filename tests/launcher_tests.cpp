@@ -328,6 +328,32 @@ void TestPageTexts() {
     CHECK(std::string(kRendererChoices[3].name) == "Direct3D 11 (experimental)");
 #endif
     CHECK(Contains(launcher, "Controller prompts") && Contains(launcher, "game's button icons use this style from the next game start"));
+
+    // Play page cleanup: technical fields stay in logs and Bug Report, never on the Play page.
+    const size_t play_start = launcher.find("void DrawPlay(");
+    const size_t play_end = launcher.find("void DrawDisplay(", play_start);
+    CHECK(play_start != std::string::npos && play_end != std::string::npos && play_end > play_start);
+    const std::string play_body = launcher.substr(play_start, play_end - play_start);
+    CHECK(Contains(play_body, "ui.StatusCard(") && Contains(play_body, "ui.Row(\"Game files\")") &&
+          Contains(play_body, "Reinstall game...") && Contains(play_body, "GameFilesHelp()") &&
+          Contains(play_body, "ui.Toggle(\"Show this launcher\""));
+    for (const char* forbidden : {"ui.Info(\"Build\"", "ui.Info(\"Package\"", "ui.Info(\"Metadata\"",
+                                  "Executable SHA-256", "ui.Info(\"Game folder\""}) {
+        CHECK(!Contains(play_body, forbidden));
+    }
+
+    const size_t about_start = launcher.find("void DrawAbout(");
+    const size_t about_end = launcher.find("void WindowSizeCombo(", about_start);
+    CHECK(about_start != std::string::npos && about_end != std::string::npos && about_end > about_start);
+    const std::string about_body = launcher.substr(about_start, about_end - about_start);
+    CHECK(!Contains(about_body, "Executable SHA-256") && !Contains(about_body, "{\"Build\","));
+
+    // Multi-build install updates active paths and logs diagnostics; SupportedBuildsText covers all 3 builds.
+    CHECK(Contains(launcher, "ActiveBuildPaths(roots_)"));
+    CHECK(Contains(launcher, "install_outcome_->diagnostics"));
+    const std::string supported = SupportedBuildsText();
+    CHECK(Contains(supported, "CUSA03762 1.00 Korea") && Contains(supported, "CUSA02871 1.00 USA") &&
+          Contains(supported, "CUSA00951 1.00 Europe"));
 }
 
 void TestManagedSettings() {

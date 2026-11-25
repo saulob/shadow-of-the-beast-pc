@@ -69,7 +69,7 @@ def find_build_packages(game_root, title, version):
         fail(f'no complete supported build{" for " + wanted if wanted else ""} in {game_root}')
     if len(builds) > 1:
         names = ', '.join(f'{t} {v}' for t, v, _, _ in builds)
-        fail(f'the packages complete several builds ({names}); pass --version to choose one')
+        fail(f'the packages complete several builds ({names}); pass --title and/or --version to choose one')
     return builds[0]
 
 
@@ -102,8 +102,8 @@ def extract(pkg_path, target, only, label):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--game-root', type=Path, default=ROOT / 'game')
-    parser.add_argument('--title', help='title to prepare: CUSA03762')
-    parser.add_argument('--version', help='profile version to prepare (CUSA03762: 1.00)')
+    parser.add_argument('--title', help='title to prepare: CUSA03762, CUSA02871 or CUSA00951')
+    parser.add_argument('--version', help='profile version to prepare (1.00)')
     parser.add_argument('--scope', choices=('core', 'full'), default='core',
                         help='core: executables, modules and metadata only; full: all game data')
     args = parser.parse_args()

@@ -18,8 +18,11 @@ typedef enum SotbMenuButtonLayout {
 
 SotbMenuButtonLayout sotb_menu_button_layout(const char *settings_file);
 
-/* Patches the CUSA03762-1.00 region branch for Western; leaves the image untouched for Original. */
+/* Patches the region branch for Western; leaves the image untouched for Original. */
 int sotb_menu_buttons_apply(uint8_t *image, size_t image_size, const char *build_key, SotbMenuButtonLayout layout);
+
+/* True when the active build + layout uses Circle/B to confirm (only Korea Original). */
+int sotb_menu_buttons_effective_circle_confirm(const char *build_key, SotbMenuButtonLayout layout);
 
 #ifdef __cplusplus
 }

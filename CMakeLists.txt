@@ -37,7 +37,7 @@ add_library(sotb_startup_phase STATIC src/startup_phase.c)
 target_include_directories(sotb_startup_phase PUBLIC src)
 target_compile_options(sotb_startup_phase PRIVATE -Wall -Wextra -Werror)
 
-add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c)
+add_library(sotb_guest_display STATIC src/guest_display.c src/skip_intro.c src/psn_notice.c)
 add_library(sotb_resolution_guard STATIC src/resolution_guard.c)
 add_library(sotb_exit_game_l10n STATIC src/sotb_exit_game_l10n.c)
 target_include_directories(sotb_exit_game_l10n PUBLIC src)
@@ -339,8 +339,14 @@ target_compile_options(sotb-controller-prompts-tests PRIVATE -Wall -Wextra)
 
 add_executable(skip_intro_test EXCLUDE_FROM_ALL tests/skip_intro_tests.c)
 target_include_directories(skip_intro_test PRIVATE src)
-target_compile_definitions(skip_intro_test PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_compile_definitions(skip_intro_test PRIVATE SOTB_IMAGE_ROOT="${CMAKE_SOURCE_DIR}/build/image" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_options(skip_intro_test PRIVATE -Wall -Wextra -Werror)
+
+add_executable(psn_notice_test EXCLUDE_FROM_ALL tests/psn_notice_tests.c)
+target_include_directories(psn_notice_test PRIVATE src)
+target_compile_definitions(psn_notice_test PRIVATE SOTB_IMAGE_ROOT="${CMAKE_SOURCE_DIR}/build/image" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
+target_compile_options(psn_notice_test PRIVATE -Wall -Wextra -Werror)
 
 add_executable(sotb-menu-buttons-tests EXCLUDE_FROM_ALL tests/menu_buttons_tests.c)
 target_include_directories(sotb-menu-buttons-tests PRIVATE src)
@@ -354,9 +360,9 @@ target_compile_definitions(sotb-title-bar-tests PRIVATE SOTB_SOURCE_DIR="${CMAKE
 set_target_properties(sotb-title-bar-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-title-bar-tests PRIVATE -Wall -Wextra -Werror)
 
-add_executable(sotb-exit-game-tests EXCLUDE_FROM_ALL tests/exit_game_tests.cpp src/sotb_exit_game.c)
+add_executable(sotb-exit-game-tests EXCLUDE_FROM_ALL tests/exit_game_tests.cpp src/sotb_exit_game.c src/sotb_menu_buttons.c)
 target_include_directories(sotb-exit-game-tests PRIVATE src gpu/shim launcher)
-target_link_libraries(sotb-exit-game-tests PRIVATE sotb_exit_game_l10n)
+target_link_libraries(sotb-exit-game-tests PRIVATE sotb_exit_game_l10n sotb_keys)
 target_compile_definitions(sotb-exit-game-tests PRIVATE SOTB_BOOT_IMAGE="${CMAKE_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin" SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 set_target_properties(sotb-exit-game-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-exit-game-tests PRIVATE -Wall -Wextra -Werror)

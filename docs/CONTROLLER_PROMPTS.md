@@ -23,7 +23,7 @@ with the replacement bytes written over them. The pak on disk is only read.
 
 `src/sotb_prompt_assets.c` installs the overlay, all or nothing:
 
-1. the build has a prompt set (`CUSA03762-1.00`), the pak has the recorded size, footer, and index CRC-32;
+1. the build has a prompt set (`CUSA03762-1.00`, `CUSA02871-1.00` or `CUSA00951-1.00`), the pak has the recorded size, footer, and index CRC-32;
 2. every texture is inside the pak, and its package data has the recorded CRC-32;
 3. the replacement bytes inflate to the recorded size and CRC-32, and each texture with its runs applied has the recorded
    replacement CRC-32;
@@ -35,7 +35,7 @@ inflate, around 100 ms, once.
 
 `src/sotb_prompt_assets_data.c` is generated. The runs are new Xbox art; on the Press Start controls page the changed blocks also carry that page's own background around the redrawn parts.
 
-## What is replaced (CUSA03762 1.00)
+## What is replaced (all supported 1.00 builds)
 
 81 textures in `pakchunk0-ps4.pak`, all PS4 1D thin micro-tiled; DXT5 with a mip chain, BGRA8, and one DXT1 page:
 

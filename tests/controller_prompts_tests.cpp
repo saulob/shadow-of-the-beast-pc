@@ -220,15 +220,31 @@ void TestCrcAndInflate() {
 }
 
 void TestGeneratedTable() {
-    const SotbPromptSet* set = sotb_prompt_set_for_build("CUSA03762-1.00");
-    CHECK(set != nullptr);
+    CHECK(sotb_prompt_set_count == 3);
     CHECK(sotb_prompt_set_for_build("CUSA03762-1.01") == nullptr && sotb_prompt_set_for_build("") == nullptr && sotb_prompt_set_for_build(nullptr) == nullptr);
-    CHECK(sotb_prompt_set_count == 1);
+    struct ExpectedSet {
+        const char* build;
+        uint64_t file_size, index_offset;
+        uint32_t index_size, index_crc32;
+    };
+    const ExpectedSet expected_sets[] = {
+        {"CUSA03762-1.00", 6634484704ull, 6633116901ull, 1367759u, 0x7259963bu},
+        {"CUSA02871-1.00", 6902920160ull, 6901552357ull, 1367759u, 0xa1cd828cu},
+        {"CUSA00951-1.00", 6902920160ull, 6901552357ull, 1367759u, 0xa1cd828cu},
+    };
+    for (const ExpectedSet& exp : expected_sets) {
+        const SotbPromptSet* candidate = sotb_prompt_set_for_build(exp.build);
+        CHECK(candidate != nullptr);
+        if (!candidate) continue;
+        CHECK(std::string(candidate->guest_path) == "/app0/beast/content/paks/pakchunk0-ps4.pak");
+        CHECK(candidate->file_size == exp.file_size && candidate->index_offset == exp.index_offset &&
+              candidate->index_size == exp.index_size && candidate->index_crc32 == exp.index_crc32);
+        CHECK(candidate->index_offset + candidate->index_size + 44 == candidate->file_size);
+        CHECK(candidate->asset_count == 81 && candidate->run_count == 5708);
+    }
+    const SotbPromptSet* set = sotb_prompt_set_for_build("CUSA03762-1.00");
     if (!set) return;
-    CHECK(std::string(set->guest_path) == "/app0/beast/content/paks/pakchunk0-ps4.pak");
-    CHECK(set->file_size == 6634484704ull && set->index_offset == 6633116901ull && set->index_size == 1367759u);
     CHECK(set->index_crc32 != 0 && set->blob_crc32 != 0);
-    CHECK(set->index_offset + set->index_size + 44 == set->file_size);
     CHECK(set->asset_count >= 80 && set->run_count > set->asset_count);
 
     std::vector<uint8_t> blob(set->blob_size);
@@ -581,28 +597,32 @@ void TestDiagnosticsAndFallback(const fs::path& base) {
 }
 
 void TestRealGeneratedSetAgainstGame(const fs::path& base) {
-    const fs::path pak = fs::path(SOTB_SOURCE_DIR) / "game" / "prepared" / "CUSA03762-1.00" / "beast" / "content" / "paks" / "pakchunk0-ps4.pak";
-    std::error_code ec;
-    if (!fs::exists(pak, ec)) {
-        std::printf("real pak: not found, skipped\n");
-        return;
-    }
-    Recorder rec;
-    g_rec = &rec;
+    size_t checked = 0;
     const std::string ini = WriteFile(base, "real.ini", "controller_prompts=xbox\n").string();
-    const std::string pak_text = pak.string();
-    SotbGamePromptsRequest request{};
-    request.settings_file = ini.c_str();
-    request.pak_path = pak_text.c_str();
-    request.build_key = "CUSA03762-1.00";
-    request.overlay = FakeOverlay;
-    request.log = FakeLog;
-    const SotbGamePromptsOutcome out = sotb_game_prompts_apply(&request);
-    CHECK(out.installed == 1 && out.status == SOTB_PROMPTS_OK);
-    const SotbPromptSet* set = sotb_prompt_set_for_build("CUSA03762-1.00");
-    CHECK(rec.overlay_calls == 1 && rec.patches.size() == set->run_count && rec.length == set->file_size);
-    CHECK(rec.lines.size() == 2 && Contains(rec.lines[1], "Xbox overlay installed"));
-    std::printf("real pak: %s\n", rec.lines.empty() ? "" : rec.lines.back().c_str());
+    for (const char* build : {"CUSA03762-1.00", "CUSA02871-1.00", "CUSA00951-1.00"}) {
+        const fs::path pak = fs::path(SOTB_SOURCE_DIR) / "game" / "prepared" / build / "beast" / "content" / "paks" / "pakchunk0-ps4.pak";
+        std::error_code ec;
+        if (!fs::exists(pak, ec)) continue;
+        ++checked;
+        Recorder rec;
+        g_rec = &rec;
+        const std::string pak_text = pak.string();
+        SotbGamePromptsRequest request{};
+        request.settings_file = ini.c_str();
+        request.pak_path = pak_text.c_str();
+        request.build_key = build;
+        request.overlay = FakeOverlay;
+        request.log = FakeLog;
+        const SotbGamePromptsOutcome out = sotb_game_prompts_apply(&request);
+        CHECK(out.installed == 1 && out.status == SOTB_PROMPTS_OK);
+        const SotbPromptSet* set = sotb_prompt_set_for_build(build);
+        CHECK(rec.overlay_calls == 1 && rec.patches.size() == set->run_count && rec.length == set->file_size);
+        CHECK(rec.lines.size() == 2 && Contains(rec.lines[1], "Xbox overlay installed"));
+        std::printf("real pak (%s): %s\n", build, rec.lines.empty() ? "" : rec.lines.back().c_str());
+    }
+    if (checked == 0) {
+        std::printf("real pak: not found, skipped\n");
+    }
 }
 
 size_t Count(const std::string& text, const std::string& part) {

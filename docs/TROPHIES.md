@@ -6,7 +6,7 @@ Local, offline PlayStation trophies. Nothing connects to PSN, needs a PlayStatio
 
 The trophy list (names, descriptions, grades, hidden flags) and the icons are in `sce_sys/trophy/trophy00.trp` of your own
 game package. The launcher and the game unpack it once into `user/trophy/<NP Communication ID>/` (`Icons`, `Xml`); no trophy
-content is part of this repository. The NP Communication ID is read from `sce_sys/npbind.dat`; CUSA03762 1.00 uses `NPWR08784_00`.
+content is part of this repository. The NP Communication ID is read from `sce_sys/npbind.dat`; all three supported 1.00 builds use `NPWR08784_00`.
 
 The lists inside the pack are encrypted with a Trophy Key. Shadow of the Beast PC does not include, generate or download
 this key; it stays on this PC and is never sent anywhere. The Trophies page offers:

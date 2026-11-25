@@ -118,7 +118,7 @@ static const uint32_t kOffsets[] = {
 };
 
 const LzcntBuild lzcnt_builds[LZCNT_BUILD_COUNT] = {
-    {"CUSA03762-1.00", {0x44cc3fc, 0x19105d0}, kShapes, kOffsets, sizeof kOffsets / sizeof *kOffsets},
+    {"Shadow of the Beast 1.00", {0x44cc3fc, 0x19105d0}, kShapes, kOffsets, sizeof kOffsets / sizeof *kOffsets},
 };
 
 _Static_assert(sizeof kOffsets / sizeof *kOffsets == sizeof kShapes / sizeof *kShapes, "site tables");

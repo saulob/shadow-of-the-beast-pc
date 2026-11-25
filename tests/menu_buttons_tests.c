@@ -60,31 +60,45 @@ static void test_patch_shape(void) {
 }
 
 static void test_western_changes_only_the_branch(void) {
+    static const char *const builds[] = {"CUSA03762-1.00", "CUSA02871-1.00", "CUSA00951-1.00"};
     uint8_t *image = malloc(IMAGE_SIZE);
     uint8_t *original = malloc(IMAGE_SIZE);
-    synthetic_image(image);
-    memcpy(original, image, IMAGE_SIZE);
-    CHECK(sotb_menu_buttons_apply(image, IMAGE_SIZE, "CUSA03762-1.00", SOTB_MENU_BUTTON_LAYOUT_WESTERN));
-    size_t changed = 0;
-    for (size_t i = 0; i < IMAGE_SIZE; ++i) changed += image[i] != original[i];
-    CHECK(changed > 0 && changed <= kPatchLength);
-    CHECK(!memcmp(image, original, MENU_BUTTONS_SITE));
-    CHECK(!memcmp(image + MENU_BUTTONS_SITE + kPatchLength, original + MENU_BUTTONS_SITE + kPatchLength,
-                  IMAGE_SIZE - MENU_BUTTONS_SITE - kPatchLength));
-    CHECK(!memcmp(image + MENU_BUTTONS_SITE, kWesternBranch, sizeof(kWesternBranch)));
-    const uint8_t *jump = image + MENU_BUTTONS_SITE;
-    CHECK(jump + 5 + load_rel32(jump + 1) == image + MENU_BUTTONS_SITE + 0x124);
+    for (size_t b = 0; b < sizeof(builds) / sizeof(*builds); ++b) {
+        synthetic_image(image);
+        memcpy(original, image, IMAGE_SIZE);
+        CHECK(sotb_menu_buttons_apply(image, IMAGE_SIZE, builds[b], SOTB_MENU_BUTTON_LAYOUT_WESTERN));
+        size_t changed = 0;
+        for (size_t i = 0; i < IMAGE_SIZE; ++i) changed += image[i] != original[i];
+        CHECK(changed > 0 && changed <= kPatchLength);
+        CHECK(!memcmp(image, original, MENU_BUTTONS_SITE));
+        CHECK(!memcmp(image + MENU_BUTTONS_SITE + kPatchLength, original + MENU_BUTTONS_SITE + kPatchLength,
+                      IMAGE_SIZE - MENU_BUTTONS_SITE - kPatchLength));
+        CHECK(!memcmp(image + MENU_BUTTONS_SITE, kWesternBranch, sizeof(kWesternBranch)));
+        const uint8_t *jump = image + MENU_BUTTONS_SITE;
+        CHECK(jump + 5 + load_rel32(jump + 1) == image + MENU_BUTTONS_SITE + 0x124);
+    }
     free(original);
     free(image);
 }
 
 static void test_original_leaves_the_image_alone(void) {
+    static const char *const builds[] = {"CUSA03762-1.00", "CUSA02871-1.00", "CUSA00951-1.00"};
     uint8_t *image = malloc(IMAGE_SIZE);
     uint8_t *original = malloc(IMAGE_SIZE);
-    synthetic_image(image);
-    memcpy(original, image, IMAGE_SIZE);
-    CHECK(sotb_menu_buttons_apply(image, IMAGE_SIZE, "CUSA03762-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL));
-    CHECK(!memcmp(image, original, IMAGE_SIZE));
+    for (size_t b = 0; b < sizeof(builds) / sizeof(*builds); ++b) {
+        synthetic_image(image);
+        memcpy(original, image, IMAGE_SIZE);
+        CHECK(sotb_menu_buttons_apply(image, IMAGE_SIZE, builds[b], SOTB_MENU_BUTTON_LAYOUT_ORIGINAL));
+        CHECK(!memcmp(image, original, IMAGE_SIZE));
+    }
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA03762-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 1);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA03762-1.00", SOTB_MENU_BUTTON_LAYOUT_WESTERN) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA02871-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA02871-1.00", SOTB_MENU_BUTTON_LAYOUT_WESTERN) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA00951-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA00951-1.00", SOTB_MENU_BUTTON_LAYOUT_WESTERN) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm("CUSA99999-1.00", SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 0);
+    CHECK(sotb_menu_buttons_effective_circle_confirm(NULL, SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) == 0);
     free(original);
     free(image);
 }

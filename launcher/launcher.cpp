@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -134,11 +135,10 @@ const char* StatusTitle(GameFileState state) {
 
 std::string StatusDetail(GameFileState state) {
     switch (state) {
-    case GameFileState::kValid: return "The installed build matches the port's fingerprint.";
+    case GameFileState::kValid: return "";
     case GameFileState::kMissing: return "Install the game from your own Shadow of the Beast .pkg file.";
-    case GameFileState::kDifferentVersion:
-        return "This package is not the supported build. Supported: " + SupportedBuildsText() + ".";
-    case GameFileState::kReadError: return "Check that the game folder is readable, then try again.";
+    case GameFileState::kDifferentVersion: return "Install a supported build from your own .pkg file.";
+    case GameFileState::kReadError: return "Check that the game folder can be read, then install again.";
     }
     return "";
 }
@@ -437,11 +437,14 @@ private:
                                                   : StatusTitle(state_);
         const std::string detail = ready && build_ ? BuildMetadataText(*build_) : StatusDetail(state_);
         ui.StatusCard(ready ? trg::Status::kReady : trg::Status::kAttention, title.c_str(), detail.c_str());
-        if (!install_message_.empty()) {
+        if (!install_failure_.empty()) {
             ui.Spacer(4);
             ImGui::PushStyleColor(ImGuiCol_Text, ui.theme().warn_dot);
-            ImGui::TextUnformatted(install_message_.c_str());
+            ImGui::TextUnformatted(install_failure_.c_str());
             ImGui::PopStyleColor();
+            if (!install_failure_text_.empty()) {
+                ui.Help(install_failure_text_.c_str());
+            }
             ui.Spacer(4);
         }
 
@@ -457,17 +460,6 @@ private:
         ui.Help(GameFilesHelp().c_str());
         ui.Toggle("Show this launcher", kShowLauncherHelp, kShowLauncherKey, true, "Off", "On");
         ui.EndRows();
-
-        ui.Spacer(6.0f);
-        ui.Info("Build", build_ ? build_->label : "Not installed");
-        if (build_) {
-            ui.Info("Package", build_->content_id);
-            ui.Info("Metadata", BuildMetadataText(*build_).c_str());
-        }
-        if (!eboot_sha256_.empty()) {
-            ui.Info("Executable SHA-256", eboot_sha256_.c_str());
-        }
-        ui.Info("Game folder", Utf8(app0_).c_str());
     }
 
     void DrawDisplay(trg::Ui& ui) {
@@ -628,7 +620,6 @@ private:
         const char* platform = "Windows x64";
         ui.InfoGrid({{"Port version", SOTB_PORT_VERSION},
                      {"Game", InstalledGameName(state_, build_)},
-                     {"Build", build_ ? build_->label : SupportedBuildsText()},
                      {"Renderer", RendererName(settings_.Get(kRendererKey, "auto"))},
                      {"Platform", platform}});
         char libraries[96];
@@ -833,21 +824,36 @@ private:
         settings_.Save();
     }
 
+    bool BuildPinned() const {
+        const char* pinned = std::getenv(kPinnedBuildVariable);
+        if (!pinned || !*pinned) {
+            return false;
+        }
+        std::printf("Launcher: game build pinned by %s=%s: package selection is off\n", kPinnedBuildVariable, pinned);
+        return true;
+    }
+
     void BrowseAndInstall() {
+        if (BuildPinned()) {
+            return;
+        }
         host_.NoteDialogInFrame();
         const std::string picked = trg::BrowseForFile("Select your Shadow of the Beast package (.pkg)",
                                                       {{"PlayStation 4 packages", "*.pkg"}, {"All files", "*.*"}});
         if (picked.empty()) {
             return;
         }
-        install_message_.clear();
+        install_failure_.clear();
+        install_failure_text_.clear();
         auto outcome = std::make_shared<InstallResult>();
         install_outcome_ = outcome;
         const GameRoots roots = roots_;
+        const bool replace = state_ == GameFileState::kValid;
         const std::filesystem::path source = PathFromUtf8(picked);
-        install_.Start("Installing...", [source, roots, outcome](trg::Task& task) {
+        install_.Start("Installing...", [source, roots, replace, outcome](trg::Task& task) {
             InstallHooks hooks;
             hooks.expected = PackageKind::kBase;
+            hooks.replace_active = replace;
             hooks.phase = [&task](const char* phase) {
                 task.SetLabel(phase);
                 task.Progress(0, 0);
@@ -869,17 +875,39 @@ private:
         }
         if (install_outcome_) {
             const InstallMessage message = DescribeInstall(*install_outcome_);
+            if (!install_outcome_->recognition.empty()) {
+                std::printf("Install: %s\n", install_outcome_->recognition.c_str());
+            }
             if (install_outcome_->ok()) {
-                install_message_.clear();
+                install_failure_.clear();
+                install_failure_text_.clear();
+                const GamePaths active = ActiveBuildPaths(roots_);
+                app0_ = active.app0;
+                image_dir_ = active.image_dir;
+                if (launcher_) {
+                    launcher_->SetStatus(message.title + ". " + message.text, 6.0);
+                }
+            } else if (install_outcome_->status == InstallStatus::kCancelled) {
+                if (launcher_) {
+                    launcher_->SetStatus(message.title + ". " + message.text, 6.0);
+                }
             } else {
-                install_message_ = message.title + ": " + message.text;
+                for (const std::string& line : install_outcome_->diagnostics) {
+                    std::printf("%s\n", line.c_str());
+                }
+                install_failure_ = message.title;
+                install_failure_text_ = message.text;
+                if (launcher_) {
+                    launcher_->SetStatus("Install failed: " + install_failure_, 8.0);
+                }
             }
             if (!install_outcome_->detail.empty()) {
                 std::printf("Install: %s\n", install_outcome_->detail.c_str());
             }
             install_outcome_.reset();
         } else if (finished == trg::Task::State::kFailed) {
-            install_message_ = error;
+            install_failure_ = error;
+            install_failure_text_.clear();
         }
         image_rebuilt_ = false;
         Refresh();
@@ -905,8 +933,10 @@ private:
         }
         state_ = check.state;
         build_ = check.build;
-        eboot_sha256_ = check.eboot_sha256;
-        if (!check.detail.empty()) {
+        if (state_ == GameFileState::kValid && build_) {
+            std::printf("Game files: ready (%s, %s, eboot SHA-256 %s)\n", build_->label,
+                        BuildMetadataText(*build_).c_str(), check.eboot_sha256.c_str());
+        } else if (!check.detail.empty()) {
             std::printf("Game files: %s (%s)\n", StateName(check.state), check.detail.c_str());
         }
     }
@@ -932,8 +962,8 @@ private:
     bool pad_hold_ = false;
     GameFileState state_ = GameFileState::kMissing;
     const GameBuild* build_ = nullptr;
-    std::string eboot_sha256_;
-    std::string install_message_;
+    std::string install_failure_;
+    std::string install_failure_text_;
     trg::Task install_;
     std::shared_ptr<InstallResult> install_outcome_;
     bool image_rebuilt_ = false;

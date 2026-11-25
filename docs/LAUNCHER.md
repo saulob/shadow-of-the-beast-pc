@@ -9,14 +9,14 @@ not manage, and comments, are kept. Shadow of the Beast is offline: there is no 
 
 ## Play
 
-- **Install game...** opens a file dialog for a PS4 `.pkg`.
-- Before unpacking anything, the launcher reads `param.sfo` and checks TITLE_ID `CUSA03762`, the content ID, CATEGORY
-  `gd`, APP_VER `01.00` and VERSION `01.01`.
-- The package is unpacked into `game\prepared\CUSA03762-1.00` through a staging folder. The executable hash is checked
-  before the staged tree is activated.
-- The boot image (`boot.bin`, `content.bin`, `image.json`) is built into `game\image\CUSA03762-1.00`.
+- **Install game...** / **Reinstall game...** opens a file dialog for a PS4 `.pkg`.
+- Before unpacking anything, the launcher reads `param.sfo` and checks TITLE_ID (`CUSA03762`, `CUSA02871` or `CUSA00951`),
+  the content ID, CATEGORY `gd`, APP_VER `01.00` and VERSION `01.01`.
+- The package is unpacked into `game\prepared\<TITLE_ID>-1.00` through a staging folder. The executable hash is checked
+  before the staged tree is activated. Each build keeps its own folder; installing or selecting a build makes it active.
+- The boot image (`boot.bin`, `content.bin`, `image.json`) is built into `game\image\<TITLE_ID>-1.00`.
 - Progress, cancellation and failures are reported on the page; the log has the detailed reason.
-- **PLAY** is enabled only when the installed tree, executable hash and boot image all match the supported build.
+- **PLAY** is enabled only when the installed tree, executable hash and boot image all match a supported build.
 - **Show this launcher** (`show_launcher`): Off starts the game directly. Hold Shift while starting, or pass `--launcher`.
 
 The game package is only read. Reinstalling replaces the game folder and leaves `user\` and `logs\` untouched.
@@ -43,7 +43,7 @@ Anti-aliasing run in the Vulkan renderer only.
 
 **Render resolution** (`render_resolution`): Native — 1920 × 1080, 480p — 854 × 480, 720p — 1280 × 720,
 1440p — 2560 × 1440, 1800p — 3200 × 1800, 4K — 3840 × 2160. It sets the size of the game's own picture,
-not the window; the picture is scaled to the window. It needs the guest patches in `docs/GRAPHICS.md`; if CUSA03762 1.00
+not the window; the picture is scaled to the window. It needs the guest patches in `docs/GRAPHICS.md`; if the build
 does not match them the game stops with a message instead of ignoring the setting.
 **Anti-aliasing** (`smaa`: Off, SMAA) and **Texture filtering** (`anisotropy`: Game, 2x, 4x, 8x, 16x).
 
@@ -60,8 +60,8 @@ Controller detection, **Controller Rumble** (`controller_rumble`), **Controller 
 or `playstation`; Auto follows the controller connected when the game starts, anything it cannot classify shows Xbox; it sets
 the button names on this page and the game's own button icons from the next game start, and never changes a binding; see
 `docs/CONTROLLER_PROMPTS.md`), **Menu Button Layout** (`menu_button_layout`: `western` or `original`, default
-`western`; Western uses Cross/A to confirm and Circle/B to go back, Original restores the Korean `KR_BD` release
-layout with Circle/B to confirm and Cross/A to go back; combat controls are unchanged; see
+`western`; Western uses Cross/A to confirm and Circle/B to go back, Original keeps each build's original layout
+(Circle/B to confirm on Korea, Cross/A to confirm on USA and Europe); combat controls are unchanged; see
 `docs/MENU_BUTTONS.md`), **Controller
 bindings** (`pad_cross`, `pad_circle`, ... one SDL gamepad name each: click a row, press a controller button or pull a trigger, Esc cancels; one
 controller button may press several PS4 buttons; sticks stay analog; **Reset to defaults** touches only these), keyboard

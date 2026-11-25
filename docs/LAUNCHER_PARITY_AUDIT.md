@@ -78,4 +78,4 @@ the guest honours each system language id is for the player to check.
 
 ## Skip Intro
 
-With Skip Intro On the host presents black (`VideoOutDriver::Flip`, shared by Vulkan, OpenGL and Direct3D 11) while the engine loads, and shows the game again when it calls `ShowStartButton` at 0x1ca6b6 on its own way to Press Start; a time limit of 90 s shows it anyway. The game keeps running and no input is injected. `src/skip_intro.c` also removes the one-second wait before the prompt (0x1ca55c). Both patches are validated first against CUSA03762 1.00; if anything differs nothing is written and the game starts as before.
+With Skip Intro On the loading screen's own publisher and developer sequence starts finished instead of at zero. Its tick therefore clears the three boot images (Shadow of the Beast, Sony Computer Entertainment presents, and XDEV with Heavy Spectrum) and runs the same completion path on the first frame. The normal loading screen, gamma screen, Press Start prompt and frontend are unchanged, and Skip Intro Off leaves every byte and state as the original game has them.

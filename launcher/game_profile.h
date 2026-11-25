@@ -58,6 +58,7 @@ struct GameBuild {
     std::span<const TextLanguage> text_languages;
     bool english_voices = false;
     const char* code_build = "";
+    bool original_circle_confirm = false;
     std::span<const char* const> alternate_eboots = {};
     ExecutableProfile executable = {};
 };

@@ -61,7 +61,40 @@ typedef void *(GUEST_ABI *AddButtonFn)(void *infobar_ctrl, uint32_t button, cons
 static const uint16_t kExitGameNamespace[] = {'E', 'x', 'i', 't', 'G', 'a', 'm', 'e', 0};
 static const uint16_t kExitGameKey[] = {'B', 'u', 't', 't', 'o', 'n', 'E', 'x', 'i', 't', 'G', 'a', 'm', 'e', 0};
 
+typedef struct {
+    const char *build_key;
+    uint32_t tick_context;
+    uint32_t tick_site;
+    uint32_t setup_site;
+    uint32_t refresh_context;
+    uint32_t refresh_site;
+    uint32_t addbutton_site;
+    uint32_t createtext_site;
+    uint32_t get_top_screen_target;
+} ExitGameBuild;
+
+static const ExitGameBuild kExitGameBuilds[] = {
+    {"CUSA03762-1.00", TICK_CONTEXT_OFFSET, SOTB_EXIT_GAME_TICK_SITE, SOTB_EXIT_GAME_SETUP_SITE,
+     REFRESH_CONTEXT_OFFSET, SOTB_EXIT_GAME_REFRESH_SITE, SOTB_EXIT_GAME_ADDBUTTON_SITE,
+     SOTB_EXIT_GAME_CREATETEXT_SITE, GET_TOP_SCREEN_TARGET},
+    {"CUSA02871-1.00", TICK_CONTEXT_OFFSET, SOTB_EXIT_GAME_TICK_SITE, SOTB_EXIT_GAME_SETUP_SITE,
+     REFRESH_CONTEXT_OFFSET, SOTB_EXIT_GAME_REFRESH_SITE, SOTB_EXIT_GAME_ADDBUTTON_SITE,
+     SOTB_EXIT_GAME_CREATETEXT_SITE, GET_TOP_SCREEN_TARGET},
+    {"CUSA00951-1.00", TICK_CONTEXT_OFFSET, SOTB_EXIT_GAME_TICK_SITE, SOTB_EXIT_GAME_SETUP_SITE,
+     REFRESH_CONTEXT_OFFSET, SOTB_EXIT_GAME_REFRESH_SITE, SOTB_EXIT_GAME_ADDBUTTON_SITE,
+     SOTB_EXIT_GAME_CREATETEXT_SITE, GET_TOP_SCREEN_TARGET},
+};
+
+static const ExitGameBuild *find_exit_build(const char *build_key) {
+    if (!build_key) return NULL;
+    for (size_t i = 0; i < sizeof(kExitGameBuilds) / sizeof(*kExitGameBuilds); ++i) {
+        if (!strcmp(build_key, kExitGameBuilds[i].build_key)) return &kExitGameBuilds[i];
+    }
+    return NULL;
+}
+
 static uint8_t *g_image_base;
+static const ExitGameBuild *g_active_build;
 static SotbExitConfirmHandler g_confirm_handler;
 static SotbExitGameClock g_clock;
 static const char *g_locale = "en_US";
@@ -259,13 +292,15 @@ static void on_infobar_setup_impl(void *infobar_ctrl, void *top_screen) {
     if (!g_exit_ftext_ready) {
         uint16_t footer_u16[64];
         utf8_to_utf16(sotb_exit_game_strings(g_locale)->footer, footer_u16, sizeof(footer_u16) / sizeof(footer_u16[0]));
-        CreateTextFn create_text = (CreateTextFn)(uintptr_t)(g_image_base + SOTB_EXIT_GAME_CREATETEXT_SITE);
+        const uint32_t create_site = g_active_build ? g_active_build->createtext_site : SOTB_EXIT_GAME_CREATETEXT_SITE;
+        CreateTextFn create_text = (CreateTextFn)(uintptr_t)(g_image_base + create_site);
         memset(g_exit_ftext, 0, sizeof(g_exit_ftext));
         create_text(g_exit_ftext, footer_u16, kExitGameNamespace, kExitGameKey);
         g_exit_ftext_ready = 1;
     }
 
-    AddButtonFn add_button = (AddButtonFn)(uintptr_t)(g_image_base + SOTB_EXIT_GAME_ADDBUTTON_SITE);
+    const uint32_t add_site = g_active_build ? g_active_build->addbutton_site : SOTB_EXIT_GAME_ADDBUTTON_SITE;
+    AddButtonFn add_button = (AddButtonFn)(uintptr_t)(g_image_base + add_site);
     add_button(infobar_ctrl, SOTB_INFOBAR_BUTTON_SQUARE, g_exit_ftext);
 }
 
@@ -361,49 +396,51 @@ static int rel32_fits(intptr_t delta) {
 
 int sotb_exit_game_apply(uint8_t *image, size_t image_size, const char *build_key, uint8_t *cave, size_t cave_size,
                          char *error, size_t error_size) {
-    if (!build_key || strcmp(build_key, "CUSA03762-1.00")) return fail(error, error_size, "not a supported build");
+    const ExitGameBuild *build = find_exit_build(build_key);
+    if (!build) return fail(error, error_size, "not a supported build");
     if (!image || !cave) return fail(error, error_size, "missing image or cave");
     if (cave_size < SOTB_EXIT_GAME_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
-    if (image_size < SOTB_EXIT_GAME_CREATETEXT_SITE + sizeof(kCreateTextPrologue))
+    if (image_size < build->createtext_site + sizeof(kCreateTextPrologue))
         return fail(error, error_size, "image too short");
 
-    if (memcmp(image + TICK_CONTEXT_OFFSET, kTickContext, sizeof(kTickContext)))
+    if (memcmp(image + build->tick_context, kTickContext, sizeof(kTickContext)))
         return fail(error, error_size, "MenuInfoBar::Tick bytes do not match");
-    if (memcmp(image + REFRESH_CONTEXT_OFFSET, kRefreshContext, sizeof(kRefreshContext)))
+    if (memcmp(image + build->refresh_context, kRefreshContext, sizeof(kRefreshContext)))
         return fail(error, error_size, "RefreshInfoBar bytes do not match");
-    if (memcmp(image + SOTB_EXIT_GAME_ADDBUTTON_SITE, kAddButtonPrologue, sizeof(kAddButtonPrologue)))
+    if (memcmp(image + build->addbutton_site, kAddButtonPrologue, sizeof(kAddButtonPrologue)))
         return fail(error, error_size, "MenuInfoBar::AddButton bytes do not match");
-    if (memcmp(image + SOTB_EXIT_GAME_CREATETEXT_SITE, kCreateTextPrologue, sizeof(kCreateTextPrologue)))
+    if (memcmp(image + build->createtext_site, kCreateTextPrologue, sizeof(kCreateTextPrologue)))
         return fail(error, error_size, "FText::CreateText bytes do not match");
 
     uint8_t *tick_stub = cave;
     uint8_t *setup_stub = cave + 128;
     uint8_t *refresh_stub = cave + 256;
-    const intptr_t tick_rel = tick_stub - (image + SOTB_EXIT_GAME_TICK_SITE + 5);
-    const intptr_t setup_rel = setup_stub - (image + SOTB_EXIT_GAME_SETUP_SITE + 5);
-    const intptr_t refresh_rel = refresh_stub - (image + SOTB_EXIT_GAME_REFRESH_SITE + 5);
+    const intptr_t tick_rel = tick_stub - (image + build->tick_site + 5);
+    const intptr_t setup_rel = setup_stub - (image + build->setup_site + 5);
+    const intptr_t refresh_rel = refresh_stub - (image + build->refresh_site + 5);
     if (!rel32_fits(tick_rel) || !rel32_fits(setup_rel) || !rel32_fits(refresh_rel))
         return fail(error, error_size, "cave out of 32-bit call range");
 
     g_image_base = image;
+    g_active_build = build;
     g_exit_ftext_ready = 0;
-    emit_tick_stub(tick_stub, image + GET_TOP_SCREEN_TARGET);
+    emit_tick_stub(tick_stub, image + build->get_top_screen_target);
     emit_setup_stub(setup_stub);
     emit_refresh_stub(refresh_stub);
 
     const int32_t tick_disp = (int32_t)tick_rel;
-    image[SOTB_EXIT_GAME_TICK_SITE] = 0xe8;
-    memcpy(image + SOTB_EXIT_GAME_TICK_SITE + 1, &tick_disp, sizeof(tick_disp));
+    image[build->tick_site] = 0xe8;
+    memcpy(image + build->tick_site + 1, &tick_disp, sizeof(tick_disp));
 
     const int32_t setup_disp = (int32_t)setup_rel;
-    image[SOTB_EXIT_GAME_SETUP_SITE] = 0xe8;
-    memcpy(image + SOTB_EXIT_GAME_SETUP_SITE + 1, &setup_disp, sizeof(setup_disp));
-    image[SOTB_EXIT_GAME_SETUP_SITE + 5] = 0x90;
+    image[build->setup_site] = 0xe8;
+    memcpy(image + build->setup_site + 1, &setup_disp, sizeof(setup_disp));
+    image[build->setup_site + 5] = 0x90;
 
     const int32_t refresh_disp = (int32_t)refresh_rel;
-    image[SOTB_EXIT_GAME_REFRESH_SITE] = 0xe9;
-    memcpy(image + SOTB_EXIT_GAME_REFRESH_SITE + 1, &refresh_disp, sizeof(refresh_disp));
-    memset(image + SOTB_EXIT_GAME_REFRESH_SITE + 5, 0x90, 11);
+    image[build->refresh_site] = 0xe9;
+    memcpy(image + build->refresh_site + 1, &refresh_disp, sizeof(refresh_disp));
+    memset(image + build->refresh_site + 5, 0x90, 11);
 
     return 1;
 }

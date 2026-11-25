@@ -118,8 +118,9 @@ inline constexpr char kControllerPromptsHelp[] =
     "Auto follows the controller connected when the game starts; Xbox or PlayStation always uses that style. It sets the "
     "game's button icons and the button names on this page, never the bindings. Applies at the next game start.";
 inline constexpr char kMenuButtonLayoutHelp[] =
-    "Western uses Cross/A to confirm and Circle/B to go back. Original restores the Korean release layout with "
-    "Circle/B to confirm and Cross/A to go back. Combat controls are unchanged. Applies at the next game start.";
+    "Western uses Cross/A to confirm and Circle/B to go back. Original keeps each build's original layout "
+    "(Circle/B to confirm on Korea, Cross/A to confirm on USA and Europe). Combat controls are unchanged. "
+    "Applies at the next game start.";
 inline constexpr char kControllerBindingsHelp[] =
     "Click a row, then press a controller button or pull a trigger. Esc cancels. Each row is a PlayStation button, "
     "which is what the game receives; the controller button shown presses it. The bindings apply to every connected "

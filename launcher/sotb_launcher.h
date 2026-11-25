@@ -58,6 +58,7 @@ typedef struct {
     const char* version;
     const char* code_key;
     const char* region;
+    int original_circle_confirm;
 } SotbGameBuild;
 
 int sotb_game_build(const char* image_dir, SotbGameBuild* build);

@@ -27,6 +27,42 @@ PROFILES = {
         'modules': MODULES,
         'core_patterns': CORE_PATTERNS,
     },
+    'CUSA02871': {
+        'name': 'Shadow of the Beast',
+        'region': 'USA',
+        'content_id': 'UP9000-CUSA02871_00-SHADOWOFBEAST0US',
+        'versions': {
+            '1.00': {
+                'layers': (BASE_LAYER,),
+                'eboot_sha256': 'ebf1d2fa6f44f05ab141e9b06fd8e60179db3be8b0b57b794ce79448ed133023',
+                'folder': 'CUSA02871-1.00',
+                'regional_archive': 'beast/content/paks/pakchunk0-ps4.pak',
+                'extra_files': PAK_FILES,
+            },
+        },
+        'entry': 'eboot.bin',
+        'extra_executables': (),
+        'modules': MODULES,
+        'core_patterns': CORE_PATTERNS,
+    },
+    'CUSA00951': {
+        'name': 'Shadow of the Beast',
+        'region': 'Europe',
+        'content_id': 'EP9000-CUSA00951_00-SHADOWOFBEAST0EU',
+        'versions': {
+            '1.00': {
+                'layers': (BASE_LAYER,),
+                'eboot_sha256': '7c35e4edc6304dc22f665182fb89385a589d04c9d4a7ac54fd8d4652e74a9343',
+                'folder': 'CUSA00951-1.00',
+                'regional_archive': 'beast/content/paks/pakchunk0-ps4.pak',
+                'extra_files': PAK_FILES,
+            },
+        },
+        'entry': 'eboot.bin',
+        'extra_executables': (),
+        'modules': MODULES,
+        'core_patterns': CORE_PATTERNS,
+    },
 }
 
 

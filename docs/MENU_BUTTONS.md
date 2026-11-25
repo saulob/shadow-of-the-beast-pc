@@ -6,13 +6,14 @@ start. Its default is `western`.
 
 | Setting | Menus |
 | --- | --- |
-| Western (`western`) | Cross/A confirms, Circle/B goes back. Default of the port for PC and Xbox controllers. |
-| Original (`original`) | Circle/B confirms, Cross/A goes back. Restores the original Korean release (`KR_BD`) layout. |
+| Western (`western`) | Cross/A confirms, Circle/B goes back on every supported build. Default of the port for PC and Xbox controllers. |
+| Original (`original`) | Keeps each build's native layout: Circle/B confirms on `CUSA03762` (Korea `KR_BD`), Cross/A confirms on `CUSA02871` (USA) and `CUSA00951` (Europe). |
 
-The supported build is `CUSA03762-1.00`, which is the Korean release (`SKU=KR_BD`). Its original behavior is
-Circle/B to confirm and Cross/A to go back; this is intentional for that SKU, not a bug in the original game.
-**Menu Button Layout** is a navigation option provided by the port, defaulting to **Western** for a natural
-convention on PC and Xbox controllers.
+The supported builds are `CUSA03762-1.00` (Korea, `SKU=KR_BD`), `CUSA02871-1.00` (USA, `SKU=US`) and `CUSA00951-1.00`
+(Europe, `SKU=EU`). Korea's original behavior is Circle/B to confirm and Cross/A to go back; USA and Europe already use
+Cross/A to confirm and Circle/B to go back natively. **Menu Button Layout** defaults to **Western** so every build uses
+a consistent PC/Xbox convention while **Original** leaves the executable untouched to preserve each region's native
+behavior.
 
 The setting is independent of **Controller prompts**:
 
@@ -27,21 +28,19 @@ the action.
 Combat controls never change: Jump, attacks, dodge, abilities, shortcuts and every other gameplay binding keep
 their keys. Controller rebinding and keyboard bindings are not touched either.
 
-## How it works (CUSA03762-1.00)
+## How it works
 
-The game detects its region and registers `MenuSelect` and `MenuBack` in the input settings. One branch registers
-Cross as Select and Circle as Back; the other registers the same two keys swapped, giving Circle as Select and
-Cross as Back. The Korean `KR_BD` build takes the Circle-confirms registration.
+The game detects its region (`-SKU=...` in `ue4commandline.txt`) and registers `MenuSelect` and `MenuBack` in the input
+settings. One branch registers Cross as Select and Circle as Back (`SKU::EU`, `SKU::US`); the other registers the same
+two keys swapped (`SKU::JP`, `SKU::AS`, `SKU::KR`, `SKU::KR_BD`).
 
-`src/sotb_menu_buttons.c` verifies `CUSA03762-1.00` before writing anything: the site at `0x1659c4`, the call to
-the region lookup, the reference to `MenuSelect`, the conditional branch, and the two pairs of key registrations
-in the branches. It also requires the site to appear exactly once. With **Western**, the conditional branch becomes
-an unconditional jump to the Western registration, so every reader of `MenuSelect` and `MenuBack` uses the Western
-layout and the prompt resolver follows it. With **Original**, nothing is written and the original `KR_BD` image
-behavior is preserved.
+`src/sotb_menu_buttons.c` verifies the build key (`CUSA03762-1.00`, `CUSA02871-1.00` or `CUSA00951-1.00`) before writing
+anything: the site at `0x1659c4`, the call to the region lookup, the reference to `MenuSelect`, the conditional branch,
+and the two pairs of key registrations in the branches. It also requires the site to appear exactly once. With
+**Western**, the conditional branch becomes an unconditional jump to the Western registration. With **Original**, nothing
+is written and each build's native SKU behavior is preserved.
 
-Only `CUSA03762-1.00` is supported. Another build or a different executable is not patched, nothing is written, and
-the log reports why:
+An unsupported build or altered executable is not patched, nothing is written, and the log reports why:
 
     Menu button layout: Western requested but unavailable for CUSA03762-1.00: the menu layout code does not match
 
