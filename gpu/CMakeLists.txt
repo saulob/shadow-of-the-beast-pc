@@ -14,10 +14,10 @@ find_package(tsl-robin-map REQUIRED)
 find_package(Zydis REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(XXHASH REQUIRED IMPORTED_TARGET libxxhash)
-# FFmpeg comes from tools/build-ffmpeg.sh (gpu/ffmpeg.txt): the prefix tools\build.ps1 passes, never MSYS2's GPL-3.0 build.
-set(SOTB_FFMPEG_PREFIX "" CACHE PATH "Prefix of the FFmpeg built by tools/build-ffmpeg.sh")
+# FFmpeg (gpu/ffmpeg.txt) is the LGPL build tools\build.ps1 or tools/build.sh made and passes, never a distribution's.
+set(SOTB_FFMPEG_PREFIX "" CACHE PATH "Prefix of the FFmpeg built by tools/build-ffmpeg.sh or tools/build-ffmpeg-linux.sh")
 if (NOT SOTB_FFMPEG_PREFIX)
-    message(FATAL_ERROR "SOTB_FFMPEG_PREFIX is not set: configure with tools\\build.ps1, which builds FFmpeg")
+    message(FATAL_ERROR "SOTB_FFMPEG_PREFIX is not set: configure with tools\\build.ps1 or tools/build.sh, which build FFmpeg")
 endif()
 list(PREPEND CMAKE_PREFIX_PATH "${SOTB_FFMPEG_PREFIX}")
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET libavformat>=59.27 libavcodec>=59.37 libavutil>=57.28 libswscale>=6.7

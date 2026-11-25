@@ -263,9 +263,11 @@ void TestRealSdlMappings(const fs::path& base) {
     {
         std::ofstream out(db, std::ios::binary);
         out << "# comment\nnot a mapping at all\n"
-            << guid << ",Test Pad One,a:b0,b:b1,x:b2,y:b3,back:b4,start:b5,leftshoulder:b6,rightshoulder:b7,leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:a4,righttrigger:a5,platform:Windows,\n";
+            << guid << ",Test Pad One,a:b0,b:b1,x:b2,y:b3,back:b4,start:b5,leftshoulder:b6,rightshoulder:b7,leftx:a0,lefty:a1,rightx:a2,righty:a3,lefttrigger:a4,righttrigger:a5,platform:"
+            << SDL_GetPlatform() << ",\n";
     }
-    CHECK(sotb_load_user_mappings(path, &real, line, sizeof(line)) == SOTB_MAPPING_LOADED && Contains(line, "gamepad mappings read"));
+    CHECK(sotb_load_user_mappings(path, &real, line, sizeof(line)) == SOTB_MAPPING_LOADED &&
+          Contains(line, "Runtime: 1 gamepad mappings read"));
     CHECK(SDL_IsGamepad(first));
 
     const SDL_JoystickID second = Attach("Test Pad Two", 0x1209, 0x0002);

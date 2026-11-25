@@ -181,6 +181,9 @@ void runtime_thread_attach_main(void) {
     GuestThread *t=runtime_thread_current();
     snprintf(t->name,sizeof(t->name),"main");
 }
+#ifndef _WIN32
+void runtime_thread_set_main_stack(void *stack) { runtime_thread_current()->stack=stack; }
+#endif
 static GuestThread *find_thread(void *handle) {
     GuestThread *found=NULL;
     pthread_mutex_lock(&lock);
@@ -298,7 +301,7 @@ static ABI int32_t attr_get_stack_full(ThreadAttr **slot,void **address,uint64_t
     GetCurrentThreadStackLimits(&low,&high);
     *address=(void *)low;
 #else
-    *address=NULL;
+    *address=runtime_thread_current()->stack;
 #endif
     *size=a->stack; return 0;
 }

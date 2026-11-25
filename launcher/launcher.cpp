@@ -18,6 +18,7 @@
 #include <imgui.h>
 
 #include "backends/imgui_impl_sdl3.h"
+#include "file_chooser.h"
 #include "game_files.h"
 #include "game_install.h"
 #include "game_profile.h"
@@ -630,7 +631,11 @@ private:
         if (ui.ButtonRow("Logs folder", "Open the folder containing the session and crash logs", "Open logs folder")) {
             trg::OpenInFileManager(Utf8(logs_dir_));
         }
+#ifdef _WIN32
         const char* platform = "Windows x64";
+#else
+        const char* platform = "Linux x86-64";
+#endif
         ui.InfoGrid({{"Port version", SOTB_PORT_VERSION},
                      {"Game", InstalledGameName(state_, build_)},
                      {"Renderer", RendererName(settings_.Get(kRendererKey, "auto"))},
@@ -852,6 +857,12 @@ private:
 
     void BrowseAndInstall() {
         if (BuildPinned()) {
+            return;
+        }
+        if (!FileChooserAvailable()) {
+            if (launcher_) {
+                launcher_->SetStatus(kNoFileChooser, 6.0);
+            }
             return;
         }
         host_.NoteDialogInFrame();

@@ -4,8 +4,7 @@
 #include <string>
 #include <vector>
 
-#include <fcntl.h>
-#include <io.h>
+#include "test_platform.h"
 
 #include "crash_report_test_support.h"
 #include "startup_phase.h"
@@ -23,14 +22,14 @@ template <typename Work>
 std::string Printed(const fs::path& scratch, Work&& work) {
     const fs::path file = scratch / "stdout.txt";
     std::fflush(stdout);
-    const int saved = _dup(_fileno(stdout));
+    const int saved = test_dup(test_fileno(stdout));
     FILE* sink = std::fopen(file.string().c_str(), "wb");
     if (saved < 0 || !sink) return {};
-    _dup2(_fileno(sink), _fileno(stdout));
+    test_dup2(test_fileno(sink), test_fileno(stdout));
     work();
     std::fflush(stdout);
-    _dup2(saved, _fileno(stdout));
-    _close(saved);
+    test_dup2(saved, test_fileno(stdout));
+    test_close(saved);
     std::fclose(sink);
     std::string text = Read(file);
     std::erase(text, '\r');

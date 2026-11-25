@@ -6,6 +6,12 @@
 #define GUEST_PATCH_CAVE_SIZE 4096
 #define GUEST_ABI __attribute__((sysv_abi))
 
+/* Where each hook's stubs start in the shared cave; guest_patches_apply's own stubs stay below the first. */
+#define GUEST_CAVE_EXIT_GAME 2048u
+#define GUEST_CAVE_PSN_NOTICE 3072u
+#define GUEST_CAVE_ULTRAWIDE 3584u
+#define GUEST_CAVE_HUD 3840u
+
 typedef struct {
     int applied, skipped;
 } GuestPatchReport;

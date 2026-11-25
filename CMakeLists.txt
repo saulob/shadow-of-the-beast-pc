@@ -1,25 +1,13 @@
 cmake_minimum_required(VERSION 3.24)
-project(shadow_of_the_beast_pc VERSION 0.2.0 LANGUAGES C CXX)
+project(shadow_of_the_beast_pc VERSION 0.1.0 LANGUAGES C CXX)
 set(SOTB_PORT_VERSION "${PROJECT_VERSION}")
 
-if (NOT WIN32)
-    message(FATAL_ERROR "This round targets Windows x64 only.")
-endif()
 if (NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
-    message(FATAL_ERROR "Build with Clang: MSYS2 CLANG64 (tools\\build.ps1).")
+    message(FATAL_ERROR "Build with Clang: MSYS2 CLANG64 (tools\\build.ps1) on Windows, tools/build.sh on Linux.")
 endif()
-if (WIN32)
-    enable_language(RC)
+if (NOT WIN32 AND NOT (CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64)$"))
+    message(FATAL_ERROR "Supported targets: Windows x64 and Linux x86_64.")
 endif()
-
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
-if (NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE RelWithDebInfo)
-endif()
-add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=>")
 
 if (NOT PROJECT_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)")
     message(FATAL_ERROR "project VERSION must start with MAJOR.MINOR.PATCH")
@@ -27,6 +15,28 @@ endif()
 file(CONFIGURE OUTPUT ${CMAKE_BINARY_DIR}/generated/sotb_version.h CONTENT "#define SOTB_VERSION_NUMBERS \
 ${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0\n#define SOTB_FILE_VERSION_STRING \
 \"${CMAKE_MATCH_1}.${CMAKE_MATCH_2}.${CMAKE_MATCH_3}.0\"\n#define SOTB_VERSION_STRING \"${PROJECT_VERSION}\"\n")
+
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+if (WIN32)
+    set(CMAKE_C_EXTENSIONS OFF)
+else()
+    set(CMAKE_C_EXTENSIONS ON) # strict ISO mode hides the POSIX interfaces
+endif()
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE RelWithDebInfo)
+endif()
+add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fmacro-prefix-map=${CMAKE_SOURCE_DIR}/=>")
+
+if (NOT WIN32)
+    # The heap handed to the guest (thread handles, TLS) must stay below 1 TiB (src/loader.c).
+    set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
+    add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:-fno-pie>")
+    add_link_options(-no-pie)
+endif()
+
+include(${CMAKE_CURRENT_SOURCE_DIR}/tests/build_parity.cmake)
 
 find_package(SDL3 CONFIG REQUIRED)
 find_package(Freetype REQUIRED)
@@ -43,6 +53,7 @@ add_library(sotb_exit_game_l10n STATIC src/sotb_exit_game_l10n.c)
 target_include_directories(sotb_exit_game_l10n PUBLIC src)
 target_compile_options(sotb_exit_game_l10n PRIVATE -Wall -Wextra -Werror)
 target_include_directories(sotb_guest_display PUBLIC src)
+target_link_libraries(sotb_guest_display PUBLIC $<$<NOT:$<BOOL:${WIN32}>>:m>)
 target_compile_options(sotb_guest_display PRIVATE -Wall -Wextra -Werror)
 target_include_directories(sotb_resolution_guard PUBLIC src)
 target_link_libraries(sotb_resolution_guard PUBLIC sotb_guest_display sotb_startup_phase)
@@ -69,6 +80,7 @@ file(GLOB SOTB_ATRAC9_SOURCES CONFIGURE_DEPENDS ${SOTB_ATRAC9_DIR}/*.c)
 add_library(sotb_atrac9 STATIC ${SOTB_ATRAC9_SOURCES})
 target_include_directories(sotb_atrac9 PUBLIC ${SOTB_ATRAC9_DIR})
 target_compile_options(sotb_atrac9 PRIVATE -w)
+target_link_libraries(sotb_atrac9 PUBLIC $<$<NOT:$<BOOL:${WIN32}>>:m>)
 set_target_properties(sotb_atrac9 PROPERTIES C_EXTENSIONS ON)
 
 add_subdirectory(gpu)
@@ -102,32 +114,64 @@ set(SOTB_RUNTIME_SOURCES
     src/runtime_thread.c
     src/runtime_time.c)
 
+if (WIN32)
+    enable_language(RC)
+    set_source_files_properties(src/shadow_of_the_beast.rc PROPERTIES OBJECT_DEPENDS
+        "${CMAKE_SOURCE_DIR}/packaging/icons/app-icon.ico;${CMAKE_SOURCE_DIR}/src/shadow_of_the_beast.manifest;${CMAKE_BINARY_DIR}/generated/sotb_version.h")
+    set(SOTB_LOG_SOURCE src/runtime_log.c)
+    set(SOTB_COMPAT_SOURCES src/compat_win.c)
+    set(SOTB_PLATFORM_SOURCES ${SOTB_COMPAT_SOURCES} ${SOTB_LOG_SOURCE} src/crash_dump.c src/module_diagnostics.c
+        src/module_history.c src/call_site.c src/shadow_of_the_beast.rc)
+    set(SOTB_TEST_SYSTEM_LIBS onecore bcrypt -pthread)
+    set(SOTB_TEST_STACK_SOURCES)
+else()
+    set(SOTB_LOG_SOURCE src/runtime_log_posix.c)
+    set(SOTB_COMPAT_SOURCES)
+    set(SOTB_PLATFORM_SOURCES ${SOTB_LOG_SOURCE})
+    set(SOTB_TEST_SYSTEM_LIBS Threads::Threads ${CMAKE_DL_LIBS} m)
+    # Guest thread stacks come from the guest memory layer, below 1 TiB.
+    set(SOTB_TEST_STACK_SOURCES src/runtime_memory.c)
+endif()
+
 set(SOTB_GAME_SOURCES
     src/loader.c
-    src/crash_dump.c
     src/import_slots.c
     src/guest_patches.c
     src/sotb_exit_game.c
     src/sotb_menu_buttons.c
     src/isa_emulate.c
     src/lzcnt_compat.c
-    src/compat_win.c
-    src/module_diagnostics.c
-    src/module_history.c
-    src/call_site.c
-    src/runtime_log.c
     ${SOTB_RUNTIME_SOURCES}
-    src/shadow_of_the_beast.rc)
+    ${SOTB_PLATFORM_SOURCES})
 
-add_executable(shadow_of_the_beast WIN32 ${SOTB_GAME_SOURCES})
+if (WIN32)
+    add_executable(shadow_of_the_beast WIN32 ${SOTB_GAME_SOURCES})
+else()
+    add_executable(shadow_of_the_beast ${SOTB_GAME_SOURCES})
+endif()
 target_include_directories(shadow_of_the_beast PRIVATE src launcher gpu/shim ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(shadow_of_the_beast PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
-target_compile_definitions(shadow_of_the_beast PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-target_link_options(shadow_of_the_beast PRIVATE -Wl,--disable-high-entropy-va
-    "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
-target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotb_exit_game_l10n sotb_resolution_guard sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype
-    onecore bcrypt ws2_32 user32 -pthread)
-add_dependencies(shadow_of_the_beast trg-updater)
+target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotb_exit_game_l10n sotb_resolution_guard
+    sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype)
+if (WIN32)
+    target_compile_definitions(shadow_of_the_beast PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
+    target_link_options(shadow_of_the_beast PRIVATE -Wl,--disable-high-entropy-va
+        "SHELL:-Xlinker --stack -Xlinker 16777216,16777216")
+    target_link_libraries(shadow_of_the_beast PRIVATE onecore bcrypt ws2_32 user32 -pthread)
+    add_dependencies(shadow_of_the_beast trg-updater)
+else()
+    # -rdynamic: fault reports name host symbols (dladdr).
+    target_link_options(shadow_of_the_beast PRIVATE -rdynamic)
+    target_link_libraries(shadow_of_the_beast PRIVATE Threads::Threads ${CMAKE_DL_LIBS} m)
+    # FFmpeg is found relative to the executable, so no path of this machine is written into it.
+    list(GET FFMPEG_LIBRARY_DIRS 0 SOTB_FFMPEG_LIBRARY_DIR)
+    cmake_path(IS_PREFIX CMAKE_SOURCE_DIR "${SOTB_FFMPEG_LIBRARY_DIR}" NORMALIZE SOTB_FFMPEG_IN_TREE)
+    if (SOTB_FFMPEG_IN_TREE)
+        file(RELATIVE_PATH SOTB_FFMPEG_RPATH "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}" "${SOTB_FFMPEG_LIBRARY_DIR}")
+        set_target_properties(shadow_of_the_beast PROPERTIES BUILD_WITH_INSTALL_RPATH ON
+            INSTALL_RPATH "\$ORIGIN/${SOTB_FFMPEG_RPATH}")
+    endif()
+endif()
 
 add_executable(import_slots_test EXCLUDE_FROM_ALL tests/import_slots_test.c src/import_slots.c)
 target_include_directories(import_slots_test PRIVATE src)
@@ -141,45 +185,52 @@ target_compile_options(guest_patches_test PRIVATE -Wall -Wextra -Werror)
 add_executable(ngs2_test EXCLUDE_FROM_ALL tests/ngs2_test.c src/runtime_ngs2.c)
 target_include_directories(ngs2_test PRIVATE src)
 target_compile_options(ngs2_test PRIVATE -Wall -Wextra -Werror)
-target_link_libraries(ngs2_test PRIVATE -pthread)
+target_link_libraries(ngs2_test PRIVATE -pthread $<$<NOT:$<BOOL:${WIN32}>>:m>)
 
 add_executable(runtime_services_test EXCLUDE_FROM_ALL tests/runtime_services_test.c tests/runtime_test_stubs.c
-    ${SOTB_RUNTIME_SOURCES} src/compat_win.c src/runtime_log.c src/isa_emulate.c)
+    ${SOTB_RUNTIME_SOURCES} ${SOTB_COMPAT_SOURCES} ${SOTB_LOG_SOURCE} src/isa_emulate.c src/sotb_exit_game.c)
 target_include_directories(runtime_services_test PRIVATE src tests launcher gpu/shim ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(runtime_services_test PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
-target_compile_definitions(runtime_services_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-target_link_libraries(runtime_services_test PRIVATE sotb_startup_phase sotb_keys sotb_atrac9 SDL3::SDL3 Zydis::Zydis onecore bcrypt
-    ws2_32 -pthread)
+target_compile_definitions(runtime_services_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007
+    SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+target_link_libraries(runtime_services_test PRIVATE sotb_resolution_guard sotb_exit_game_l10n sotb_keys sotb_atrac9 SDL3::SDL3 Zydis::Zydis
+    ${SOTB_TEST_SYSTEM_LIBS} $<$<BOOL:${WIN32}>:ws2_32>)
 
-add_executable(memory_windows_test EXCLUDE_FROM_ALL tests/memory_windows_tests.c src/compat_win.c src/runtime_file.c)
-target_include_directories(memory_windows_test PRIVATE src)
-target_compile_definitions(memory_windows_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-target_compile_options(memory_windows_test PRIVATE -Wall -Wextra -Werror)
-target_link_options(memory_windows_test PRIVATE -Wl,--disable-high-entropy-va)
-target_link_libraries(memory_windows_test PRIVATE onecore -pthread)
+if (WIN32)
+    add_executable(memory_windows_test EXCLUDE_FROM_ALL tests/memory_windows_tests.c src/compat_win.c src/runtime_file.c)
+    target_include_directories(memory_windows_test PRIVATE src)
+    target_compile_definitions(memory_windows_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
+    target_compile_options(memory_windows_test PRIVATE -Wall -Wextra -Werror)
+    target_link_options(memory_windows_test PRIVATE -Wl,--disable-high-entropy-va)
+    target_link_libraries(memory_windows_test PRIVATE onecore -pthread)
+    add_executable(log_test EXCLUDE_FROM_ALL tests/log_tests.c src/runtime_log.c src/runtime_session_log.c)
+    target_include_directories(log_test PRIVATE src)
+    target_compile_definitions(log_test PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
+    target_compile_options(log_test PRIVATE -Wall -Wextra)
+    target_link_libraries(log_test PRIVATE -pthread)
+endif()
 
 set(SOTB_TEST_DEFINITIONS _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)
-add_executable(runtime_sync_test EXCLUDE_FROM_ALL tests/runtime_tests.c tests/runtime_lookup_stub.c src/runtime_mutex.c src/compat_win.c)
+add_executable(runtime_sync_test EXCLUDE_FROM_ALL tests/runtime_tests.c $<$<BOOL:${WIN32}>:tests/runtime_lookup_stub.c>
+    src/runtime_mutex.c ${SOTB_COMPAT_SOURCES} ${SOTB_TEST_STACK_SOURCES})
 target_compile_definitions(runtime_sync_test PRIVATE SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-add_executable(savedata_test EXCLUDE_FROM_ALL tests/savedata_tests.c src/runtime_file.c src/compat_win.c)
+add_executable(savedata_test EXCLUDE_FROM_ALL tests/savedata_tests.c src/runtime_file.c ${SOTB_COMPAT_SOURCES})
 target_compile_definitions(savedata_test PRIVATE SOTB_SAVEDATA_TEST_ROOT="${CMAKE_BINARY_DIR}/savedata-tests"
     SOTB_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
-add_executable(sotb-prompt-overlay-tests EXCLUDE_FROM_ALL tests/runtime_overlay_tests.c src/compat_win.c)
+add_executable(sotb-prompt-overlay-tests EXCLUDE_FROM_ALL tests/runtime_overlay_tests.c ${SOTB_COMPAT_SOURCES})
 add_executable(module_history_test EXCLUDE_FROM_ALL tests/module_history_tests.c src/module_history.c src/call_site.c
     src/startup_phase.c)
-add_executable(log_test EXCLUDE_FROM_ALL tests/log_tests.c src/runtime_log.c src/runtime_session_log.c)
 add_executable(ajm_test EXCLUDE_FROM_ALL tests/ajm_tests.c)
 target_link_libraries(ajm_test PRIVATE sotb_atrac9 -pthread)
-foreach (test IN ITEMS runtime_sync_test savedata_test sotb-prompt-overlay-tests module_history_test log_test ajm_test)
+foreach (test IN ITEMS runtime_sync_test savedata_test sotb-prompt-overlay-tests module_history_test ajm_test)
     target_include_directories(${test} PRIVATE src tests launcher gpu/shim ${CMAKE_BINARY_DIR}/generated)
     target_compile_definitions(${test} PRIVATE ${SOTB_TEST_DEFINITIONS})
     target_compile_options(${test} PRIVATE -Wall -Wextra)
 endforeach()
-target_link_libraries(runtime_sync_test PRIVATE onecore bcrypt -pthread)
-target_link_libraries(savedata_test PRIVATE onecore bcrypt -pthread)
-target_link_libraries(sotb-prompt-overlay-tests PRIVATE onecore bcrypt -pthread)
+foreach (test IN ITEMS runtime_sync_test savedata_test sotb-prompt-overlay-tests)
+    target_link_libraries(${test} PRIVATE ${SOTB_TEST_SYSTEM_LIBS})
+endforeach()
 target_link_libraries(module_history_test PRIVATE -pthread)
-target_link_libraries(log_test PRIVATE -pthread)
 
 add_executable(avplayer_thread_test EXCLUDE_FROM_ALL tests/avplayer_thread_tests.cpp)
 set_target_properties(avplayer_thread_test PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
@@ -196,9 +247,6 @@ add_custom_command(TARGET shadow_of_the_beast POST_BUILD
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/launcher/sponsor-heart.png"
         "$<TARGET_FILE_DIR:shadow_of_the_beast>/assets/launcher/sponsor-heart.png"
     VERBATIM)
-
-set_source_files_properties(src/shadow_of_the_beast.rc PROPERTIES OBJECT_DEPENDS
-    "${CMAKE_SOURCE_DIR}/packaging/icons/app-icon.ico;${CMAKE_SOURCE_DIR}/src/shadow_of_the_beast.manifest;${CMAKE_BINARY_DIR}/generated/sotb_version.h")
 
 add_executable(image_descriptor_test EXCLUDE_FROM_ALL tests/image_descriptor_tests.cpp gpu/shadps4/video_core/amdgpu/pixel_format.cpp
     gpu/shadps4/video_core/amdgpu/tiling.cpp)
@@ -383,3 +431,6 @@ target_include_directories(sotb-resolution-guard-tests PRIVATE src launcher)
 target_link_libraries(sotb-resolution-guard-tests PRIVATE sotb_resolution_guard)
 set_target_properties(sotb-resolution-guard-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-resolution-guard-tests PRIVATE -Wall -Wextra -Werror)
+
+sotb_add_parity_tests()
+sotb_write_test_targets()

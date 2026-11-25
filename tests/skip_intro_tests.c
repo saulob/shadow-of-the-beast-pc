@@ -1,6 +1,6 @@
 #include "../src/skip_intro.c"
 #include <stdlib.h>
-#include <windows.h>
+#include "test_platform.h"
 
 static int checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
@@ -12,8 +12,10 @@ static const char *const builds[] = {"CUSA03762-1.00", "CUSA02871-1.00", "CUSA00
 static uint8_t *block;
 
 static uint8_t *fresh(size_t size) {
-    if (block) VirtualFree(block, 0, MEM_RELEASE);
-    block = VirtualAlloc(NULL, size + 0x2000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    static size_t block_size;
+    test_release(block, block_size);
+    block = test_allocate(size + 0x2000, 1);
+    block_size = size + 0x2000;
     return block;
 }
 

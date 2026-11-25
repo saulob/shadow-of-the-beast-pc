@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <windows.h>
+#include "test_platform.h"
 
 static int failures;
 
@@ -18,7 +18,7 @@ static void expect(int condition, const char *what) {
 static ABI void sysv_handler(uint32_t index, uintptr_t argument) { (void)index; (void)argument; }
 
 static uint32_t ms_index;
-static void ms_handler(uint32_t index, uintptr_t argument) { ms_index = index; (void)argument; }
+static __attribute__((ms_abi)) void ms_handler(uint32_t index, uintptr_t argument) { ms_index = index; (void)argument; }
 
 static void test_abi_probe(void) {
     expect(import_traps_abi_failures(864) == 0, "SysV trap stubs deliver their own index and the guest rdi");
@@ -26,14 +26,13 @@ static void test_abi_probe(void) {
 
 /* The original defect: a handler without sysv_abi reads the index from ecx, the guest's fourth argument. */
 static void test_ms_abi_handler_reads_wrong_index(void) {
-    unsigned char *code = VirtualAlloc(NULL, 4096, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    unsigned char *code = test_allocate(4096, 0);
     import_traps_build(code, 117, (ImportTrapHandler *)(void *)ms_handler);
-    DWORD old;
-    VirtualProtect(code, 4096, PAGE_EXECUTE_READ, &old);
+    test_make_executable(code, 4096);
     typedef ABI void GuestCall(uintptr_t rdi, uintptr_t rsi, uintptr_t rdx, uintptr_t rcx);
     ((GuestCall *)(void *)(code + 116 * IMPORT_TRAP_SIZE))(0x2000, 0, 2, 1);
     expect(ms_index == 1, "an MS-ABI handler reports rcx instead of the trap index");
-    VirtualFree(code, 0, MEM_RELEASE);
+    test_release(code, 4096);
 }
 
 static void test_classification(void) {

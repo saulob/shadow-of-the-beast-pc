@@ -628,10 +628,17 @@ void TestProductionConfig() {
   CHECK(current && current->stable());
 
   const SemanticVersion next = *ParseVersion("0.2.0");
+#ifdef _WIN32
   CHECK(config.package_kind == UpdatePackageKind::kZip);
   CHECK(config.asset_name(next) == "ShadowOfTheBeastPC-v0.2.0-windows-x64.zip");
   CHECK(config.checksum_asset_name(next) == "ShadowOfTheBeastPC-v0.2.0-windows-x64.zip.sha256");
   CHECK(config.restart_executable.filename() == "shadow_of_the_beast.exe");
+#else
+  CHECK(config.package_kind == UpdatePackageKind::kAppImage);
+  CHECK(config.asset_name(next) == "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage");
+  CHECK(config.checksum_asset_name(next) == "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage.sha256");
+  CHECK(config.restart_executable == config.appimage_path);
+#endif
   const std::string asset = "https://github.com/saulob/shadow-of-the-beast-pc/releases/download/v0.2.0/" + config.asset_name(next);
   CHECK(UrlAllowed(asset, config.allowed_hosts, config.download_url_prefix));
   CHECK(UrlHostAllowed("https://release-assets.githubusercontent.com/github-production-release-asset/1/2",

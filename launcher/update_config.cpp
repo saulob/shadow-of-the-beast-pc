@@ -19,6 +19,7 @@ constexpr const char* kReleasesUrl =
 constexpr const char* kDownloadUrlPrefix = "https://github.com/saulob/shadow-of-the-beast-pc/releases/download/";
 
 std::optional<std::string> Environment(const char* name) {
+#ifdef _WIN32
     char* value = nullptr;
     size_t size = 0;
     if (_dupenv_s(&value, &size, name) != 0 || !value) {
@@ -30,6 +31,13 @@ std::optional<std::string> Environment(const char* name) {
         return std::nullopt;
     }
     return result;
+#else
+    const char* value = std::getenv(name);
+    if (!value || !*value) {
+        return std::nullopt;
+    }
+    return std::string(value);
+#endif
 }
 
 bool TestMode() {
@@ -58,6 +66,7 @@ trg::update::UpdateConfig MakeUpdateConfig(const std::filesystem::path& install_
     config.install_dir = install_dir;
     config.restart_arguments = UpdateRestartArguments(trg::update::CurrentProcessArguments());
 
+#ifdef _WIN32
     config.package_kind = UpdatePackageKind::kZip;
     config.asset_name = [](const SemanticVersion& version) {
         return "ShadowOfTheBeastPC-v" + version.CoreString() + "-windows-x64.zip";
@@ -73,6 +82,24 @@ trg::update::UpdateConfig MakeUpdateConfig(const std::filesystem::path& install_
         config.install_unsupported_reason =
             "The update helper is missing from this installation. Reinstall this release to enable automatic updates.";
     }
+#else
+    config.package_kind = UpdatePackageKind::kAppImage;
+    config.asset_name = [](const SemanticVersion& version) {
+        return "ShadowOfTheBeastPC-v" + version.CoreString() + "-x86_64.AppImage";
+    };
+    config.checksum_asset_name = [](const SemanticVersion& version) {
+        return "ShadowOfTheBeastPC-v" + version.CoreString() + "-x86_64.AppImage.sha256";
+    };
+    // The AppImage file itself ($APPIMAGE), never its read-only mount or an extracted copy, is replaced and restarted.
+    std::filesystem::path appimage;
+    if (trg::update::HasOriginalAppImage(appimage)) {
+        config.appimage_path = appimage;
+        config.restart_executable = appimage;
+        config.install_supported = true;
+    } else {
+        config.install_unsupported_reason = "Automatic installation is available in the AppImage build.";
+    }
+#endif
 
     config.log = [](std::string_view text) { std::printf("Updater: %.*s\n", int(text.size()), text.data()); };
 

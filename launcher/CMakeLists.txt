@@ -8,7 +8,11 @@ set(IMGUI_DIR ${PROJECT_SOURCE_DIR}/gpu/third_party/imgui)
 add_library(trg_core STATIC ${TRG_DIR}/src/settings.cpp ${TRG_DIR}/src/platform.cpp ${TRG_DIR}/src/download.cpp)
 target_include_directories(trg_core PUBLIC ${TRG_DIR}/include)
 target_compile_definitions(trg_core PRIVATE _CRT_SECURE_NO_WARNINGS)
-target_link_libraries(trg_core PRIVATE shell32 ole32 comdlg32 winhttp)
+if (WIN32)
+    target_link_libraries(trg_core PRIVATE shell32 ole32 comdlg32 winhttp)
+else()
+    target_link_libraries(trg_core PRIVATE Threads::Threads)
+endif()
 
 add_library(trg_launcher STATIC ${TRG_DIR}/src/launcher.cpp ${TRG_DIR}/src/headers.cpp)
 target_include_directories(trg_launcher PUBLIC ${IMGUI_DIR})
@@ -53,11 +57,20 @@ add_library(sotb_launcher_core STATIC
     ${PROJECT_SOURCE_DIR}/src/trophies/trophy_service.cpp
     ${PROJECT_SOURCE_DIR}/src/trophies/trophy_store.cpp
     ${PROJECT_SOURCE_DIR}/src/trophies/trophy_view.cpp
-    ${PROJECT_SOURCE_DIR}/src/trophies/trp_archive.cpp
-    crypto_win.cpp)
+    ${PROJECT_SOURCE_DIR}/src/trophies/trp_archive.cpp)
 target_include_directories(sotb_launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
-target_link_libraries(sotb_launcher_core PUBLIC trg_core SDL3::SDL3 sotb_startup_phase sotb_guest_display sotb_resolution_guard
-    PRIVATE ZLIB::ZLIB bcrypt winhttp)
+target_link_libraries(sotb_launcher_core PUBLIC trg_core sotb_keys SDL3::SDL3 sotb_startup_phase sotb_resolution_guard sotb_guest_display
+    PRIVATE ZLIB::ZLIB)
+if (WIN32)
+    target_sources(sotb_launcher_core PRIVATE crypto_win.cpp)
+    target_link_libraries(sotb_launcher_core PRIVATE bcrypt winhttp)
+    set(SOTB_PLATFORM_LOG_SOURCE ${PROJECT_SOURCE_DIR}/src/runtime_log.c)
+else()
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    target_sources(sotb_launcher_core PRIVATE crypto_openssl.cpp)
+    target_link_libraries(sotb_launcher_core PRIVATE OpenSSL::Crypto Threads::Threads)
+    set(SOTB_PLATFORM_LOG_SOURCE ${PROJECT_SOURCE_DIR}/src/runtime_log_posix.c)
+endif()
 target_compile_definitions(sotb_launcher_core PRIVATE SOTB_PORT_VERSION="${PROJECT_VERSION}")
 
 # The sidebar's page icons (assets/launcher/icons/*.svg) as a table of byte arrays, page_icon_data.cpp.
@@ -88,7 +101,7 @@ target_compile_options(sotb_launcher_core PRIVATE -Wall -Wextra)
 target_compile_options(sotb_launcher PRIVATE -Wall -Wextra)
 
 find_package(PNG REQUIRED)
-set(SOTB_LOG_SOURCES ${PROJECT_SOURCE_DIR}/src/runtime_log.c ${PROJECT_SOURCE_DIR}/src/runtime_session_log.c)
+set(SOTB_LOG_SOURCES ${SOTB_PLATFORM_LOG_SOURCE} ${PROJECT_SOURCE_DIR}/src/runtime_session_log.c)
 
 add_executable(sotb-trophy-tests EXCLUDE_FROM_ALL ../tests/trophy_tests.cpp ${SOTB_LOG_SOURCES} ../gpu/shim/sotb_png.cpp)
 target_link_libraries(sotb-trophy-tests PRIVATE sotb_launcher_core PNG::PNG sotb_keys)
@@ -173,13 +186,17 @@ target_compile_options(sotb-bug-report-tests PRIVATE -Wall -Wextra)
 
 # Crash reports without a window or a network: dump pairing and checks, the resumable upload against a stand-in service,
 # device-lost sessions from the monitor's own lines, and the startup stage.
-add_executable(sotb-crash-dump-correlation-tests EXCLUDE_FROM_ALL ../tests/crash_dump_correlation_tests.cpp ../src/crash_dump.c
-    ../src/runtime_log.c ../src/runtime_session_log.c)
+set(SOTB_CRASH_REPORT_TESTS sotb-crash-dump-upload-tests sotb-device-lost-reporting-tests sotb-startup-diagnostics-tests)
+if (WIN32)
+    add_executable(sotb-crash-dump-correlation-tests EXCLUDE_FROM_ALL ../tests/crash_dump_correlation_tests.cpp ../src/crash_dump.c
+        ../src/runtime_log.c ../src/runtime_session_log.c)
+    list(APPEND SOTB_CRASH_REPORT_TESTS sotb-crash-dump-correlation-tests)
+endif()
 add_executable(sotb-crash-dump-upload-tests EXCLUDE_FROM_ALL ../tests/crash_dump_upload_tests.cpp)
 add_executable(sotb-device-lost-reporting-tests EXCLUDE_FROM_ALL ../tests/device_lost_reporting_tests.cpp)
 target_include_directories(sotb-device-lost-reporting-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shadps4)
 add_executable(sotb-startup-diagnostics-tests EXCLUDE_FROM_ALL ../tests/startup_diagnostics_tests.cpp ../src/module_history.c)
-foreach (test IN ITEMS sotb-crash-dump-correlation-tests sotb-crash-dump-upload-tests sotb-device-lost-reporting-tests sotb-startup-diagnostics-tests)
+foreach (test IN LISTS SOTB_CRASH_REPORT_TESTS)
     target_link_libraries(${test} PRIVATE sotb_launcher_core)
     target_include_directories(${test} PRIVATE ${PROJECT_SOURCE_DIR}/tests)
     target_compile_definitions(${test} PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}" _WIN32_WINNT=0x0A00)
@@ -224,27 +241,29 @@ foreach (test IN ITEMS sotb-launcher-placement-tests sotb-launcher-startup-tests
 endforeach()
 
 # The helper that replaces the program after it exits. Static, so it needs none of the DLLs it may be replacing.
-add_executable(trg-updater WIN32 updater/helper_main.cpp updater/install_transaction.cpp updater/sha256.cpp
-    updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp)
-target_include_directories(trg-updater PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(trg-updater PRIVATE shell32)
-target_link_options(trg-updater PRIVATE -static)
-set_target_properties(trg-updater PROPERTIES OUTPUT_NAME "trg-updater" CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON
-    CXX_EXTENSIONS OFF)
-target_compile_options(trg-updater PRIVATE -Wall -Wextra)
+if (WIN32)
+    add_executable(trg-updater WIN32 updater/helper_main.cpp updater/install_transaction.cpp updater/sha256.cpp
+        updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp)
+    target_include_directories(trg-updater PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(trg-updater PRIVATE shell32)
+    target_link_options(trg-updater PRIVATE -static)
+    set_target_properties(trg-updater PROPERTIES OUTPUT_NAME "trg-updater" CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON
+        CXX_EXTENSIONS OFF)
+    target_compile_options(trg-updater PRIVATE -Wall -Wextra)
 
-add_executable(sotb-update-restart-marker EXCLUDE_FROM_ALL WIN32 ../tests/update_restart_marker.cpp)
-target_link_libraries(sotb-update-restart-marker PRIVATE shell32)
-target_link_options(sotb-update-restart-marker PRIVATE -static)
-set_target_properties(sotb-update-restart-marker PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    add_executable(sotb-update-restart-marker EXCLUDE_FROM_ALL WIN32 ../tests/update_restart_marker.cpp)
+    target_link_libraries(sotb-update-restart-marker PRIVATE shell32)
+    target_link_options(sotb-update-restart-marker PRIVATE -static)
+    set_target_properties(sotb-update-restart-marker PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 
-add_executable(sotb-update-helper-tests EXCLUDE_FROM_ALL ../tests/update_helper_tests.cpp)
-target_compile_definitions(sotb-update-helper-tests PRIVATE
-    SOTB_UPDATER_EXE="$<TARGET_FILE:trg-updater>"
-    SOTB_MARKER_EXE="$<TARGET_FILE:sotb-update-restart-marker>")
-add_dependencies(sotb-update-helper-tests trg-updater sotb-update-restart-marker)
-set_target_properties(sotb-update-helper-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
-target_compile_options(sotb-update-helper-tests PRIVATE -Wall -Wextra)
+    add_executable(sotb-update-helper-tests EXCLUDE_FROM_ALL ../tests/update_helper_tests.cpp)
+    target_compile_definitions(sotb-update-helper-tests PRIVATE
+        SOTB_UPDATER_EXE="$<TARGET_FILE:trg-updater>"
+        SOTB_MARKER_EXE="$<TARGET_FILE:sotb-update-restart-marker>")
+    add_dependencies(sotb-update-helper-tests trg-updater sotb-update-restart-marker)
+    set_target_properties(sotb-update-helper-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+    target_compile_options(sotb-update-helper-tests PRIVATE -Wall -Wextra)
+endif()
 
 # Versions, release JSON, SHA-256, ZIP safety, staging, jobs, rollback and the release contract; no network.
 add_executable(sotb-update-tests EXCLUDE_FROM_ALL ../tests/update_tests.cpp update_config.cpp
@@ -254,7 +273,7 @@ add_executable(sotb-update-tests EXCLUDE_FROM_ALL ../tests/update_tests.cpp upda
 target_include_directories(sotb-update-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(sotb-update-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}"
     SOTB_UPDATER_SRC_DIR="${CMAKE_CURRENT_SOURCE_DIR}" SOTB_PORT_VERSION="${SOTB_PORT_VERSION}")
-target_link_libraries(sotb-update-tests PRIVATE trg_core shell32)
+target_link_libraries(sotb-update-tests PRIVATE trg_core $<$<BOOL:${WIN32}>:shell32>)
 set_target_properties(sotb-update-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-update-tests PRIVATE -Wall -Wextra)
 
@@ -266,6 +285,6 @@ add_executable(sotb-update-network-tests EXCLUDE_FROM_ALL ../tests/update_networ
     updater/update_zip.cpp updater/version.cpp updater/third_party/miniz/miniz.c)
 target_include_directories(sotb-update-network-tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_compile_definitions(sotb-update-network-tests PRIVATE SOTB_PORT_VERSION="${SOTB_PORT_VERSION}")
-target_link_libraries(sotb-update-network-tests PRIVATE trg_core shell32 ws2_32)
+target_link_libraries(sotb-update-network-tests PRIVATE trg_core $<$<BOOL:${WIN32}>:shell32> $<$<BOOL:${WIN32}>:ws2_32>)
 set_target_properties(sotb-update-network-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-update-network-tests PRIVATE -Wall -Wextra)

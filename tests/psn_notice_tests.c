@@ -1,7 +1,7 @@
 #include "../src/psn_notice.c"
 #include "../src/skip_intro.h"
 #include <stdlib.h>
-#include <windows.h>
+#include "test_platform.h"
 
 static int checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
@@ -28,8 +28,10 @@ static uint8_t *block;
 static uint8_t *cave;
 
 static uint8_t *fresh(size_t size) {
-    if (block) VirtualFree(block, 0, MEM_RELEASE);
-    block = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    static size_t block_size;
+    test_release(block, block_size);
+    block = test_allocate(size, 1);
+    block_size = size;
     return block;
 }
 
@@ -260,11 +262,11 @@ static void test_failures_write_nothing(void) {
     CHECK(!psn_notice_apply(NULL, 0, cave, CAVE_SIZE, error, sizeof(error)));
     CHECK(!psn_notice_apply(image, IMAGE_SIZE, NULL, 0, error, sizeof(error)));
     CHECK(identical(image, original, IMAGE_SIZE + CAVE_SIZE));
-    uint8_t *far_cave = VirtualAlloc(NULL, 0x1000, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    uint8_t *far_cave = test_allocate(0x1000, 0);
     if (far_cave && (uintptr_t)far_cave > (uintptr_t)image + 0x7fff0000u) {
         CHECK(!psn_notice_apply(image, IMAGE_SIZE, far_cave, 0x1000, error, sizeof(error)));
     }
-    if (far_cave) VirtualFree(far_cave, 0, MEM_RELEASE);
+    test_release(far_cave, 0x1000);
     CHECK(psn_notice_apply(image, IMAGE_SIZE, cave, CAVE_SIZE, NULL, 0));
     free(original);
 }

@@ -160,7 +160,7 @@ static int32_t rank_has_data(const uint8_t *entry) {
 }
 
 static void test_local_score(void) {
-    compat_remove_tree(TEST_USER_DIR);
+    test_remove_tree(TEST_USER_DIR);
     runtime_file_configure("np-local-test-app", TEST_USER_DIR);
     runtime_savedata_configure("CUSA03762");
     restart_services();

@@ -1,5 +1,7 @@
 #include "trophy_page.h"
 
+#include "file_chooser.h"
+
 #include <cfloat>
 #include <cstdio>
 #include <cstdlib>
@@ -194,12 +196,10 @@ void TrophyPage::ShowNotice(std::string text) {
 }
 
 void TrophyPage::ImportKey() {
-#ifndef _WIN32
-    if (std::system("command -v zenity >/dev/null 2>&1 || command -v kdialog >/dev/null 2>&1") != 0) {
+    if (!FileChooserAvailable()) {
         ShowNotice("No file chooser (zenity or kdialog) is installed, so a key file cannot be imported here. Use Enter Trophy Key instead.");
         return;
     }
-#endif
     host_.NoteDialogInFrame();
     const std::string chosen = trg::BrowseForFile(Tr("Select a shadPS4 keys.json or config.toml"),
                                                   {{Tr("shadPS4 key files"), "*.json;*.toml"}});

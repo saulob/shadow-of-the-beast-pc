@@ -107,6 +107,8 @@ static int unavailable(const char *build, SotbMenuButtonLayout layout, const cha
     return 0;
 }
 
+int sotb_menu_buttons_supported(const char *build_key) { return find_build(build_key) != NULL; }
+
 int sotb_menu_buttons_effective_circle_confirm(const char *build_key, SotbMenuButtonLayout layout) {
     if (layout != SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) return 0;
     const MenuButtonsBuild *build = find_build(build_key);

@@ -3,7 +3,7 @@
 // field of view math, which shapes and views are touched, the safe area geometry and its hold time, both hooks on the
 // three real builds (identical bytes, nothing else written, no overlap with the other guest patches), refusal of
 // anything else, and the wiring of the setting. No window, no game, no GPU.
-#include <windows.h>
+#include "test_platform.h"
 
 #include <algorithm>
 #include <array>
@@ -849,7 +849,7 @@ bool MakeFrontendRig() {
         return false;
     }
     constexpr size_t kSize = 0x3c0b000;
-    uint8_t* image = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    uint8_t* image = static_cast<uint8_t*>(test_allocate(kSize, 1));
     CHECK(image != nullptr);
     if (!image) return false;
     std::memcpy(image + SOTB_FRONTEND_CONSTRUCTOR, real.data() + SOTB_FRONTEND_CONSTRUCTOR, SOTB_FRONTEND_CONSTRUCTOR_SIZE);
@@ -1025,7 +1025,7 @@ void TestHudHookRuns() {
         return;
     }
     constexpr size_t kSize = 0x3c2e000;
-    uint8_t* image = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    uint8_t* image = static_cast<uint8_t*>(test_allocate(kSize, 1));
     CHECK(image != nullptr);
     if (!image) return;
     const auto copy = [&](size_t at, size_t size) { std::memcpy(image + at, real.data() + at, size); };
@@ -1153,7 +1153,7 @@ void TestHudHookRuns() {
     for (const uint32_t vtable : kHudFullScreen) {
         for (const HudClass& c : kHudClasses) CHECK(c.vtable != vtable);
     }
-    VirtualFree(image, 0, MEM_RELEASE);
+    test_release(image, kSize);
 }
 
 // The safe area hook running: a synthetic image with the constructor, the vtable slots and an arrangement that records
@@ -1166,7 +1166,7 @@ void TestSafeAreaHookRuns() {
     const std::array<uint8_t, 17> arrange_prefix = {0x48, 0x8d, 0x87, 0xf0, 0x00, 0x00, 0x00, 0x48, 0x8d,
                                                     0x8f, 0x38, 0x01, 0x00, 0x00, 0x48, 0x89, 0xf7};
     constexpr size_t kSize = 0x3d14000;
-    uint8_t* image = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    uint8_t* image = static_cast<uint8_t*>(test_allocate(kSize, 1));
     CHECK(image != nullptr);
     if (!image) return;
 
@@ -1294,7 +1294,7 @@ void TestSafeAreaHookRuns() {
         g_rig.Frame();
     }
     sotb_ultrawide_set_clock(nullptr);
-    VirtualFree(image, 0, MEM_RELEASE);
+    test_release(image, kSize);
 }
 
 void TestSetting() {
@@ -1350,16 +1350,16 @@ void TestWiring() {
     const std::string loader = ReadAll(Root() / "src/loader.c");
     const size_t call = loader.find("if (sotb_ultrawide_wanted(aspect_ratio->key)) {");
     CHECK(call != std::string::npos && Count(loader, "guest_ultrawide_apply(") == 1 && Count(loader, "guest_ultrawide_apply_safe_area(") == 1);
-    CHECK(Count(loader, "guest_hud_apply(") == 1 && Contains(loader, "guest_hud_apply(image, size, cave + 3840, cave_size - 3840, reason, sizeof(reason))"));
-    CHECK(loader.find("guest_hud_apply(") > loader.find("guest_ultrawide_apply(image, size, cave + 3584") &&
+    CHECK(Count(loader, "guest_hud_apply(") == 1 && Contains(loader, "guest_hud_apply(image, size, cave + GUEST_CAVE_HUD, cave_size - GUEST_CAVE_HUD, reason, sizeof(reason))"));
+    CHECK(loader.find("guest_hud_apply(") > loader.find("guest_ultrawide_apply(image, size, cave + GUEST_CAVE_ULTRAWIDE") &&
           loader.find("guest_hud_apply(") < loader.find("Ultrawide: Hor+ unavailable"));
     CHECK(!Contains(loader, "hud_canvas") && !Contains(ReadAll(Root() / "src/guest_ultrawide.c"), "hud_canvas"));
     CHECK(Count(loader, "guest_ultrawide_apply_frontend(") == 1);
     CHECK(Contains(loader, "guest_ultrawide_apply_frontend(image, size, reason, sizeof(reason))"));
     CHECK(Contains(loader, "if (!sotb_ultrawide_enabled(aspect_ratio->key, sotb_true_ultrawide(settings_file))) {"));
-    CHECK(Contains(loader, "guest_ultrawide_apply(image, size, cave + 3584, cave_size - 3584, reason, sizeof(reason))"));
+    CHECK(Contains(loader, "guest_ultrawide_apply(image, size, cave + GUEST_CAVE_ULTRAWIDE, cave_size - GUEST_CAVE_ULTRAWIDE, reason, sizeof(reason))"));
     CHECK(Contains(loader, "guest_ultrawide_apply_safe_area(image, size, reason, sizeof(reason))"));
-    CHECK(call > loader.find("psn_notice_apply(image, size, cave + 3072") && call < loader.find("protect(cave, round_page(cave_size + lzcnt_stubs), 5);"));
+    CHECK(call > loader.find("psn_notice_apply(image, size, cave + GUEST_CAVE_PSN_NOTICE") &&call < loader.find("protect(cave, round_page(cave_size + lzcnt_stubs), 5);"));
     CHECK(Contains(loader, "const SotbRenderTarget render_target = sotb_render_target(render_resolution, aspect_ratio);"));
     CHECK(Count(loader, "sotb_ultrawide_enable_side_fill(") == 1);
     CHECK(Contains(loader, "sotb_ultrawide_enable_side_fill(sotbgpu_mark_loading_fill, sotbgpu_set_frontend_fill);"));
@@ -1523,7 +1523,7 @@ void TestFrontendHookRuns() {
 // and hands the original arrangement exactly the geometry it handed it before.
 void TestLoadingScreenObserver() {
     constexpr size_t kSize = 0x3d43000;
-    uint8_t* image = static_cast<uint8_t*>(VirtualAlloc(nullptr, kSize, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE));
+    uint8_t* image = static_cast<uint8_t*>(test_allocate(kSize, 1));
     CHECK(image != nullptr);
     if (!image) return;
     static GuestSlateGeometry captured;
@@ -1654,7 +1654,7 @@ void TestLoadingScreenObserver() {
     g_loading_marks = 0;
     hook(&self, &wide, &arranged);
     CHECK(g_loading_marks == 0 && std::memcmp(&captured, &scaled_wide, sizeof(captured)) == 0);
-    VirtualFree(image, 0, MEM_RELEASE);
+    test_release(image, kSize);
 }
 
 // The state the presenter reads: the mode, how long it is held and the part of the picture the game draws.

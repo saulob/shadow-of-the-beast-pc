@@ -1,4 +1,5 @@
-// The hashes and ciphers the launcher needs, through Windows CNG (crypto_win.cpp). Every function returns false on failure.
+// The hashes and ciphers the launcher needs: Windows CNG (crypto_win.cpp) or OpenSSL (crypto_openssl.cpp). Every function
+// returns false on failure.
 #pragma once
 
 #include <cstddef>

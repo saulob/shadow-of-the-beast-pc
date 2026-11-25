@@ -103,11 +103,17 @@ inline constexpr char kUpscaleHelp[] =
 inline constexpr char kSharpenHelp[] =
     "Sharpens the final picture (AMD RCAS). It applies when the window is the size of the render "
     "resolution, or together with FSR 1 in a bigger window.";
+#ifdef _WIN32
 inline constexpr char kRendererHelp[] =
     "Vulkan is the supported renderer. OpenGL and Direct3D 11 are experimental and render only part of "
     "the game's features. Direct3D 11 is intended mainly for Windows systems where Vulkan or OpenGL has "
     "problems. Auto uses Vulkan, and OpenGL when this system cannot run Vulkan. It takes effect the next "
     "time the game starts.";
+#else
+inline constexpr char kRendererHelp[] =
+    "Vulkan is the supported renderer. OpenGL is experimental and renders only part of the game's features. Auto uses "
+    "Vulkan, and OpenGL when this system cannot run Vulkan. It takes effect the next time the game starts.";
+#endif
 inline constexpr char kGraphicsCardHelp[] = "Selects which graphics card renders the game. If the selected card is no longer available, the first available card is used.";
 inline constexpr char kAntiAliasingHelp[] =
     "SMAA smooths jagged edges on the finished picture, at a small cost in performance.";

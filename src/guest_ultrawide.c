@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include "guest_ultrawide.h"
 #include "guest_display.h"
 #include <math.h>
@@ -7,7 +8,10 @@
 #ifdef _WIN32
 #include <windows.h>
 #else
+#include <errno.h>
+#include <sys/uio.h>
 #include <time.h>
+#include <unistd.h>
 #endif
 
 #define PI 3.14159265358979323846
@@ -254,7 +258,10 @@ static int read_guest(const void *from, void *to, size_t size) {
 #ifdef _WIN32
     return ReadProcessMemory(GetCurrentProcess(), from, to, size, NULL) != 0;
 #else
-    memcpy(to, from, size);
+    const struct iovec local = {to, size}, remote = {(void *)(uintptr_t)from, size};
+    const ssize_t read = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+    if (read >= 0 || errno == EFAULT) return read == (ssize_t)size;
+    memcpy(to, from, size); /* a sandbox that forbids the call */
     return 1;
 #endif
 }

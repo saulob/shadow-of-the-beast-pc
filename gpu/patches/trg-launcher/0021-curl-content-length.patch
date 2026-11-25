@@ -1,0 +1,101 @@
+diff --git a/src/download.cpp b/src/download.cpp
+--- a/src/download.cpp
++++ b/src/download.cpp
+@@ -698,6 +698,40 @@ CurlResult ParseResultLine(const std::string& text) {
+   return result;
+ }
+ 
++struct HeaderBlock {
++  int status = 0;
++  long long length = -1;
++  bool complete = false;
++};
++
++// The response headers curl dumps to stderr (-D): the last block is this hop's own response.
++HeaderBlock LastHeaderBlock(const std::string& text) {
++  HeaderBlock block;
++  size_t at = 0;
++  for (size_t end; (end = text.find('\n', at)) != std::string::npos; at = end + 1) {
++    std::string line = text.substr(at, end - at);
++    if (!line.empty() && line.back() == '\r') {
++      line.pop_back();
++    }
++    if (line.rfind("HTTP/", 0) == 0) {
++      block = HeaderBlock{};
++      const size_t space = line.find(' ');
++      block.status = space == std::string::npos ? 0 : std::atoi(line.c_str() + space + 1);
++    } else if (block.status && !block.complete) {
++      const size_t colon = line.find(':');
++      if (line.empty()) {
++        block.complete = true;
++      } else if (colon != std::string::npos && Lower(line.substr(0, colon)) == "content-length") {
++        char* parsed = nullptr;
++        const char* value = line.c_str() + colon + 1;
++        const long long length = std::strtoll(value, &parsed, 10);
++        block.length = parsed != value && length >= 0 ? length : -1;
++      }
++    }
++  }
++  return block;
++}
++
+ // One request without curl's own redirect handling. A response body is held back until curl exits or enough has
+ // arrived that it cannot be a redirect page, so a redirect's body never reaches the caller's sink.
+ Hop FetchHop(const std::string& url, const ParsedUrl& target, bool send_headers, Clock::time_point started,
+@@ -711,7 +745,7 @@ Hop FetchHop(const std::string& url, const ParsedUrl& target, bool send_headers,
+   std::vector<std::string> arguments = {
+       "-sS", "-f", "-N", "--proto", target.Secure() ? "=https" : "=http", "--connect-timeout",
+       std::to_string(Seconds(options.connect_timeout_ms)), "--speed-limit", "1", "--speed-time",
+-      std::to_string(Seconds(options.receive_timeout_ms)), "-A", options.user_agent, "-w",
++      std::to_string(Seconds(options.receive_timeout_ms)), "-A", options.user_agent, "-D", "/dev/stderr", "-w",
+       "%{stderr}" + std::string(kResultMarker) + "%{http_code} %{redirect_url}\\n"};
+   if (options.total_timeout_ms > 0) {
+     const long long remaining = options.total_timeout_ms - ElapsedMs(started);
+@@ -744,6 +778,18 @@ Hop FetchHop(const std::string& url, const ParsedUrl& target, bool send_headers,
+   bool err_open = true;
+   std::vector<char> buffer(size_t(1) << 16);
+ 
++  const auto read_length = [&] {
++    const HeaderBlock block = LastHeaderBlock(diagnostics);
++    if (!block.complete || block.status != 200) {
++      return true;
++    }
++    report.expected = block.length;
++    if (options.max_bytes > 0 && report.expected > options.max_bytes) {
++      error = kTooMuch;
++      return false;
++    }
++    return true;
++  };
+   const auto deliver = [&](const char* data, size_t size) {
+     if (options.max_bytes > 0 && report.bytes + static_cast<long long>(size) > options.max_bytes) {
+       error = kTooMuch;
+@@ -810,6 +856,9 @@ Hop FetchHop(const std::string& url, const ParsedUrl& target, bool send_headers,
+         if (diagnostics.size() < (size_t(1) << 16)) {
+           diagnostics.append(buffer.data(), size_t(count));
+         }
++        if (report.expected < 0 && !read_length()) {
++          return Hop::kFailed;
++        }
+       } else if (count == 0 || errno != EINTR) {
+         err_open = false;
+       }
+@@ -834,9 +883,18 @@ Hop FetchHop(const std::string& url, const ParsedUrl& target, bool send_headers,
+       error = StatusError(report);
+       return Hop::kFailed;
+     }
++    if (report.expected < 0 && !read_length()) {
++      return Hop::kFailed;
++    }
+     if (!releasing && !held.empty() && !deliver(held.data(), held.size())) {
+       return Hop::kFailed;
+     }
++    if (report.expected >= 0 && report.bytes != report.expected) {
++      report.interrupted = true;
++      report.transient = true;
++      error = kInterrupted;
++      return Hop::kFailed;
++    }
+     return Hop::kDone;
+   }
+   switch (exit_code) {

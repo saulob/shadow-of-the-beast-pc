@@ -22,6 +22,7 @@ extern "C" {
 typedef int (*SotbExitConfirmHandler)(void);
 typedef uint64_t (*SotbExitGameClock)(void);
 
+int sotb_exit_game_supported(const char *build_key);
 int sotb_exit_game_screen_allowed(uint8_t screen_id);
 int sotb_exit_game_can_append_button(uint8_t screen_id, uint8_t show_bar, int32_t count, int32_t capacity,
                                      const uint8_t *existing_hotkeys);

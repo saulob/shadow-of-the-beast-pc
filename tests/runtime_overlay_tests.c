@@ -1,7 +1,7 @@
 /* The runtime file overlay the Xbox prompt art is served through: the host file, zeros past its end, and sorted patches on
  * top, read through the real file layer in a temporary folder. The original file is hashed before and after. */
 #include "../src/runtime_file.c"
-#include <windows.h>
+#include "test_platform.h"
 
 static int checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
@@ -60,10 +60,8 @@ static int same(const unsigned char *a, const unsigned char *b, size_t size) {
 }
 
 int main(void) {
-    char dir[MAX_PATH], host[MAX_PATH], other[MAX_PATH];
-    GetTempPathA(MAX_PATH, dir);
-    snprintf(dir + strlen(dir), sizeof(dir) - strlen(dir), "sotb_overlay_%lu", GetCurrentProcessId());
-    CreateDirectoryA(dir, NULL);
+    char dir[512], host[600], other[600];
+    test_temp_folder(dir, sizeof(dir), "sotb_overlay");
     snprintf(host, sizeof(host), "%s/pak.bin", dir);
     snprintf(other, sizeof(other), "%s/other.bin", dir);
     FILE *out = fopen(host, "wb");
@@ -204,9 +202,9 @@ int main(void) {
     CHECK(file_crc(host) == before);
     free(expected);
     free(buffer);
-    DeleteFileA(host);
-    DeleteFileA(other);
-    RemoveDirectoryA(dir);
+    test_remove_file(host);
+    test_remove_file(other);
+    test_remove_folder(dir);
     printf("runtime overlay tests: %d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

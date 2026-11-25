@@ -1,7 +1,7 @@
 #include "../src/sotb_menu_buttons.c"
 
 #include <stdlib.h>
-#include <windows.h>
+#include "test_platform.h"
 
 static int checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
@@ -159,10 +159,10 @@ static void write_text(const char *path, const char *text) {
 }
 
 static void test_setting_file(void) {
-    char folder[MAX_PATH], path[MAX_PATH];
-    GetTempPathA(MAX_PATH, folder);
-    GetTempFileNameA(folder, "sotb", 0, path);
-    _putenv_s(SOTB_MENU_BUTTON_LAYOUT_ENV, "");
+    char folder[512], path[600];
+    test_temp_folder(folder, sizeof(folder), "sotb_menu_buttons");
+    snprintf(path, sizeof(path), "%s/sotb.ini", folder);
+    test_setenv(SOTB_MENU_BUTTON_LAYOUT_ENV, "");
 
     CHECK(sotb_menu_button_layout(path) == SOTB_MENU_BUTTON_LAYOUT_WESTERN);
     write_text(path, "renderer = auto\n");
@@ -178,12 +178,12 @@ static void test_setting_file(void) {
     write_text(path, "menu_button_layout = original\n");
     CHECK(sotb_menu_button_layout(NULL) == SOTB_MENU_BUTTON_LAYOUT_WESTERN);
 
-    _putenv_s(SOTB_MENU_BUTTON_LAYOUT_ENV, "original");
+    test_setenv(SOTB_MENU_BUTTON_LAYOUT_ENV, "original");
     CHECK(sotb_menu_button_layout(path) == SOTB_MENU_BUTTON_LAYOUT_ORIGINAL);
-    _putenv_s(SOTB_MENU_BUTTON_LAYOUT_ENV, "western");
+    test_setenv(SOTB_MENU_BUTTON_LAYOUT_ENV, "western");
     CHECK(sotb_menu_button_layout(path) == SOTB_MENU_BUTTON_LAYOUT_WESTERN);
-    _putenv_s(SOTB_MENU_BUTTON_LAYOUT_ENV, "");
-    DeleteFileA(path);
+    test_setenv(SOTB_MENU_BUTTON_LAYOUT_ENV, "");
+    test_remove_tree(folder);
 }
 
 static void test_real_image(void) {

@@ -1,7 +1,8 @@
 #include "runtime.h"
 #include "runtime_np_local.h"
 #include "local_np_store.h"
-#include "compat_win.h"
+#include "sotb_exit_game.h"
+#include "test_platform.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -130,6 +131,43 @@ static void test_offline_contracts(void) {
 
 #include "runtime_np_local_tests.inc"
 
+static char *read_source(const char *relative) {
+    char path[1024];
+    snprintf(path, sizeof(path), "%s/%s", SOTB_SOURCE_DIR, relative);
+    FILE *file = fopen(path, "rb");
+    if (!file) return NULL;
+    char *text = malloc(1 << 20);
+    if (text) text[fread(text, 1, (1 << 20) - 1, file)] = 0;
+    fclose(file);
+    return text;
+}
+
+/* runtime_pad.c filters Square through Exit Game: this test links the production implementation, not a stand-in. */
+static void test_exit_game_square_filter(void) {
+    sotb_exit_game_reset();
+    CHECK(sotb_exit_game_filter_square(1) == 0);
+    CHECK(sotb_exit_game_filter_square(0) == 0);
+    sotb_exit_game_set_active_for_test(1);
+    CHECK(sotb_exit_game_filter_square(1) == 1);
+    CHECK(sotb_exit_game_filter_square(1) == 1);
+    CHECK(sotb_exit_game_filter_square(0) == 0);
+    sotb_exit_game_reset();
+
+    char *cmake = read_source("CMakeLists.txt");
+    char *stubs = read_source("tests/runtime_test_stubs.c");
+    const char *target = cmake ? strstr(cmake, "add_executable(runtime_services_test ") : NULL;
+    const char *end = target ? strstr(target, ")") : NULL;
+    const char *real = target ? strstr(target, "src/sotb_exit_game.c") : NULL;
+    const char *links = cmake ? strstr(cmake, "target_link_libraries(runtime_services_test ") : NULL;
+    const char *links_end = links ? strstr(links, ")") : NULL;
+    const char *l10n = links ? strstr(links, "sotb_exit_game_l10n") : NULL;
+    CHECK(target && end && real && real < end);
+    CHECK(links && links_end && l10n && l10n < links_end);
+    CHECK(stubs && !strstr(stubs, "sotb_exit_game_"));
+    free(cmake);
+    free(stubs);
+}
+
 int main(void) {
     setvbuf(stdout, NULL, _IONBF, 0);
     runtime_start(1);
@@ -141,7 +179,8 @@ int main(void) {
     test_remote_services_stay_offline();
     test_local_score();
     test_local_tus();
-    compat_remove_tree(TEST_USER_DIR);
+    test_exit_game_square_filter();
+    test_remove_tree(TEST_USER_DIR);
     printf("%d checks, %d failures\n", checks, failures);
     return failures ? 1 : 0;
 }

@@ -376,7 +376,8 @@ void TestManagedSettings() {
     }
 
     CHECK(IsValidSetting(kRendererKey, "auto") && IsValidSetting(kRendererKey, "vulkan") &&
-          IsValidSetting(kRendererKey, "opengl") && IsValidSetting(kRendererKey, "d3d11") &&
+          IsValidSetting(kRendererKey, "opengl") &&
+          IsValidSetting(kRendererKey, "d3d11") == SotbRenderer::Direct3D11Available &&
           !IsValidSetting(kRendererKey, "metal"));
     CHECK(IsValidSetting(kDisplayModeKey, "borderless") && !IsValidSetting(kDisplayModeKey, "fullscreen"));
     CHECK(IsValidSetting(kPresentationKey, "stretch") && !IsValidSetting(kPresentationKey, "zoom"));

@@ -123,6 +123,8 @@ void *runtime_low_map(size_t size, int prot);
 /* Stacks below 1 TiB with a guard page at the bottom; released stacks are reused. */
 void *runtime_stack_acquire(size_t size);
 void runtime_stack_release(void *stack, size_t size);
+/* The stack the guest main thread runs on, for scePthreadAttrGetstack. */
+void runtime_thread_set_main_stack(void *stack);
 #endif
 /* Windows: reserves the PS4 user address range as a placeholder (no-op elsewhere). */
 void runtime_memory_reserve(void);

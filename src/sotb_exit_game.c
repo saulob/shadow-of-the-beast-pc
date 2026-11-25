@@ -93,6 +93,8 @@ static const ExitGameBuild *find_exit_build(const char *build_key) {
     return NULL;
 }
 
+int sotb_exit_game_supported(const char *build_key) { return find_exit_build(build_key) != NULL; }
+
 static uint8_t *g_image_base;
 static const ExitGameBuild *g_active_build;
 static SotbExitConfirmHandler g_confirm_handler;

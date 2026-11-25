@@ -701,6 +701,7 @@ void TestPortContract() {
   }
   const std::vector<std::string> required = {"shadow_of_the_beast.exe", "trg-updater.exe", "SDL3.dll",
                                              "libc++.dll"};
+#ifdef _WIN32
   CHECK(config.package_kind == UpdatePackageKind::kZip);
   CHECK(next && config.asset_name(*next) == "ShadowOfTheBeastPC-v0.2.0-windows-x64.zip");
   CHECK(next && config.checksum_asset_name(*next) == "ShadowOfTheBeastPC-v0.2.0-windows-x64.zip.sha256");
@@ -711,6 +712,13 @@ void TestPortContract() {
   TempDir bare;
   const UpdateConfig without_helper = Sotb::MakeUpdateConfig(bare.path);
   CHECK(!without_helper.install_supported && !without_helper.install_unsupported_reason.empty());
+#else
+  CHECK(config.package_kind == UpdatePackageKind::kAppImage);
+  CHECK(next && config.asset_name(*next) == "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage");
+  CHECK(next && config.checksum_asset_name(*next) == "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage.sha256");
+  // Outside an AppImage nothing can be replaced.
+  CHECK(!config.install_supported && !config.install_unsupported_reason.empty() && config.appimage_path.empty());
+#endif
 
   CHECK(PortPackageAccepted(temp.path, required, {}, {}));
   for (const std::string& file : required) {
@@ -735,6 +743,75 @@ void TestPortContract() {
     CHECK(!accepted);
   }
 }
+
+#ifndef _WIN32
+// A type 2 AppImage as its runtime begins: an ELF program with 'A' 'I' 2 at offset 8, bytes the kernel ignores when it
+// starts the program, followed by the file system (here a marker).
+std::string AppImageLike(const std::string& marker) {
+  std::ifstream in("/bin/true", std::ios::binary);
+  std::string program{std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+  if (program.size() > 16) {
+    program[8] = 'A';
+    program[9] = 'I';
+    program[10] = '\x02';
+  }
+  return program + marker;
+}
+
+bool Leftovers(const std::filesystem::path& folder) {
+  for (const auto& entry : std::filesystem::directory_iterator(folder)) {
+    if (entry.path().filename().string().find(".trg-update-") != std::string::npos) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// The AppImage is replaced as one file, keeps its mode, starts again from its own path, and is restored when the new
+// one cannot start. Only /bin/true is ever run.
+void TestAppImageUpdate() {
+  std::printf("AppImage update\n");
+  TempDir temp;
+  const std::filesystem::path installed = temp.path / "beside" / "ShadowOfTheBeastPC-v0.1.0-x86_64.AppImage";
+  const std::filesystem::path downloaded = temp.path / "download" / "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage";
+  WriteFile(installed, AppImageLike("OLD"));
+  WriteFile(downloaded, AppImageLike("NEW"));
+  std::filesystem::permissions(installed, std::filesystem::perms(0750));
+  std::filesystem::permissions(downloaded, std::filesystem::perms(0644));
+  const std::string old_image = ReadFile(installed);
+
+  unsetenv("APPDIR");
+  setenv("APPIMAGE", installed.c_str(), 1);
+  std::filesystem::path found;
+  CHECK(HasOriginalAppImage(found) && found == std::filesystem::weakly_canonical(installed));
+  const UpdateConfig config = Sotb::MakeUpdateConfig(temp.path / "mount" / "usr" / "bin");
+  CHECK(config.install_supported && config.appimage_path == found && config.restart_executable == found);
+  // Never the mount or the extraction folder it runs from, and never a file that is not an AppImage.
+  setenv("APPDIR", (temp.path / "beside").c_str(), 1);
+  CHECK(!HasOriginalAppImage(found));
+  unsetenv("APPDIR");
+  WriteFile(temp.path / "AppRun", "#!/bin/sh\nexec usr/bin/shadow_of_the_beast \"$@\"\n");
+  setenv("APPIMAGE", (temp.path / "AppRun").c_str(), 1);
+  CHECK(!HasOriginalAppImage(found));
+  setenv("APPIMAGE", (temp.path / "missing.AppImage").c_str(), 1);
+  CHECK(!HasOriginalAppImage(found));
+  unsetenv("APPIMAGE");
+  CHECK(!HasOriginalAppImage(found));
+
+  std::string error;
+  WriteFile(temp.path / "download" / "page.html", "<html>not found</html>");
+  CHECK(!ApplyAppImageUpdate(temp.path / "download" / "page.html", installed, {"--launcher"}, error) && !error.empty());
+  CHECK(ReadFile(installed) == old_image && !Leftovers(installed.parent_path()));
+
+  WriteFile(temp.path / "download" / "broken.AppImage", std::string("\x7f" "ELF\x02\x01\x01\x00" "AI\x02", 11) + "NEW");
+  CHECK(!ApplyAppImageUpdate(temp.path / "download" / "broken.AppImage", installed, {"--launcher"}, error));
+  CHECK(ReadFile(installed) == old_image && !Leftovers(installed.parent_path()));
+
+  CHECK(ApplyAppImageUpdate(downloaded, installed, {"--launcher"}, error) && error.empty());
+  CHECK(ReadFile(installed) == AppImageLike("NEW") && !Leftovers(installed.parent_path()));
+  CHECK((std::filesystem::status(installed).permissions() & std::filesystem::perms::all) == std::filesystem::perms(0751));
+}
+#endif
 
 void TestRestartArguments() {
   std::printf("restart arguments\n");
@@ -766,6 +843,9 @@ int main() {
   TestPaths();
   TestPortContract();
   TestRestartArguments();
+#ifndef _WIN32
+  TestAppImageUpdate();
+#endif
   std::printf("%d checks, %d failures\n", g_checks, g_failures);
   return g_failures == 0 ? 0 : 1;
 }

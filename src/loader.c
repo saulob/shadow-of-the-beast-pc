@@ -9,7 +9,6 @@
 #include <string.h>
 #include <time.h>
 
-#include "crash_dump.h"
 #include "import_slots.h"
 #include "guest_display.h"
 #include "resolution_guard.h"
@@ -23,7 +22,6 @@
 #include "guest_patches.h"
 #include "isa_emulate.h"
 #include "lzcnt_compat.h"
-#include "module_diagnostics.h"
 #include "runtime.h"
 #include "runtime_log.h"
 #include "sotb_launcher.h"
@@ -33,14 +31,25 @@
 #include "startup_phase.h"
 #include "fault_origin.h"
 
-#if !defined(_WIN32)
-#error The Shadow of the Beast PC port currently targets Windows only.
-#endif
 #if !defined(__x86_64__) || !defined(__GNUC__)
 #error The Shadow of the Beast PC port requires x86-64 GCC or Clang.
 #endif
 
+#ifdef _WIN32
 #include <windows.h>
+#include "crash_dump.h"
+#include "module_diagnostics.h"
+#else
+#include <dlfcn.h>
+#include <errno.h>
+#include <execinfo.h>
+#include <malloc.h>
+#include <pthread.h>
+#include <sys/mman.h>
+#include <sys/uio.h>
+#include <ucontext.h>
+#include <unistd.h>
+#endif
 
 typedef struct { uint64_t address, size, flags; } Segment;
 typedef struct { uint64_t target, kind, value, addend; } Reloc;
@@ -81,8 +90,9 @@ static uint64_t read64(FILE *f) {
 
 static size_t round_page(size_t size) { return (size + page_size - 1) & ~(page_size - 1); }
 
+#ifdef _WIN32
 static void *allocate(size_t size) {
-    void *low = runtime_low_map(size, 0x02 | 0x04);
+    void *low = runtime_low_map(size, PROT_WRITE | PROT_EXEC);
     if (low) return low;
     void *p = VirtualAlloc(NULL, size, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
     if (!p) fail("VirtualAlloc failed");
@@ -97,6 +107,25 @@ static void protect(void *p, size_t size, unsigned flags) {
     if (!VirtualProtect(p, size, mode, &old)) fail("VirtualProtect failed");
     FlushInstructionCache(GetCurrentProcess(), p, size);
 }
+
+static unsigned long host_thread_id(void) { return GetCurrentThreadId(); }
+#else
+static void *allocate(size_t size) {
+    void *low = runtime_low_map(size, PROT_READ | PROT_WRITE);
+    if (low) return low;
+    void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) fail("mmap failed");
+    return p;
+}
+
+static void protect(void *p, size_t size, unsigned flags) {
+    const int mode = ((flags & 4) ? PROT_READ : 0) | ((flags & 2) ? PROT_READ | PROT_WRITE : 0) |
+                     ((flags & 1) ? PROT_READ | PROT_EXEC : 0);
+    if (mprotect(p, round_page(size), mode)) fail("mprotect failed");
+}
+
+static unsigned long host_thread_id(void) { return (unsigned long)gettid(); }
+#endif
 
 /* -1 for the eboot, the linked module number, or -2 outside the image. */
 static int image_unit(uint64_t offset) {
@@ -192,7 +221,7 @@ static ABI __attribute__((noreturn)) void unresolved(uint32_t id, uintptr_t argu
            id, import_count);
     report_import_users(id);
     printf("Startup stage: %s\n", sotb_startup_phase_current());
-    printf("Thread: %lu\n", GetCurrentThreadId());
+    printf("Thread: %lu\n", host_thread_id());
     uintptr_t caller = return_address - (uintptr_t)image;
     printf("Caller return offset: 0x%" PRIxPTR "; first argument: 0x%" PRIxPTR "\n", caller, argument);
     for (uint64_t m = 0; m < module_count; ++m) {
@@ -233,6 +262,17 @@ static int system_usable(char *cause, size_t cause_size, char *advice, size_t ad
            sotb_check_renderer(renderer_settings_file, cause, cause_size, advice, advice_size);
 }
 
+#ifndef _WIN32
+static int describe_host_address(char *out, size_t size, uintptr_t address) {
+    Dl_info where;
+    if (!dladdr((void *)address, &where) || !where.dli_fname) return 0;
+    const char *name = strrchr(where.dli_fname, '/');
+    snprintf(out, size, "%s+0x%" PRIxPTR " (%s)", name ? name + 1 : where.dli_fname,
+             address - (uintptr_t)where.dli_fbase, where.dli_sname ? where.dli_sname : "?");
+    return 1;
+}
+#endif
+
 static int annotate_address(char *out, size_t size, uintptr_t address) {
     const int64_t data_import = import_traps.data ? import_trap_data_index(&import_traps, address) : -1;
     if (data_import >= 0) {
@@ -249,7 +289,11 @@ static int annotate_address(char *out, size_t size, uintptr_t address) {
         snprintf(out, size, "guest offset 0x%" PRIx64 " (moved access)", site);
         return 1;
     }
+#ifdef _WIN32
     return module_diagnostics_describe(out, size, address);
+#else
+    return describe_host_address(out, size, address);
+#endif
 }
 
 static void describe_address(char *out, size_t size, uintptr_t address) {
@@ -257,6 +301,7 @@ static void describe_address(char *out, size_t size, uintptr_t address) {
 }
 
 static int fatal_reported;
+#ifdef _WIN32
 static DWORD fatal_thread;
 static char fatal_line[768];
 
@@ -471,6 +516,157 @@ static uint64_t patch_tcb_loads(const Segment *segments, uint64_t count) {
     }
     return patched;
 }
+#else
+static pid_t fatal_thread;
+
+static int read_memory(uintptr_t address, void *out, size_t size) {
+    const struct iovec local = {out, size}, remote = {(void *)address, size};
+    return process_vm_readv(getpid(), &local, 1, &remote, 1, 0) == (ssize_t)size;
+}
+
+static void report_line(const char *text) {
+    size_t size = strlen(text);
+    while (size) {
+        const ssize_t written = write(2, text, size);
+        if (written < 0 && errno == EINTR) continue;
+        if (written <= 0) return;
+        text += written;
+        size -= (size_t)written;
+    }
+}
+
+static void report_frame(int depth, uintptr_t address) {
+    char where[256], line[320];
+    describe_address(where, sizeof(where), address);
+    snprintf(line, sizeof(line), "  #%d %s\n", depth, where);
+    report_line(line);
+}
+
+/* The process ends here, so dladdr and snprintf are acceptable in the handler. */
+static __attribute__((noreturn)) void fatal_signal(int sig, const siginfo_t *info, void *context) {
+    if (__atomic_exchange_n(&fatal_reported, 1, __ATOMIC_ACQ_REL)) {
+        if (__atomic_load_n(&fatal_thread, __ATOMIC_ACQUIRE) == gettid()) _exit(128 + sig);
+        for (;;) pause();
+    }
+    __atomic_store_n(&fatal_thread, gettid(), __ATOMIC_RELEASE);
+    runtime_log_mark_crash();
+    const greg_t *r = ((ucontext_t *)context)->uc_mcontext.gregs;
+    const uintptr_t rip = (uintptr_t)r[REG_RIP];
+    char where[256], line[768];
+    describe_address(where, sizeof(where), rip);
+    if (sig == SIGSEGV || sig == SIGBUS) {
+        snprintf(line, sizeof(line), "Fault: %s access to %p at %s (thread %lu)\n",
+                 (r[REG_ERR] & 16) ? "execute" : (r[REG_ERR] & 2) ? "write" : "read", info->si_addr, where,
+                 host_thread_id());
+    } else {
+        snprintf(line, sizeof(line), "Fault: signal %d at %s (thread %lu)\n", sig, where, host_thread_id());
+    }
+    report_line(line);
+    snprintf(line, sizeof(line), "Crash: startup phase: %s\n", sotb_startup_phase_current());
+    report_line(line);
+    snprintf(line, sizeof(line),
+             "  rax=%016llx rbx=%016llx rcx=%016llx rdx=%016llx\n"
+             "  rsi=%016llx rdi=%016llx rbp=%016llx rsp=%016llx\n",
+             r[REG_RAX], r[REG_RBX], r[REG_RCX], r[REG_RDX], r[REG_RSI], r[REG_RDI], r[REG_RBP], r[REG_RSP]);
+    report_line(line);
+    if (gpu_enabled) sotbgpu_dump_guest_writes(context);
+    uintptr_t words[8];
+    if (read_memory((uintptr_t)r[REG_RSP], words, sizeof(words))) {
+        for (int i = 0; i < 8; ++i) {
+            const int known = annotate_address(where, sizeof(where), words[i]);
+            snprintf(line, sizeof(line), "  [rsp+%02x] %016llx %s\n", i * 8, (unsigned long long)words[i], known ? where : "");
+            report_line(line);
+        }
+    }
+    uintptr_t rbp = (uintptr_t)r[REG_RBP];
+    for (int depth = 0; depth < 24 && rbp; ++depth) {
+        uintptr_t frame[2];
+        if (!read_memory(rbp, frame, sizeof(frame)) || frame[0] <= rbp) break;
+        report_frame(depth, frame[1]);
+        rbp = frame[0];
+    }
+    if (rip - (uintptr_t)image >= 0x20000000) {
+        void *frames[32];
+        const int depth = backtrace(frames, 32);
+        report_line("Host call chain:\n");
+        for (int i = 2; i < depth; ++i) report_frame(i - 2, (uintptr_t)frames[i]);
+    }
+    describe_address(where, sizeof(where), rip);
+    snprintf(line, sizeof(line), "FATAL signal %d at %p (%s) thread %lu\n", sig, (void *)rip, where, host_thread_id());
+    report_line(line);
+    runtime_log_flush();
+    _exit(128 + sig);
+}
+
+static int emulate_instruction(ucontext_t *state) {
+    static const int order[16] = {REG_RAX, REG_RCX, REG_RDX, REG_RBX, REG_RSP, REG_RBP, REG_RSI, REG_RDI,
+                                  REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15};
+    greg_t *r = state->uc_mcontext.gregs;
+    const uint64_t at = (uint64_t)r[REG_RIP];
+    if (!image || at - (uintptr_t)image >= 0x20000000) return 0;
+    uint64_t gpr[16], flags = (uint64_t)r[REG_EFL];
+    for (int i = 0; i < 16; ++i) gpr[i] = (uint64_t)r[order[i]];
+    const size_t length = isa_emulate((const uint8_t *)(uintptr_t)at, at, gpr, &flags);
+    if (!length) return 0;
+    for (int i = 0; i < 16; ++i) r[order[i]] = (greg_t)gpr[i];
+    r[REG_EFL] = (greg_t)flags;
+    r[REG_RIP] = (greg_t)(at + length);
+    return 1;
+}
+
+static void fault(int sig, siginfo_t *info, void *context) {
+    const int saved_errno = errno;
+    /* As on Windows: GPU page tracking first, except during a speculative read, and bounded nesting. */
+    if (sig == SIGSEGV && gpu_enabled && !runtime_fault_recover) {
+        static __thread int handler_depth;
+        if (handler_depth >= 8) fatal_signal(sig, info, context);
+        ++handler_depth;
+        const int handled = sotbgpu_handle_fault(context, info->si_addr);
+        --handler_depth;
+        if (handled) {
+            errno = saved_errno;
+            return;
+        }
+    }
+    if ((sig == SIGSEGV || sig == SIGBUS) && runtime_fault_recover) {
+        sigjmp_buf *recover = runtime_fault_recover;
+        runtime_fault_recover = NULL;
+        sigset_t unblock;
+        sigemptyset(&unblock);
+        sigaddset(&unblock, sig);
+        pthread_sigmask(SIG_UNBLOCK, &unblock, NULL);
+        siglongjmp(*recover, 1);
+    }
+    if (sig == SIGILL && emulate_instruction(context)) {
+        errno = saved_errno;
+        return;
+    }
+    fatal_signal(sig, info, context);
+}
+
+static void abort_fault(int sig, siginfo_t *info, void *context) {
+    report_line("STOP: abort() was called: an uncaught C++ exception, a pure virtual call or a failed library check\n");
+    fatal_signal(sig, info, context);
+}
+
+static void install_fault_handlers(void) {
+    struct sigaction action = {0};
+    sigemptyset(&action.sa_mask);
+    /* SA_NODEFER: resolving one tracked page may fault on another. */
+    action.sa_flags = SA_SIGINFO | SA_NODEFER;
+    action.sa_sigaction = fault;
+    const int signals[] = {SIGSEGV, SIGBUS, SIGILL, SIGFPE};
+    for (size_t i = 0; i < sizeof(signals) / sizeof(*signals); ++i) sigaction(signals[i], &action, NULL);
+    action.sa_sigaction = abort_fault;
+    sigaction(SIGABRT, &action, NULL);
+}
+
+void enter_on_stack(void *entry, void *arg0, void *arg1, void *top);
+__asm__(".text\n.globl enter_on_stack\nenter_on_stack:\n"
+        " push %rbp\n mov %rsp,%rbp\n and $-16,%rcx\n mov %rcx,%rsp\n"
+        " mov %rdi,%rax\n mov %rsi,%rdi\n mov %rdx,%rsi\n call *%rax\n"
+        " mov %rbp,%rsp\n pop %rbp\n ret\n");
+#endif
 
 static int sfo_value(const char *path, const char *key, char *text, size_t text_size, uint32_t *number) {
     FILE *f = fopen(path, "rb");
@@ -506,7 +702,19 @@ static int mapped(const Segment *segments, uint64_t count, uint64_t address, uin
     return 0;
 }
 
-static const char *command_line(void) { return GetCommandLineA(); }
+static const char *command_line(int argc, char **argv) {
+#ifdef _WIN32
+    (void)argc;
+    (void)argv;
+    return GetCommandLineA();
+#else
+    static char line[4096];
+    size_t used = 0;
+    for (int i = 0; i < argc && used < sizeof(line) - 1; ++i)
+        used += (size_t)snprintf(line + used, sizeof(line) - used, "%s%s", i ? " " : "", argv[i]);
+    return line;
+#endif
+}
 
 static int lzcnt_rewrite_wanted(void) {
     const char *forced = getenv("SOTB_EMULATE_LZCNT");
@@ -520,6 +728,34 @@ typedef struct {
     int native_libc, gpu_symbols;
 } ImportBindings;
 
+#ifdef _WIN32
+static int host_executable(uintptr_t address) {
+    MEMORY_BASIC_INFORMATION info;
+    if (!VirtualQuery((const void *)address, &info, sizeof(info)) || info.State != MEM_COMMIT) return 0;
+    return (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+}
+#else
+static int host_executable(uintptr_t address) {
+    static struct { uintptr_t begin, end; } ranges[1024];
+    static size_t count;
+    if (!count) {
+        FILE *maps = fopen("/proc/self/maps", "r");
+        char line[512], flags[8];
+        uintptr_t begin, end;
+        while (maps && count < sizeof(ranges) / sizeof(*ranges) && fgets(line, sizeof(line), maps)) {
+            if (sscanf(line, "%" SCNxPTR "-%" SCNxPTR " %7s", &begin, &end, flags) != 3 || flags[2] != 'x') continue;
+            ranges[count].begin = begin;
+            ranges[count++].end = end;
+        }
+        if (maps) fclose(maps);
+    }
+    for (size_t i = 0; i < count; ++i) {
+        if (address >= ranges[i].begin && address < ranges[i].end) return 1;
+    }
+    return 0;
+}
+#endif
+
 static int executable_address(const ImportBindings *b, uintptr_t address) {
     const uint64_t offset = address - (uintptr_t)image;
     if (offset < image_size) {
@@ -528,9 +764,7 @@ static int executable_address(const ImportBindings *b, uintptr_t address) {
         }
         return 0;
     }
-    MEMORY_BASIC_INFORMATION info;
-    if (!VirtualQuery((const void *)address, &info, sizeof(info)) || info.State != MEM_COMMIT) return 0;
-    return (info.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) != 0;
+    return host_executable(address);
 }
 
 typedef enum { ORIGIN_TRAP, ORIGIN_HOST, ORIGIN_LINKED, ORIGIN_COUNT } TargetOrigin;
@@ -793,9 +1027,18 @@ int main(int argc, char **argv) {
         return 0;
     }
 
+#ifndef _WIN32
+    /* Heap objects handed to the guest (thread handles, TLS) stay in the non-PIE brk heap, below 1 TiB: the guest packs
+     * pointers into 40 bits. */
+    mallopt(M_ARENA_MAX, 1);
+    mallopt(M_MMAP_THRESHOLD, 32 * 1024 * 1024);
+    signal(SIGPIPE, SIG_IGN);
+#endif
     runtime_memory_reserve();
+#ifdef _WIN32
     runtime_thread_tcb_offset();
     module_diagnostics_baseline();
+#endif
 
     int cpu_only = 0, strict_imports = 0, check_imports = 0, verify_slots = 0;
     int skip_launcher = 0, force_launcher = 0;
@@ -843,7 +1086,7 @@ int main(int argc, char **argv) {
         time_t now = time(NULL);
         char stamp[32];
         strftime(stamp, sizeof(stamp), "%Y-%m-%dT%H:%M:%S", localtime(&now));
-        printf("[run] %s\n[run] %s\n[run] log %s\n[run] prepared root %s\n", stamp, command_line(), log_path, app0);
+        printf("[run] %s\n[run] %s\n[run] log %s\n[run] prepared root %s\n", stamp, command_line(argc, argv), log_path, app0);
         atexit(runtime_log_flush);
         runtime_log_set_detailed(sotb_detailed_logging(settings_file));
         runtime_log_install_cleanup();
@@ -853,12 +1096,16 @@ int main(int argc, char **argv) {
         fprintf(stderr, "Cannot create the log %s\n", log_file ? log_file : paths.logs_dir);
     }
 
+#ifdef _WIN32
     AddVectoredExceptionHandler(1, vectored_fault);
     SetUnhandledExceptionFilter(unhandled_fault);
     signal(SIGABRT, abort_signal);
     _set_invalid_parameter_handler(invalid_parameter);
     _set_purecall_handler(purecall);
     if (log_started) printf("Crash dump: %s\n", crash_dump_prepare() ? "written beside this log on a crash" : "unavailable");
+#else
+    install_fault_handlers();
+#endif
 
     log_cpu();
     renderer_settings_file = settings_file;
@@ -960,6 +1207,7 @@ int main(int argc, char **argv) {
     }
     sotbgpu_register_kernel();
 
+#ifdef _WIN32
     SYSTEM_INFO system_info;
     GetSystemInfo(&system_info);
     page_size = system_info.dwPageSize;
@@ -970,6 +1218,9 @@ int main(int argc, char **argv) {
         if (!SetProcessMitigationPolicy(ProcessStrictHandleCheckPolicy, &strict, sizeof(strict)))
             fprintf(stderr, "SOTB_STRICT_HANDLES: policy not set (%lu)\n", GetLastError());
     }
+#else
+    page_size = (size_t)sysconf(_SC_PAGESIZE);
+#endif
 
     FILE *f = fopen(boot, "rb");
     if (!f) fail("cannot open boot file; install the game from the launcher first");
@@ -1078,10 +1329,12 @@ int main(int argc, char **argv) {
     if (fread(image, 1, size, f) != size || fgetc(f) != EOF) fail("incorrect memory image size");
     fclose(f);
     if (runtime_memory_prepare()) {
+#ifdef _WIN32
         MessageBoxW(NULL,
                     L"Shadow of the Beast could not reserve or commit guest memory. Freeing virtual memory or disk "
                     L"space for the page file may help. Your saved data has not been opened.",
                     L"Shadow of the Beast - memory unavailable", MB_OK | MB_ICONERROR);
+#endif
         fail("guest memory unavailable before starting GPU or game threads");
     }
     if (verify_slots) {
@@ -1105,7 +1358,9 @@ int main(int argc, char **argv) {
         if (sotbgpu_init(&gpu)) fail("GPU initialization failed");
         sotb_startup_phase("GPU initialized");
         printf("GPU: window and presenter ready; SDK 0x%08x, %u HLE symbols\n", (unsigned)sdk, sotbgpu_symbol_count());
+#ifdef _WIN32
         module_diagnostics_report();
+#endif
     }
 
     unsigned char *traps = allocate(round_page((import_count + 1) * 32));
@@ -1152,7 +1407,9 @@ int main(int argc, char **argv) {
         runtime_log_flush();
         _exit(missing ? 1 : 0);
     }
+#ifdef _WIN32
     printf("Guest TCB loads redirected to the TEB TLS slot: %" PRIu64 "\n", patch_tcb_loads(segments, ns));
+#endif
     {
         const size_t cave_size = round_page(GUEST_PATCH_CAVE_SIZE);
         const int rewrite_lzcnt = lzcnt_rewrite_wanted();
@@ -1177,8 +1434,8 @@ int main(int argc, char **argv) {
             char exit_reason[160];
             sotbgpu_exit_confirm_set_save_check(runtime_savedata_write_active);
             sotb_exit_game_set_confirm_handler(open_exit_confirm);
-            if (sotb_exit_game_apply(image, size, game_build.code_key, cave + 2048, cave_size - 2048, exit_reason,
-                                     sizeof(exit_reason))) {
+            if (sotb_exit_game_apply(image, size, game_build.code_key, cave + GUEST_CAVE_EXIT_GAME,
+                                     cave_size - GUEST_CAVE_EXIT_GAME, exit_reason, sizeof(exit_reason))) {
                 puts("Exit Game: menu footer active on Map and Pause screens");
             } else {
                 printf("Exit Game: unavailable for %s: %s\n", game_build.code_key, exit_reason);
@@ -1186,7 +1443,7 @@ int main(int argc, char **argv) {
         }
         {
             char reason[160];
-            if (psn_notice_apply(image, size, cave + 3072, cave_size - 3072, reason, sizeof(reason))) {
+            if (psn_notice_apply(image, size, cave + GUEST_CAVE_PSN_NOTICE, cave_size - GUEST_CAVE_PSN_NOTICE, reason, sizeof(reason))) {
                 puts("PlayStation Network: ConnectionSuccess text overridden with blank text");
             } else {
                 printf("PlayStation Network: ConnectionSuccess blank text unavailable: %s\n", reason);
@@ -1196,14 +1453,14 @@ int main(int argc, char **argv) {
             char reason[160];
             if (!sotb_ultrawide_enabled(aspect_ratio->key, sotb_true_ultrawide(settings_file))) {
                 puts("Ultrawide: True Ultrawide is off");
-            } else if (guest_ultrawide_apply(image, size, cave + 3584, cave_size - 3584, reason, sizeof(reason))) {
+            } else if (guest_ultrawide_apply(image, size, cave + GUEST_CAVE_ULTRAWIDE, cave_size - GUEST_CAVE_ULTRAWIDE, reason, sizeof(reason))) {
                 printf("Ultrawide: Hor+ projection hook installed for %s\n", aspect_ratio->key);
                 if (guest_ultrawide_apply_safe_area(image, size, reason, sizeof(reason))) {
                     puts("Ultrawide: 16:9 safe area for the game's widgets installed");
                 } else {
                     printf("Ultrawide: safe area unavailable: %s\n", reason);
                 }
-                if (guest_hud_apply(image, size, cave + 3840, cave_size - 3840, reason, sizeof(reason))) {
+                if (guest_hud_apply(image, size, cave + GUEST_CAVE_HUD, cave_size - GUEST_CAVE_HUD, reason, sizeof(reason))) {
                     puts("Ultrawide: HUD components anchored to the screen edges");
                 } else {
                     printf("Ultrawide: HUD anchoring unavailable: %s\n", reason);
@@ -1306,7 +1563,15 @@ int main(int argc, char **argv) {
     printf("Entering original x86-64 code at guest offset 0x%" PRIx64 "\n", entry);
     entered_game = 1;
     struct { uint64_t argc; const char *argv[2]; } params = {1, {"/app0/eboot.bin", NULL}};
+#ifdef _WIN32
     typedef void(ABI *Entry)(void *, void(ABI *)(void));
     ((Entry)(image + entry))(&params, guest_exit);
+#else
+    enum { MAIN_STACK = 16 * 1024 * 1024 };
+    unsigned char *stack = runtime_low_map(MAIN_STACK, PROT_READ | PROT_WRITE);
+    if (!stack) fail("cannot allocate the guest main stack");
+    runtime_thread_set_main_stack(stack);
+    enter_on_stack(image + entry, &params, (void *)guest_exit, stack + MAIN_STACK - 64);
+#endif
     fail("entry unexpectedly returned");
 }

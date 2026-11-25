@@ -1,5 +1,6 @@
 # Headless checks of the FFmpeg bootstrap as tools\build.ps1 drives it: the shell tests run through MSYS2's login bash,
-# exactly as Sync-FFmpeg starts the script; the rest reads the build scripts. Nothing is built or downloaded.
+# exactly as Sync-FFmpeg starts the script, then the Linux dependency policy; the rest reads the build scripts. Nothing is
+# built or downloaded.
 $ErrorActionPreference = 'Stop'
 $root = Split-Path $PSScriptRoot -Parent
 . (Join-Path $root 'tools\_common.ps1')
@@ -25,6 +26,13 @@ try {
     $output = & $bash -lc "bash '$unix/tests/ffmpeg_bootstrap_tests.sh'" 2>&1
     $output | ForEach-Object { Write-Host "  $_" }
     Check 'bootstrap scenarios (tests/ffmpeg_bootstrap_tests.sh)' ($LASTEXITCODE -eq 0)
+    foreach ($script in 'tools/build-ffmpeg-linux.sh', 'tools/build.sh', 'tools/test-linux.sh', 'packaging/linux/ci-deps.sh') {
+        & $bash -lc "bash -n '$unix/$script'"
+        Check "$script passes bash -n" ($LASTEXITCODE -eq 0)
+    }
+    $output = & $bash -lc "bash '$unix/tests/linux_dependency_tests.sh'" 2>&1
+    $output | ForEach-Object { Write-Host "  $_" }
+    Check 'Linux dependency policy (tests/linux_dependency_tests.sh)' ($LASTEXITCODE -eq 0)
 } finally {
     foreach ($name in $saved.Keys) {
         if ($null -eq $saved[$name]) { Remove-Item "env:$name" -ErrorAction SilentlyContinue } else { Set-Item "env:$name" $saved[$name] }

@@ -1,5 +1,5 @@
 #include "../src/guest_patches.c"
-#include <windows.h>
+#include "test_platform.h"
 
 static int checks, failures;
 #define CHECK(condition) do { ++checks; if (!(condition)) { ++failures; printf("FAIL line %d: %s\n", __LINE__, #condition); } } while (0)
@@ -22,7 +22,7 @@ static GUEST_ABI void counting_hook(void *controller) {
 }
 
 static void fresh_image(void) {
-    if (!image) image = VirtualAlloc(NULL, IMAGE_SIZE + 0x10000, MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!image) image = test_allocate(IMAGE_SIZE + 0x10000, 1);
     cave = image + IMAGE_SIZE;
     memset(image, 0, IMAGE_SIZE + 0x10000);
     for (size_t i = 0; i < sizeof(byte_patches) / sizeof(*byte_patches); ++i)

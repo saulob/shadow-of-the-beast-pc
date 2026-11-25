@@ -2,7 +2,7 @@
 
 # Shadow of the Beast - PC Port
 
-### Shadow of the Beast (PS4), running natively on Windows through a shadPS4-derived runtime and the TRG Launcher
+### Shadow of the Beast (PS4), running natively on Windows and Linux through a shadPS4-derived runtime and the TRG Launcher
 
 **Status: bring-up foundation.** The launcher and native runtime load and validate the game, but gameplay has not been
 tested yet. No game files are included.
@@ -69,6 +69,10 @@ Requirements: Windows 10 1903+ or Windows 11 x64, MSYS2, and the CLANG64 package
 `shadow_of_the_beast.exe`, copies every DLL it loads beside it, and with `-Run` starts the launcher and stays attached
 until it closes. Without `-Run` it only builds. Extra arguments after `-Run` are forwarded to the loader.
 
+Linux (x86_64): `tools/build.sh` is the counterpart, with Clang, CMake and Ninja; it lists the tools and libraries that are
+missing, and `packaging/linux/ci-deps.sh` prepares the Ubuntu 20.04 release environment once ([docs/LINUX.md](docs/LINUX.md)). In an AppImage, settings, saves and the installed game go beside it, or to
+`$XDG_DATA_HOME/ShadowOfTheBeastPC` when that folder is read-only.
+
 The launcher builds its boot image on install, so `tools\prepare-game.ps1` is only a developer convenience.
 
 ## Runtime status
@@ -103,7 +107,7 @@ launcher/             TRG Launcher, PKG installer, build fingerprint
 packaging/            icon and third-party notices
 scripts/              read-only PKG inspection and developer preparation
 src/                  native loader and PS4 system-library runtime
-tools/                build.ps1 and setup.ps1
+tools/                build.ps1 and setup.ps1 (Windows), build.sh (Linux), test.ps1
 user/                 settings and saves (created at run time, not tracked)
 logs/                 run logs (created at run time, not tracked)
 game/                 installed game (created by the launcher, not tracked)

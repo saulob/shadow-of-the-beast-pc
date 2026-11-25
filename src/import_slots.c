@@ -1,8 +1,13 @@
+#define _GNU_SOURCE
 #include "import_slots.h"
 
 #include <string.h>
 
+#ifdef _WIN32
 #include <windows.h>
+#else
+#include <sys/mman.h>
+#endif
 
 static const unsigned char stub_prefix[] = {0x48, 0x89, 0xfe, 0xbf};
 static const unsigned char stub_jump[] = {0x48, 0xb8};
@@ -93,18 +98,43 @@ static ABI void trap_probe(uint32_t index, uintptr_t argument) {
     probed_argument = argument;
 }
 
+#ifdef _WIN32
+static unsigned char *allocate_code(size_t bytes) {
+    return VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+}
+
+static int make_executable(unsigned char *code, size_t bytes) {
+    DWORD old;
+    if (!VirtualProtect(code, bytes, PAGE_EXECUTE_READ, &old)) return 0;
+    FlushInstructionCache(GetCurrentProcess(), code, bytes);
+    return 1;
+}
+
+static void release_code(unsigned char *code, size_t bytes) {
+    (void)bytes;
+    VirtualFree(code, 0, MEM_RELEASE);
+}
+#else
+static unsigned char *allocate_code(size_t bytes) {
+    void *code = mmap(NULL, bytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    return code == MAP_FAILED ? NULL : code;
+}
+
+static int make_executable(unsigned char *code, size_t bytes) { return !mprotect(code, bytes, PROT_READ | PROT_EXEC); }
+
+static void release_code(unsigned char *code, size_t bytes) { munmap(code, bytes); }
+#endif
+
 uint64_t import_traps_abi_failures(uint64_t count) {
     if (!count) return 0;
     const size_t bytes = count * IMPORT_TRAP_SIZE;
-    unsigned char *code = VirtualAlloc(NULL, bytes, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    unsigned char *code = allocate_code(bytes);
     if (!code) return count;
     import_traps_build(code, count, trap_probe);
-    DWORD old;
-    if (!VirtualProtect(code, bytes, PAGE_EXECUTE_READ, &old)) {
-        VirtualFree(code, 0, MEM_RELEASE);
+    if (!make_executable(code, bytes)) {
+        release_code(code, bytes);
         return count;
     }
-    FlushInstructionCache(GetCurrentProcess(), code, bytes);
     typedef ABI void GuestCall(uintptr_t rdi, uintptr_t rsi, uintptr_t rdx, uintptr_t rcx);
     uint64_t failures = 0;
     for (uint64_t i = 0; i < count; ++i) {
@@ -114,6 +144,6 @@ uint64_t import_traps_abi_failures(uint64_t count) {
         ((GuestCall *)(void *)(code + i * IMPORT_TRAP_SIZE))(argument, ~argument, i + 1, ~i);
         if (probed_index != (uint32_t)i || probed_argument != argument) ++failures;
     }
-    VirtualFree(code, 0, MEM_RELEASE);
+    release_code(code, bytes);
     return failures;
 }
