@@ -28,6 +28,7 @@
 #include "header_art.h"
 #include "incident_page.h"
 #include "launcher_quit.h"
+#include "launcher_theme.h"
 #include "host.h"
 #include "options.h"
 #include "pad_capture.h"
@@ -65,10 +66,19 @@ namespace {
 constexpr char kPortTitle[] = "SHADOW OF THE BEAST";
 constexpr char kShowLauncherHelp[] = "Off starts the game directly. Hold Shift while starting to bring it back.";
 constexpr char kTrgLauncherVersion[] = "1.1.0";
-const ImVec4 kAccent = ImVec4(0.88f, 0.58f, 0.20f, 1.0f);
+
+ImVec4 Color(palette::Rgb rgb) { return ImVec4(rgb.r / 255.0f, rgb.g / 255.0f, rgb.b / 255.0f, 1.0f); }
+
+ImU32 Color32(palette::Rgb rgb) { return IM_COL32(rgb.r, rgb.g, rgb.b, 255); }
 
 trg::Theme LauncherTheme() {
-    trg::Theme theme = trg::Theme::Midnight().WithAccent(kAccent);
+    trg::Theme theme = trg::Theme::Midnight()
+                           .WithAccent(Color(palette::kActionLink))
+                           .WithAction(Color(palette::kActionFill), Color(palette::kActionEdge),
+                                       Color(palette::kActionLink));
+    theme.action_hot = Color(palette::kActionHover);
+    theme.action_active = Color(palette::kActionPressed);
+    theme.on_action = Color(palette::kActionText);
     theme.warn = ImVec4(0.42f, 0.16f, 0.10f, 1.0f);
     theme.warn_dot = ImVec4(1.0f, 0.48f, 0.28f, 1.0f);
     return theme;
@@ -103,10 +113,9 @@ ImTextureID LoadSponsorIcon(LauncherHost& host) {
 
 trg::HeaderPainter LauncherHeader(std::function<ImTextureID(int, int)> art, float aspect) {
     return [art = std::move(art), aspect](const trg::HeaderContext& c) {
-        const ImVec4& bg = c.theme.panel;
-        c.draw->AddRectFilledMultiColor(c.min, c.max, trg::Col(bg), trg::Col(bg),
-                                        trg::Col(ImVec4(bg.x * 0.55f, bg.y * 0.55f, bg.z * 0.55f, 1.0f)),
-                                        trg::Col(ImVec4(bg.x * 0.55f, bg.y * 0.55f, bg.z * 0.55f, 1.0f)));
+        c.draw->AddRectFilledMultiColor(c.min, c.max, Color32(palette::kHeaderTopLeft),
+                                        Color32(palette::kHeaderTopRight), Color32(palette::kHeaderBottomRight),
+                                        trg::Col(c.theme.bg));
         const HeaderArtRect rect = PlaceHeaderArt(c.min.y, c.max.x, c.max.y, aspect);
         const float framebuffer = std::max(ImGui::GetIO().DisplayFramebufferScale.x, 1.0f);
         const ImTextureID texture = art(static_cast<int>((rect.max_x - rect.min_x) * framebuffer + 0.5f),
@@ -119,9 +128,9 @@ trg::HeaderPainter LauncherHeader(std::function<ImTextureID(int, int)> art, floa
             }
             c.draw->PopClipRect();
         }
-        const ImU32 fade = IM_COL32(0, 0, 0, 0);
-        c.draw->AddRectFilledMultiColor(ImVec2(c.min.x, c.max.y - (c.max.y - c.min.y) * 0.35f), c.max, fade, fade,
-                                        trg::Col(bg), trg::Col(bg));
+        const ImU32 clear = trg::Col(c.theme.bg, 0.0f), solid = trg::Col(c.theme.bg);
+        c.draw->AddRectFilledMultiColor(ImVec2(c.min.x, c.max.y - (c.max.y - c.min.y) * kHeaderFade), c.max, clear,
+                                        clear, solid, solid);
     };
 }
 
@@ -360,6 +369,7 @@ private:
         config.hints = "Enter  Play     Alt+F4  Quit     Ctrl+S  Save";
         config.note = "Settings are saved when you press Play.";
         config.branding.title = kPortTitle;
+        config.branding.fade_into_page = false;
         config.branding.subtitle_segments = {
             {"PC PORT   \xC2\xB7   ", ""},
             {"v" SOTB_PORT_VERSION "   \xC2\xB7   ", ""},

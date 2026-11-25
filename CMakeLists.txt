@@ -238,15 +238,22 @@ target_include_directories(avplayer_thread_test PRIVATE gpu/shadps4)
 target_compile_options(avplayer_thread_test PRIVATE -Wall -Wextra -Werror)
 target_link_libraries(avplayer_thread_test PRIVATE -pthread)
 
-add_custom_command(TARGET shadow_of_the_beast POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:shadow_of_the_beast>/assets/launcher"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/launcher/header-art.png"
-        "$<TARGET_FILE_DIR:shadow_of_the_beast>/assets/launcher/header-art.png"
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_CURRENT_SOURCE_DIR}/assets/launcher/sponsor-heart.png"
-        "$<TARGET_FILE_DIR:shadow_of_the_beast>/assets/launcher/sponsor-heart.png"
-    VERBATIM)
+# The launcher reads its images next to the executable; each copy is a build output, so an image-only change syncs.
+set(SOTB_LAUNCHER_ASSET_DIR "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/assets/launcher")
+set(SOTB_LAUNCHER_ASSET_COPIES)
+foreach(asset header-art.png sponsor-heart.png)
+    set(asset_source "${CMAKE_CURRENT_SOURCE_DIR}/assets/launcher/${asset}")
+    set(asset_copy "${SOTB_LAUNCHER_ASSET_DIR}/${asset}")
+    add_custom_command(OUTPUT "${asset_copy}"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SOTB_LAUNCHER_ASSET_DIR}"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "${asset_source}" "${asset_copy}"
+        COMMAND ${CMAKE_COMMAND} -E touch_nocreate "${asset_copy}"
+        DEPENDS "${asset_source}"
+        VERBATIM)
+    list(APPEND SOTB_LAUNCHER_ASSET_COPIES "${asset_copy}")
+endforeach()
+add_custom_target(sotb_launcher_assets DEPENDS ${SOTB_LAUNCHER_ASSET_COPIES})
+add_dependencies(shadow_of_the_beast sotb_launcher_assets)
 
 add_executable(image_descriptor_test EXCLUDE_FROM_ALL tests/image_descriptor_tests.cpp gpu/shadps4/video_core/amdgpu/pixel_format.cpp
     gpu/shadps4/video_core/amdgpu/tiling.cpp)

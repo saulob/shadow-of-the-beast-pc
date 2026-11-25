@@ -9,7 +9,7 @@ namespace Sotb {
 
 inline constexpr float kHeaderArtAspect = 3840.0f / 432.0f;
 inline constexpr int kHeaderArtStripWidth = 128;
-inline constexpr float kHeaderFade = 0.35f;            // of the header, over its gradient
+inline constexpr float kHeaderFade = 0.12f;            // of the header, over its art; keeps the grass in view
 
 struct HeaderArtRect {
     float min_x, min_y, max_x, max_y;

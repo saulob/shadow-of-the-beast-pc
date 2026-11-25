@@ -110,8 +110,9 @@ target_compile_definitions(sotb-trophy-tests PRIVATE SOTB_TROPHY_SOURCE_DIR="${P
 set_target_properties(sotb-trophy-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-trophy-tests PRIVATE -Wall -Wextra)
 
-add_executable(sotb-launcher-tests EXCLUDE_FROM_ALL ../tests/launcher_tests.cpp ../gpu/shim/sotb_settings.cpp)
-target_link_libraries(sotb-launcher-tests PRIVATE sotb_launcher_core sotb_keys SDL3::SDL3)
+add_executable(sotb-launcher-tests EXCLUDE_FROM_ALL ../tests/launcher_tests.cpp ../gpu/shim/sotb_settings.cpp
+    ../gpu/shim/sotb_png.cpp)
+target_link_libraries(sotb-launcher-tests PRIVATE sotb_launcher_core sotb_keys SDL3::SDL3 PNG::PNG)
 target_include_directories(sotb-launcher-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim)
 target_compile_definitions(sotb-launcher-tests PRIVATE SOTB_BOOT_IMAGE="${PROJECT_SOURCE_DIR}/build/image/CUSA03762-1.00/boot.bin"
     SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")

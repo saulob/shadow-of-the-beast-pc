@@ -1,0 +1,84 @@
+diff --git a/src/launcher.cpp b/src/launcher.cpp
+--- a/src/launcher.cpp
++++ b/src/launcher.cpp
+@@ -94,11 +94,26 @@ void UseAccentForActions(Theme& t) {
+   t.link = t.accent;
+ }
+ 
+-void PushAccent(const Theme& t) {
++// Inset by half its width, so the edge stays inside the fill.
++void DrawActionEdge(ImDrawList* dl, ImVec2 min, ImVec2 max, const Theme& t, float rounding, float scale) {
++  const float edge = layout::LineThickness(scale);
++  const float inset = edge * 0.5f;
++  dl->AddRect(ImVec2(min.x + inset, min.y + inset), ImVec2(max.x - inset, max.y - inset), Col(t.action_edge),
++              std::max(0.0f, rounding - inset), 0, edge);
++}
++
++void PushAccent(const Theme& t, float scale) {
+   ImGui::PushStyleColor(ImGuiCol_Button, t.action);
+   ImGui::PushStyleColor(ImGuiCol_ButtonHovered, t.action_hot);
+   ImGui::PushStyleColor(ImGuiCol_ButtonActive, t.action_active);
+   ImGui::PushStyleColor(ImGuiCol_Text, t.on_action);
++  ImGui::PushStyleColor(ImGuiCol_Border, t.action_edge);
++  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, layout::LineThickness(scale));
++}
++
++void PopAccent() {
++  ImGui::PopStyleVar();
++  ImGui::PopStyleColor(5);
+ }
+ 
+ // Draws `text` at `pos` and returns its advance. A non-empty url makes it a
+@@ -462,20 +477,20 @@ int Ui::Segmented(const char* id, const std::vector<std::string>& labels, int se
+   for (size_t i = 0; i < labels.size(); ++i) {
+     if (i) ImGui::SameLine(0, gap);
+     const bool sel = int(i) == selected;
+-    if (sel) PushAccent(theme());
++    if (sel) PushAccent(theme(), scale_);
+     ImGui::PushID(int(i));
+     if (ImGui::Button(T(labels[i].c_str()), ImVec2(equal ? equal_w : text_w[i] + spare, 0)) && !sel) clicked = int(i);
+     ImGui::PopID();
+-    if (sel) ImGui::PopStyleColor(4);
++    if (sel) PopAccent();
+   }
+   ImGui::PopID();
+   return clicked;
+ }
+ 
+ bool Ui::AccentButton(const char* label, ImVec2 size) {
+-  PushAccent(theme());
++  PushAccent(theme(), scale_);
+   const bool r = ImGui::Button(T(label), size);
+-  ImGui::PopStyleColor(4);
++  PopAccent();
+   return r;
+ }
+ 
+@@ -1276,7 +1291,7 @@ void Launcher::DrawSidebar(ImVec2 size) {
+     if (selected || hot)
+       dl->AddRectFilled(pos, ImVec2(pos.x + item.x, pos.y + item.y), Col(selected ? t.action : t.frame), 8 * s_);
+     if (selected)
+-      dl->AddRect(pos, ImVec2(pos.x + item.x, pos.y + item.y), Col(t.action_edge), 8 * s_, 0, std::max(1.0f, s_));
++      DrawActionEdge(dl, pos, ImVec2(pos.x + item.x, pos.y + item.y), t, 8 * s_, s_);
+     const ImTextureID icon = page.icon ? page.icon(icon_pixels) : ImTextureID{};
+     if (icon != ImTextureID{}) {
+       // On the pixel grid, so the image stays one texel per pixel.
+@@ -1453,15 +1468,15 @@ void Launcher::DrawPlayButton(ImVec2 size, bool can_play) {
+   if (can_play) {
+     const float pulse = 0.5f + 0.5f * std::sin(float(ImGui::GetTime()) * 3.0f);
+     dl->AddRectFilled(ImVec2(p.x - 3 * s_, p.y - 3 * s_), ImVec2(p.x + size.x + 3 * s_, p.y + size.y + 3 * s_),
+-                      Col(t.action, hot ? 0.35f : 0.18f), r + 3 * s_);
++                      Col(t.action_edge, hot ? 0.35f : 0.18f), r + 3 * s_);
+     const float grow = (3 + 4 * pulse) * s_;
+     dl->AddRect(ImVec2(p.x - grow, p.y - grow), ImVec2(p.x + size.x + grow, p.y + size.y + grow),
+-                Col(t.action, 0.45f * (1.0f - pulse)), r + grow, 0, 2 * s_);
++                Col(t.action_edge, 0.45f * (1.0f - pulse)), r + grow, 0, 2 * s_);
+   }
+   dl->AddRectFilled(p, ImVec2(p.x + size.x, p.y + size.y),
+                     can_play ? Col(hot ? t.action_hot : t.action) : Col(hot ? t.frame_hot : t.frame), r);
+   if (can_play)
+-    dl->AddRect(p, ImVec2(p.x + size.x, p.y + size.y), Col(t.action_edge), r, 0, std::max(1.0f, s_));
++    DrawActionEdge(dl, p, ImVec2(p.x + size.x, p.y + size.y), t, r, s_);
+   const float fs = 20 * s_;
+   const char* play = T("PLAY");
+   const ImVec2 ts = config_.fonts.bold->CalcTextSizeA(fs, FLT_MAX, 0, play);

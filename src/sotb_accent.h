@@ -1,4 +1,4 @@
-// The port's palette: the launcher, the frame counter, the Options menu and the application icon.
+// The game's palette: the frame counter and the Options menu. The launcher has its own (launcher/launcher_theme.h).
 #pragma once
 
 namespace sotb {

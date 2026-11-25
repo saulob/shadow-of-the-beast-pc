@@ -13,7 +13,9 @@
 #include <vector>
 
 #include "guest_display.h"
+#include "header_art.h"
 #include "launcher_quit.h"
+#include "launcher_theme.h"
 #include "options.h"
 #include "page_icons.h"
 #include "settings.h"
@@ -21,6 +23,7 @@
 #include "sotb_graphics.h"
 #include "sotb_keys.h"
 #include "sotb_launcher.h"
+#include "sotb_png.h"
 #include "sotb_renderer.h"
 #include "sotb_settings.h"
 #include "text_languages.h"
@@ -196,6 +199,121 @@ void TestAppIcon() {
         }
     }
     CHECK(!fs::exists(root / "assets/launcher/app-icon.svg") && !fs::exists(root / "packaging/icons/shadow-icon.svg"));
+}
+
+std::string Hex(palette::Rgb rgb) {
+    char text[8];
+    std::snprintf(text, sizeof(text), "#%02X%02X%02X", rgb.r, rgb.g, rgb.b);
+    return text;
+}
+
+double Luminance(palette::Rgb rgb) {
+    const auto channel = [](uint8_t value) {
+        const double v = value / 255.0;
+        return v <= 0.04045 ? v / 12.92 : std::pow((v + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(rgb.r) + 0.7152 * channel(rgb.g) + 0.0722 * channel(rgb.b);
+}
+
+double Contrast(palette::Rgb a, palette::Rgb b) {
+    const double la = Luminance(a), lb = Luminance(b);
+    return (std::max(la, lb) + 0.05) / (std::min(la, lb) + 0.05);
+}
+
+void TestLauncherPalette() {
+    const fs::path root = SOTB_SOURCE_DIR;
+    CHECK(Hex(palette::kActionFill) == "#52616C" && Hex(palette::kActionEdge) == "#62D5EF");
+    CHECK(Hex(palette::kActionLink) == "#82DEF2");
+    for (const palette::Rgb fill : {palette::kActionFill, palette::kActionHover, palette::kActionPressed}) {
+        CHECK(Contrast(palette::kActionText, fill) >= 4.5);
+    }
+    const palette::Rgb panel{14, 21, 42};
+    CHECK(Contrast(palette::kActionEdge, panel) >= 3.0 && Contrast(palette::kActionLink, panel) >= 4.5);
+
+    const std::string launcher = ReadAll(root / "launcher/launcher.cpp");
+    CHECK(Contains(launcher, ".WithAction(Color(palette::kActionFill), Color(palette::kActionEdge),"));
+    CHECK(Contains(launcher, "config.branding.fade_into_page = false;"));
+    CHECK(!Contains(launcher, "kAccent") && !Contains(launcher, "0.88f, 0.58f, 0.20f"));
+
+    const std::string patch = ReadAll(root / "gpu/patches/trg-launcher/0022-action-edge-buttons.patch");
+    for (const char* needle : {"+  ImGui::PushStyleColor(ImGuiCol_Border, t.action_edge);",
+                               "+    if (sel) PushAccent(theme(), scale_);", "+  PushAccent(theme(), scale_);",
+                               "+                      Col(t.action_edge, hot ? 0.35f : 0.18f), r + 3 * s_);",
+                               "+    DrawActionEdge(dl, p, ImVec2(p.x + size.x, p.y + size.y), t, r, s_);"}) {
+        CHECK(Contains(patch, needle));
+    }
+    CHECK(!Contains(patch, "Sponsor") && !Contains(patch, "sponsor"));
+
+    // The game's own overlays keep their palette.
+    const std::string game = ReadAll(root / "src/sotb_accent.h");
+    CHECK(Contains(game, "kAccentRed = 0x4F;") && Contains(game, "kAccentGreen = 0xC3;") &&
+          Contains(game, "kAccentBlue = 0xE0;"));
+
+    const std::string svg = ReadAll(root / "packaging/icons/app-icon.svg");
+    CHECK(Contains(svg, "fill:" + Hex(palette::kActionFill) + ";") && Contains(svg, "fill:" + Hex(palette::kActionEdge) + ";"));
+    size_t fills = 0;
+    for (size_t at = svg.find("fill:#"); at != std::string::npos; at = svg.find("fill:#", at + 1)) {
+        ++fills;
+    }
+    CHECK(fills == 2);
+}
+
+void TestHeaderArt() {
+    const HeaderArtRect rect = PlaceHeaderArt(0.0f, 1000.0f, 130.4f, kHeaderArtAspect);
+    CHECK(rect.max_x == 1000.0f && rect.min_y == 0.0f && rect.max_y == 131.0f);
+    CHECK(rect.max_x - rect.min_x == std::round(131.0f * kHeaderArtAspect));
+    float covered = 0.0f;
+    for (const HeaderArtStrip& strip : SplitHeaderArt(rect)) {
+        covered += strip.max_x - strip.min_x;
+        CHECK(strip.max_x - strip.min_x <= float(kHeaderArtStripWidth));
+    }
+    CHECK(covered == rect.max_x - rect.min_x);
+    const std::vector<uint8_t> source(4 * 4 * 4, 255);
+    CHECK(ScaleArtRgba(source.data(), 4, 4, 2, 2).size() == 2 * 2 * 4);
+    CHECK(ScaleArtRgba(nullptr, 4, 4, 2, 2).empty());
+    CHECK(kHeaderFade > 0.0f && kHeaderFade <= 0.2f);
+}
+
+void TestHeaderArtAsset() {
+    const fs::path root = SOTB_SOURCE_DIR;
+    const fs::path folder = root / "assets/launcher";
+    SotbPng::Image art;
+    const std::string encoded = ReadAll(folder / "header-art.png");
+    CHECK(encoded.size() > 26 && uint8_t(encoded[24]) == 8 && uint8_t(encoded[25]) == 6);
+    CHECK(SotbPng::DecodeRgba(reinterpret_cast<const unsigned char*>(encoded.data()), encoded.size(), art));
+    CHECK(art.width == 3840 && art.height == 432);
+    if (art.width == 3840 && art.height == 432) {
+        const auto alpha = [&](int x, int y) { return art.rgba[(size_t(y) * 3840 + size_t(x)) * 4 + 3]; };
+        int first_real = -1;
+        for (int x = 0; x < 3840 && first_real < 0; ++x) {
+            for (int y = 0; y < 432; ++y) {
+                const unsigned char* p = &art.rgba[(size_t(y) * 3840 + size_t(x)) * 4];
+                if (p[0] || p[1] || p[2]) {
+                    first_real = x;
+                    break;
+                }
+            }
+        }
+        CHECK(first_real > 0 && alpha(first_real, 216) == 0);
+        bool rising = true, uniform = true;
+        for (int x = 1; x < 3840; ++x) {
+            rising = rising && alpha(x, 216) >= alpha(x - 1, 216);
+            uniform = uniform && alpha(x, 0) == alpha(x, 216) && alpha(x, 431) == alpha(x, 216);
+        }
+        CHECK(rising && uniform);
+        CHECK(alpha(int(3840 * 0.33f), 216) == 0 && alpha(int(3840 * 0.415f), 216) > 100 &&
+              alpha(int(3840 * 0.415f), 216) < 160 && alpha(int(3840 * 0.50f), 216) == 255);
+        CHECK(alpha(3839, 0) == 255 && alpha(3839, 431) == 255);
+    }
+    CHECK(fs::is_regular_file(folder / "header-art-source.png"));
+    CHECK(fs::is_regular_file(root / "tools/make-header-art.ps1"));
+    for (const auto& entry : fs::directory_iterator(root)) {
+        CHECK(entry.path().extension() != ".png");
+    }
+    const std::string cmake = ReadAll(root / "CMakeLists.txt");
+    CHECK(Contains(cmake, "foreach(asset header-art.png sponsor-heart.png)"));
+    CHECK(Contains(cmake, "DEPENDS \"${asset_source}\"") && Contains(cmake, "add_dependencies(shadow_of_the_beast sotb_launcher_assets)"));
+    CHECK(!Contains(cmake, "header-art-source"));
 }
 
 void TestLauncherQuit() {
@@ -718,6 +836,9 @@ int main() {
     TestPageIcons();
     TestSidebarIcons();
     TestAppIcon();
+    TestLauncherPalette();
+    TestHeaderArt();
+    TestHeaderArtAsset();
     TestPageTexts();
     TestSkipIntro(base);
     TestMenuButtonLayout(base);

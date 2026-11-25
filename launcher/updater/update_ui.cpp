@@ -40,14 +40,16 @@ void WrappedText(const std::string& text, float size, ImFont* font, const ImVec4
   ImGui::PopFont();
 }
 
-bool AccentButton(const char* label, const trg::Theme& theme, const ImVec2& size) {
-  ImGui::PushStyleColor(ImGuiCol_Button, theme.accent);
-  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.accent_hot);
-  ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(theme.accent.x * 0.85f, theme.accent.y * 0.85f,
-                                                      theme.accent.z * 0.85f, 1.0f));
-  ImGui::PushStyleColor(ImGuiCol_Text, theme.on_accent);
+bool AccentButton(const char* label, const trg::Theme& theme, const ImVec2& size, float scale) {
+  ImGui::PushStyleColor(ImGuiCol_Button, theme.action);
+  ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme.action_hot);
+  ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme.action_active);
+  ImGui::PushStyleColor(ImGuiCol_Text, theme.on_action);
+  ImGui::PushStyleColor(ImGuiCol_Border, theme.action_edge);
+  ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, trg::layout::LineThickness(scale));
   const bool clicked = ImGui::Button(label, size);
-  ImGui::PopStyleColor(4);
+  ImGui::PopStyleVar();
+  ImGui::PopStyleColor(5);
   return clicked;
 }
 
@@ -145,7 +147,7 @@ UpdateUiAction DrawUpdateBanner(const UpdateSnapshot& snapshot, const trg::Theme
     WrappedText(detail, body_size, regular, theme.dim, wrap_width);
     ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
     if (snapshot.install_supported) {
-      if (AccentButton(Tr("UPDATE NOW"), theme, ImVec2(-FLT_MIN, button_height))) {
+      if (AccentButton(Tr("UPDATE NOW"), theme, ImVec2(-FLT_MIN, button_height), s)) {
         action = UpdateUiAction::kDownload;
       }
     } else {
@@ -168,7 +170,7 @@ UpdateUiAction DrawUpdateBanner(const UpdateSnapshot& snapshot, const trg::Theme
     detail = Tr("Version ") + snapshot.latest_version + Tr(" is ready. The launcher will restart.");
     WrappedText(detail, body_size, regular, theme.dim, wrap_width);
     ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
-    if (AccentButton(Tr("RESTART TO UPDATE"), theme, ImVec2(-FLT_MIN, button_height))) {
+    if (AccentButton(Tr("RESTART TO UPDATE"), theme, ImVec2(-FLT_MIN, button_height), s)) {
       action = UpdateUiAction::kRestart;
     }
   } else if (snapshot.state == UpdateState::kFailed) {
@@ -176,7 +178,7 @@ UpdateUiAction DrawUpdateBanner(const UpdateSnapshot& snapshot, const trg::Theme
                 regular, theme.dim, wrap_width);
     if (snapshot.retry_available) {
       ImGui::Dummy(ImVec2(0.0f, 4.0f * s));
-      if (AccentButton(Tr("RETRY"), theme, ImVec2(-FLT_MIN, button_height))) {
+      if (AccentButton(Tr("RETRY"), theme, ImVec2(-FLT_MIN, button_height), s)) {
         action = UpdateUiAction::kRetry;
       }
     }
