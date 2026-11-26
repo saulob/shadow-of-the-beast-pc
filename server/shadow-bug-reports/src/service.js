@@ -6,7 +6,7 @@ import { toHex } from './sha256.js';
 
 export const SERVICE = 'shadow-bug-reports';
 export const PROTOCOL = 2;
-export const WORKER_BUILD = '2026-11-25-shadow-bug-reports';
+export const WORKER_BUILD = '2026-11-26-shadow-bug-reports';
 
 const progressOf = (dump, stored) => ({ stored: dump.complete ? dump.bytes : stored, bytes: dump.bytes, complete: Boolean(dump.complete) });
 const NO_DUMP = { code: 'bad_request', detail: 'no crash dump was announced for this report' };
@@ -22,6 +22,7 @@ export class ReportService {
       lookupAll: new RateLimiter(PROTECTION.lookupAll),
       statusAddress: new RateLimiter(PROTECTION.statusAddress),
       readAddress: new RateLimiter(PROTECTION.readAddress),
+      feedbackAddress: new RateLimiter(PROTECTION.feedbackAddress),
       dumpAll: new RateLimiter(PROTECTION.dumpAll),
       dumpAddress: new RateLimiter(PROTECTION.dumpAddress),
     };
@@ -141,6 +142,15 @@ export class ReportService {
     this.desk.purge(this.host.now());
     const report = this.desk.report(claim);
     return report ? { code: 'ok', report } : { code: 'not_found' };
+  }
+
+  feedback(feedback, address) {
+    if (this.limited([['lookupAll', 'all'], ['feedbackAddress', address]])) return { code: 'limit' };
+    const now = this.host.now();
+    this.desk.purge(now);
+    const answer = this.atomically(() => this.desk.answer(feedback, now));
+    this.host.log(`player test answer: ${answer.code}`);
+    return answer;
   }
 
   list() {

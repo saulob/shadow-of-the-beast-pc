@@ -1,7 +1,7 @@
 // The public report API, plain HTTPS and JSON. The launcher opens one short request when the player sends a report or
 // asks about one; nothing else reaches the service. No Cloudflare import, so Node runs it in the tests.
 import { ipGroup } from './limits.js';
-import { REPORT, readClaims, readDumpChunk, readReadClaim, readReport } from './reports.js';
+import { REPORT, readClaims, readDumpChunk, readFeedback, readReadClaim, readReport } from './reports.js';
 import { PROTOCOL, SERVICE, WORKER_BUILD } from './service.js';
 
 export const API_HEADERS = {
@@ -21,6 +21,8 @@ const STATUS_OF_CODE = {
   unknown_field: 400,
   not_found: 404,
   conflict: 409,
+  stale_request: 409,
+  already_answered: 409,
   too_large: 413,
   unsupported_media_type: 415,
   hourly_limit: 429,
@@ -85,6 +87,7 @@ const ROUTES = {
   '/v1/reports': { maxBytes: REPORT.bodyBytes, kind: 'submit', edge: 'report' },
   '/v1/reports/status': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'status', edge: 'report' },
   '/v1/reports/read': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'read', edge: 'report' },
+  '/v1/reports/feedback': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'feedback', edge: 'report' },
   '/v1/reports/dump': { maxBytes: MAX_LOOKUP_BODY_BYTES, kind: 'dump', edge: 'dump' },
   '/v1/reports/dump/chunk': { maxBytes: MAX_CHUNK_BODY_BYTES, kind: 'chunk', edge: 'dump' },
 };
@@ -100,7 +103,7 @@ async function edgeAllows(limiter, key) {
 
 const dumpProgress = (answer) => ({ stored: answer.stored, bytes: answer.bytes, complete: answer.complete });
 
-// desk: { submit(report, address, dump, submission), statuses(claims, address), read(claim, address),
+// desk: { submit(report, address, dump, submission), statuses(claims, address), read(claim, address), feedback(feedback, address),
 // dumpStatus(claim, address), dumpChunk(claim, offset, bytes, address) } as promises.
 export async function handlePublic(request, env, desk, log = () => {}) {
   const url = new URL(request.url);
@@ -143,6 +146,12 @@ export async function handlePublic(request, env, desk, log = () => {}) {
       if (answer.code === 'ok') return reply(dumpProgress(answer));
       if (answer.code === 'conflict') return reply({ error: 'offset', ...dumpProgress(answer) }, 409);
       return failure(answer.code, answer.detail);
+    }
+    if (route.kind === 'feedback') {
+      const { feedback, detail } = readFeedback(parsed);
+      if (!feedback) return failure('bad_request', detail);
+      const answer = await desk.feedback(feedback, address);
+      return answer.code === 'ok' ? reply(answer.state) : failure(answer.code);
     }
     if (route.kind === 'status') {
       const claims = readClaims(parsed);

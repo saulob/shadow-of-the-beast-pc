@@ -52,6 +52,27 @@ void Write(const fs::path& file, const std::string& text) {
 
 bool Has(const std::string& text, std::string_view part) { return text.find(part) != std::string::npos; }
 
+// The definition that starts with `head`, up to its closing brace at the start of a line; empty when there is none.
+std::string Body(const std::string& text, std::string_view head) {
+    const size_t at = text.find(head);
+    if (at == std::string::npos) return {};
+    const size_t end = text.find("\n}\n", at);
+    return text.substr(at, end == std::string::npos ? std::string::npos : end - at);
+}
+
+ReportStatusUpdate Update(const std::string& ticket, const std::string& status, int64_t at, const std::string& fixed_version = {},
+                          const std::string& message = {}, int64_t message_at = 0, const std::string& feedback = {}) {
+    ReportStatusUpdate update;
+    update.ticket = ticket;
+    update.status = status;
+    update.updated_at = at;
+    update.fixed_version = fixed_version;
+    update.player_message = message;
+    update.message_updated_at = message_at;
+    update.test_feedback = feedback;
+    return update;
+}
+
 const std::string kHead =
     "[run] 2026-11-19T21:02:57\n"
     "CPU: Intel(R) Core(TM) i9-14900\n"
@@ -173,13 +194,14 @@ void TestDefaultEndpoint() {
     CHECK(preview_at != std::string::npos && send_at > preview_at);
     const std::string preview = page.substr(preview_at, send_at - preview_at);
     CHECK(!Has(preview, "FileReport") && !Has(preview, "std::thread") && !Has(preview, "delivery_"));
-    // One thread sends the report (and its dump); the other only uploads the dump again, from Retry crash dump upload.
-    CHECK(Count(page, "std::thread") == 2 && !Has(page, "/health"));
-    const size_t retry_at = page.find("void IncidentPage::RetryDump()");
-    const size_t first_thread = page.find("std::thread");
-    const size_t second_thread = page.find("std::thread", first_thread + 1);
-    CHECK(retry_at != std::string::npos && retry_at < first_thread && first_thread < page.find("\n}\n", retry_at));
-    CHECK(send_at < second_thread && second_thread < page.find("\n}\n", send_at));
+    // One thread sends the report (and its dump), one only uploads the dump again, and one lists the local logs.
+    CHECK(Count(page, "std::thread") == 3 && !Has(page, "/health"));
+    const std::string send = Body(page, "void IncidentPage::Send(");
+    const std::string retry = Body(page, "void IncidentPage::RetryDump()");
+    const std::string scan = Body(page, "void IncidentPage::StartLogScan()");
+    CHECK(Has(send, "std::thread") && Has(send, "FileReport(") && Has(send, "UploadCrashDump("));
+    CHECK(Has(retry, "std::thread") && Has(retry, "UploadCrashDump(") && !Has(retry, "FileReport("));
+    CHECK(Has(scan, "std::thread") && Has(scan, "FindGameLogs(") && !Has(scan, "FileReport(") && !Has(scan, "Upload") && !Has(scan, "service"));
     CHECK(!Has(Source("launcher/incident_client.cpp"), "/health") && !Has(Source("launcher/my_reports_page.cpp"), "/health"));
 
     for (const char* name : {"launcher/incident_page.cpp", "launcher/incident_client.cpp", "launcher/incident_client.h", "launcher/game_profile.h",
@@ -593,6 +615,14 @@ void TestClient(const fs::path& scratch) {
     TrackedReport remembered = TrackedReportOf(package, sent);
     CHECK(remembered.ticket == "SOB-ABCDEF" && remembered.receipt == kReceipt && remembered.status == "new" && remembered.gpu == "NVIDIA GeForce RTX 4070");
     CHECK(remembered.log_file == "shadow_of_the_beast_040.log" && remembered.description == package.Value("description"));
+    CHECK(remembered.crash_dump.empty());
+    ReportReceipt with_dump = sent;
+    with_dump.dump = DumpUpload::kFailed;
+    CHECK(TrackedReportOf(package, with_dump).crash_dump == kDumpNotUploaded);
+    with_dump.dump = DumpUpload::kUploaded;
+    CHECK(TrackedReportOf(package, with_dump).crash_dump == kDumpUploaded);
+    with_dump.dump = DumpUpload::kNotAttached;
+    CHECK(TrackedReportOf(package, with_dump).crash_dump.empty());
 }
 
 // The answer of a service that predates a field the launcher sends must reach the log with its status and code.
@@ -714,10 +744,10 @@ void TestHistory(const fs::path& scratch) {
         CHECK(!Has(saved, std::string("\"") + identity + "\":"));
     }
 
-    CHECK(!again.Apply({{"SOB-AAAAAA", "bogus", 5, "", ""}, {"SOB-ZZZZZZ", "fixed", 5, "", ""}}));
-    CHECK(again.Apply({{"SOB-AAAAAA", "fixed", 500, "0.1.1", "Fixed in the next build."}}));
+    CHECK(!again.Apply({Update("SOB-AAAAAA", "bogus", 5), Update("SOB-ZZZZZZ", "fixed", 5)}));
+    CHECK(again.Apply({Update("SOB-AAAAAA", "fixed", 500, "0.1.1", "Fixed in the next build.")}));
     CHECK(again.HasUnseen() && again.HasUnseenMessage() && ReportStatusLine(again.reports()[0]) == "Fixed in version 0.1.1");
-    CHECK(!again.Apply({{"SOB-AAAAAA", "fixed", 500, "0.1.1", "Fixed in the next build."}}));
+    CHECK(!again.Apply({Update("SOB-AAAAAA", "fixed", 500, "0.1.1", "Fixed in the next build.")}));
     CHECK(again.MarkSeen("SOB-AAAAAA") && !again.HasUnseen() && !again.MarkSeen("SOB-AAAAAA"));
     CHECK(again.Save());
     ReportHistory third(file);
@@ -761,14 +791,14 @@ void TestUnavailableReports(const fs::path& scratch) {
     history.Add(make("SOB-AAAAAA", 100));
     history.Add(make("SOB-BBBBBB", 200));
 
-    CHECK(history.Apply({{"SOB-AAAAAA", "new", 100, "", ""}}, {"SOB-AAAAAA", "SOB-BBBBBB"}));
+    CHECK(history.Apply({Update("SOB-AAAAAA", "new", 100)}, {"SOB-AAAAAA", "SOB-BBBBBB"}));
     CHECK(!history.reports()[1].unavailable && history.reports()[0].unavailable);
-    CHECK(!history.Apply({{"SOB-AAAAAA", "new", 100, "", ""}}, {"SOB-AAAAAA", "SOB-BBBBBB"}));
+    CHECK(!history.Apply({Update("SOB-AAAAAA", "new", 100)}, {"SOB-AAAAAA", "SOB-BBBBBB"}));
     CHECK(history.Save());
     ReportHistory reloaded(file);
     reloaded.Load();
     CHECK(reloaded.reports()[0].unavailable && reloaded.reports()[0].ticket == "SOB-BBBBBB");
-    CHECK(reloaded.Apply({{"SOB-BBBBBB", "new", 200, "", ""}}, {"SOB-BBBBBB"}));
+    CHECK(reloaded.Apply({Update("SOB-BBBBBB", "new", 200)}, {"SOB-BBBBBB"}));
     CHECK(!reloaded.reports()[0].unavailable);
 
     ReportHistory unseen(scratch / "unseen" / kReportHistoryFile);
@@ -776,15 +806,15 @@ void TestUnavailableReports(const fs::path& scratch) {
     unseen.Add(make("SOB-BBBBBB", 200));
     unseen.Add(make("SOB-CCCCCC", 300));
     CHECK(unseen.NextUnseen().empty());
-    CHECK(unseen.Apply({{"SOB-AAAAAA", "investigating", 500, "", ""}, {"SOB-BBBBBB", "fixed", 400, "0.1.1", "Try the new version."},
-                        {"SOB-CCCCCC", "closed", 600, "", ""}}));
+    CHECK(unseen.Apply({Update("SOB-AAAAAA", "investigating", 500), Update("SOB-BBBBBB", "fixed", 400, "0.1.1", "Try the new version."),
+                        Update("SOB-CCCCCC", "closed", 600)}));
     CHECK(unseen.NextUnseen() == "SOB-BBBBBB");
     CHECK(unseen.MarkSeen("SOB-BBBBBB") && unseen.NextUnseen() == "SOB-CCCCCC");
     CHECK(unseen.HasUnseen() && unseen.MarkSeen("SOB-AAAAAA") && unseen.HasUnseen() && unseen.MarkSeen("SOB-CCCCCC") && !unseen.HasUnseen());
 
     ReportHistory gone(scratch / "gone" / kReportHistoryFile);
     gone.Add(make("SOB-AAAAAA", 100));
-    CHECK(gone.Apply({{"SOB-AAAAAA", "fixed", 500, "0.1.1", "Try this."}}));
+    CHECK(gone.Apply({Update("SOB-AAAAAA", "fixed", 500, "0.1.1", "Try this.")}));
     CHECK(gone.HasUnseen() && gone.HasUnseenMessage() && gone.NextUnseen() == "SOB-AAAAAA");
     CHECK(gone.Apply({}, {"SOB-AAAAAA"}));
     CHECK(!gone.HasUnseen() && !gone.HasUnseenMessage() && gone.NextUnseen().empty());
@@ -916,11 +946,11 @@ void TestNewReplyAndUpdated(const fs::path& scratch) {
     history.Add(report);
     CHECK(!history.HasUnseen() && !history.HasUnseenMessage());
 
-    CHECK(history.Apply({{"SOB-AAAAAA", "investigating", 200, "", ""}}));
+    CHECK(history.Apply({Update("SOB-AAAAAA", "investigating", 200)}));
     CHECK(history.HasUnseen() && !history.HasUnseenMessage() && !history.reports()[0].message_unseen);
-    CHECK(history.Apply({{"SOB-AAAAAA", "investigating", 300, "", "Please send a newer log."}}));
+    CHECK(history.Apply({Update("SOB-AAAAAA", "investigating", 300, "", "Please send a newer log.")}));
     CHECK(history.HasUnseenMessage() && history.reports()[0].player_message == "Please send a newer log.");
-    CHECK(!history.Apply({{"SOB-AAAAAA", "investigating", 300, "", "Please send a newer log."}}));
+    CHECK(!history.Apply({Update("SOB-AAAAAA", "investigating", 300, "", "Please send a newer log.")}));
     CHECK(history.HasUnseenMessage());
 
     CHECK(history.Save());
@@ -931,13 +961,189 @@ void TestNewReplyAndUpdated(const fs::path& scratch) {
     CHECK(reopened.MarkSeen("SOB-AAAAAA") && !reopened.HasUnseen() && !reopened.HasUnseenMessage());
     CHECK(reopened.reports()[0].player_message == "Please send a newer log.");
 
-    CHECK(reopened.Apply({{"SOB-AAAAAA", "fixed", 400, "0.1.1", "Please send a newer log."}}));
+    CHECK(reopened.Apply({Update("SOB-AAAAAA", "fixed", 400, "0.1.1", "Please send a newer log.")}));
     CHECK(reopened.HasUnseen() && !reopened.HasUnseenMessage());
-    CHECK(reopened.Apply({{"SOB-AAAAAA", "fixed", 500, "0.1.1", "Try version 0.1.1."}}));
+    CHECK(reopened.Apply({Update("SOB-AAAAAA", "fixed", 500, "0.1.1", "Try version 0.1.1.")}));
     CHECK(reopened.HasUnseenMessage() && ReportStatusLine(reopened.reports()[0]) == "Fixed in version 0.1.1");
 
     const std::string saved = reopened.Dump();
     CHECK(Has(saved, kReceipt) && !Has(reopened.reports()[0].description, kReceipt));
+}
+
+void TestPlayerTestHistory(const fs::path& scratch) {
+    for (const char* status : {"new", "investigating", kAwaitingPlayerTest, "fixed", "cannot_reproduce", "duplicate", "not_a_bug", "closed"}) {
+        CHECK(ReportStatusText(status) != nullptr);
+    }
+    CHECK(std::string(ReportStatusText("new")) == "New" && std::string(ReportStatusText(kAwaitingPlayerTest)) == "Awaiting player test");
+    const fs::path file = scratch / "player_test" / kReportHistoryFile;
+    ReportHistory history(file);
+    TrackedReport report = Tracked("SOB-AAAAAA");
+    report.submitted_at = report.status_updated_at = 100;
+    history.Add(report);
+    CHECK(PlayerTestOf(history.reports()[0]) == PlayerTest::kNone);
+
+    CHECK(history.Apply({Update("SOB-AAAAAA", kAwaitingPlayerTest, 200, "", "Update to 0.1.1 and try the first level.", 200)}));
+    CHECK(PlayerTestOf(history.reports()[0]) == PlayerTest::kAwaitingAnswer && history.HasUnseenMessage());
+    CHECK(!history.RecordTestFeedback("SOB-AAAAAA", 199, kTestFixed) && !history.RecordTestFeedback("SOB-AAAAAA", 200, "pending") &&
+          !history.RecordTestFeedback("SOB-ZZZZZZ", 200, kTestFixed));
+    CHECK(history.RecordTestFeedback("SOB-AAAAAA", 200, kTestFixed) && PlayerTestOf(history.reports()[0]) == PlayerTest::kConfirmedFixed);
+    CHECK(history.reports()[0].status == kAwaitingPlayerTest);
+    CHECK(history.Save());
+
+    ReportHistory reloaded(file);
+    reloaded.Load();
+    CHECK(PlayerTestOf(reloaded.reports()[0]) == PlayerTest::kConfirmedFixed && reloaded.reports()[0].test_feedback_revision == 200);
+    CHECK(reloaded.MarkSeen("SOB-AAAAAA"));
+    CHECK(reloaded.Apply({Update("SOB-AAAAAA", kAwaitingPlayerTest, 300, "", "Update to 0.1.1 and try the first level.", 200)}));
+    CHECK(PlayerTestOf(reloaded.reports()[0]) == PlayerTest::kAwaitingAnswer && reloaded.HasUnseen() && !reloaded.HasUnseenMessage());
+    CHECK(reloaded.Apply({Update("SOB-AAAAAA", kAwaitingPlayerTest, 300, "", "Update to 0.1.1 and try the first level.", 200, kTestNotFixed)}));
+    CHECK(PlayerTestOf(reloaded.reports()[0]) == PlayerTest::kStillHappening);
+    CHECK(!reloaded.Apply({Update("SOB-AAAAAA", kAwaitingPlayerTest, 300, "", "Update to 0.1.1 and try the first level.", 200, kTestNotFixed)}));
+    CHECK(!reloaded.RecordTestFeedback("SOB-AAAAAA", 200, kTestFixed) && PlayerTestOf(reloaded.reports()[0]) == PlayerTest::kStillHappening);
+    CHECK(reloaded.reports()[0].status == kAwaitingPlayerTest);
+
+    CHECK(reloaded.Apply({Update("SOB-AAAAAA", "fixed", 400, "0.1.1", "Update to 0.1.1 and try the first level.", 200)}));
+    CHECK(PlayerTestOf(reloaded.reports()[0]) == PlayerTest::kNone && ReportStatusLine(reloaded.reports()[0]) == "Fixed in version 0.1.1");
+
+    Write(file, R"({"version":1,"reports":[{"ticket":"SOB-BBBBBB","receipt":")" + kReceipt +
+                    R"(","status":"awaiting_player_test","status_updated_at":50,"player_message":"Try it.","test_feedback":"maybe","test_feedback_revision":50}]})");
+    ReportHistory legacy(file);
+    legacy.Load();
+    CHECK(legacy.reports().size() == 1 && PlayerTestOf(legacy.reports()[0]) == PlayerTest::kAwaitingAnswer);
+    CHECK(legacy.reports()[0].test_feedback.empty() && legacy.reports()[0].message_updated_at == 0 && !legacy.reports()[0].message_unseen);
+    CHECK(legacy.reports()[0].crash_dump.empty());
+
+    CHECK(legacy.SetCrashDump("SOB-BBBBBB", kDumpNotUploaded) && !legacy.SetCrashDump("SOB-BBBBBB", kDumpNotUploaded));
+    CHECK(!legacy.SetCrashDump("SOB-BBBBBB", "partly") && !legacy.SetCrashDump("SOB-ZZZZZZ", kDumpUploaded));
+    CHECK(legacy.SetCrashDump("SOB-BBBBBB", kDumpUploaded) && legacy.Save());
+    ReportHistory dumped(file);
+    dumped.Load();
+    CHECK(dumped.reports()[0].crash_dump == kDumpUploaded);
+    const std::string page = Source("launcher/incident_page.cpp");
+    CHECK(Has(Body(page, "void IncidentPage::CollectDumpRetry()"), "my_reports_.NoteCrashDump(result_->ticket, dump_retry_->outcome);"));
+}
+
+void TestMessageRevisions(const fs::path& scratch) {
+    ReportHistory history(scratch / "revisions" / kReportHistoryFile);
+    for (const auto& [ticket, at] : {std::pair<const char*, int64_t>{"SOB-AAAAAA", 100}, {"SOB-BBBBBB", 200}}) {
+        TrackedReport report = Tracked(ticket);
+        report.submitted_at = report.status_updated_at = at;
+        history.Add(report);
+    }
+    const auto find = [&](const char* ticket) {
+        return *std::find_if(history.reports().begin(), history.reports().end(), [&](const TrackedReport& r) { return r.ticket == ticket; });
+    };
+    CHECK(history.Apply({Update("SOB-AAAAAA", "investigating", 300, "", "Looking.")}));
+    CHECK(find("SOB-AAAAAA").message_unseen && find("SOB-AAAAAA").message_updated_at == 0);
+    CHECK(history.MarkSeen("SOB-AAAAAA"));
+    CHECK(history.Apply({Update("SOB-AAAAAA", "investigating", 300, "", "Looking.", 300)}));
+    CHECK(!history.HasUnseen() && !history.HasUnseenMessage() && find("SOB-AAAAAA").message_updated_at == 300);
+    CHECK(history.Apply({Update("SOB-AAAAAA", "investigating", 400, "", "Looking.", 400)}));
+    CHECK(history.HasUnseenMessage() && find("SOB-AAAAAA").message_unseen);
+    CHECK(history.MarkSeen("SOB-AAAAAA"));
+    CHECK(history.Apply({Update("SOB-AAAAAA", "cannot_reproduce", 500, "", "Looking.", 400)}));
+    CHECK(history.HasUnseen() && !history.HasUnseenMessage() && find("SOB-AAAAAA").unseen && !find("SOB-AAAAAA").message_unseen);
+
+    CHECK(history.Apply({Update("SOB-BBBBBB", "investigating", 600, "", "Please send the newest log.", 600)}));
+    CHECK(find("SOB-BBBBBB").message_unseen && !find("SOB-AAAAAA").message_unseen && history.NextUnseen() == "SOB-BBBBBB");
+    CHECK(history.MarkSeen("SOB-BBBBBB") && find("SOB-AAAAAA").unseen && history.NextUnseen() == "SOB-AAAAAA");
+
+    CHECK(history.Apply({Update("SOB-AAAAAA", "cannot_reproduce", 700, "", "Could you try once more?", 700)}));
+    std::vector<size_t> order = ReportDisplayOrder(history.reports());
+    CHECK(history.reports()[0].ticket == "SOB-BBBBBB" && history.reports()[order[0]].ticket == "SOB-AAAAAA");
+    CHECK(history.MarkSeen("SOB-AAAAAA"));
+    order = ReportDisplayOrder(history.reports());
+    CHECK(history.reports()[order[0]].ticket == "SOB-BBBBBB");
+    order = ReportDisplayOrder(history.reports(), "SOB-AAAAAA");
+    CHECK(history.reports()[order[0]].ticket == "SOB-AAAAAA");
+    CHECK(history.Apply({Update("SOB-BBBBBB", "investigating", 800, "", "One more question.", 800)}, {"SOB-AAAAAA", "SOB-BBBBBB"}));
+    order = ReportDisplayOrder(history.reports(), "SOB-AAAAAA");
+    CHECK(find("SOB-AAAAAA").unavailable && history.reports()[order[0]].ticket == "SOB-BBBBBB");
+}
+
+void TestFeedbackClient() {
+    Wire wire;
+    std::vector<std::string> lines;
+    const ServiceConfig config = Configured(wire, &lines);
+    TrackedReport report = Tracked("SOB-ABCDEF");
+    report.status = kAwaitingPlayerTest;
+    report.status_updated_at = 1700000000123;
+    report.description = "SECRET DESCRIPTION";
+    const ReportFacts facts = Report();
+
+    wire.reply = {HttpFailure::kNone, 200, R"({"ticket":"SOB-ABCDEF","revision":1700000000123,"test_feedback":"fixed","test_feedback_at":5})"};
+    CHECK(SendTestFeedback(config, report, kTestFixed, facts).outcome == FeedbackOutcome::kSaved);
+    CHECK(wire.calls.size() == 1 && wire.calls[0].first == "https://reports.example/v1/reports/feedback");
+    const auto sent = json::Parse(wire.calls[0].second);
+    CHECK(sent && sent->object.size() == 6 && sent->StringOr("ticket") == "SOB-ABCDEF" && sent->StringOr("receipt") == kReceipt);
+    CHECK(sent->NumberOr("revision") == 1700000000123 && sent->StringOr("result") == "fixed");
+    CHECK(sent->StringOr("launcher_version") == "0.1.0" && sent->StringOr("game_build") == "CUSA03762 1.00 Korea");
+    CHECK(!Has(wire.calls[0].second, "SECRET") && !Has(wire.calls[0].second, "comment"));
+    // The Worker's tests answer this exact request (server/shadow-bug-reports/test/player_test.test.js).
+    Write(fs::current_path() / "bug-report-feedback-request.json", wire.calls[0].second);
+
+    const struct {
+        HttpFailure failure;
+        int status;
+        std::string body;
+        FeedbackOutcome outcome;
+        std::string code;
+    } cases[] = {
+        {HttpFailure::kNone, 409, R"({"error":"stale_request","protocol":2})", FeedbackOutcome::kStale, "stale_request"},
+        {HttpFailure::kNone, 409, R"({"error":"already_answered","protocol":2})", FeedbackOutcome::kStale, "already_answered"},
+        {HttpFailure::kNone, 404, R"({"error":"not_found","protocol":2})", FeedbackOutcome::kStale, "not_found"},
+        {HttpFailure::kNone, 404, "not json", FeedbackOutcome::kStale, "not_found"},
+        {HttpFailure::kNone, 429, R"({"error":"limit"})", FeedbackOutcome::kFailed, "limit"},
+        {HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"revision"})", FeedbackOutcome::kFailed, "bad_request"},
+        {HttpFailure::kNone, 502, R"({"error":"unavailable"})", FeedbackOutcome::kFailed, "unavailable"},
+        {HttpFailure::kUnreachable, 0, "", FeedbackOutcome::kUnreachable, "no_answer"},
+        {HttpFailure::kTimedOut, 0, "", FeedbackOutcome::kUnreachable, "no_answer"},
+        {HttpFailure::kNone, 200, R"({"ticket":"SOB-ABCDEF","revision":1700000000123,"test_feedback":"not_fixed"})", FeedbackOutcome::kFailed, "malformed_reply"},
+        {HttpFailure::kNone, 200, R"({"ticket":"SOB-ABCDEF","revision":5,"test_feedback":"fixed"})", FeedbackOutcome::kFailed, "malformed_reply"},
+        {HttpFailure::kNone, 200, R"({"ticket":"SOB-ZZZZZZ","revision":1700000000123,"test_feedback":"fixed"})", FeedbackOutcome::kFailed, "malformed_reply"},
+    };
+    for (const auto& item : cases) {
+        wire.reply = {item.failure, item.status, item.body};
+        const FeedbackAnswer answer = SendTestFeedback(config, report, kTestFixed, facts);
+        CHECK(answer.outcome == item.outcome && answer.code == item.code);
+    }
+    wire.calls.clear();
+    CHECK(SendTestFeedback(config, report, "pending", facts).outcome == FeedbackOutcome::kFailed && wire.calls.empty());
+    ServiceConfig unset;
+    unset.post = wire.Transport();
+    CHECK(SendTestFeedback(unset, report, kTestNotFixed, facts).outcome == FeedbackOutcome::kFailed && wire.calls.empty());
+    CHECK(!lines.empty());
+    for (const std::string& line : lines) CHECK(!Has(line, kReceipt) && !Has(line, "SECRET"));
+
+    wire.reply = {HttpFailure::kNone, 200,
+                  R"({"reports":[{"ticket":"SOB-ABCDEF","status":"awaiting_player_test","status_updated_at":9,"player_message":"Try it.",)"
+                  R"("message_updated_at":8,"test_feedback":"not_fixed","test_feedback_at":10}]})"};
+    const StatusCheck check = FetchReportStatuses(config, {report});
+    CHECK(check.reached && check.statuses.size() == 1 && check.statuses[0].message_updated_at == 8 && check.statuses[0].test_feedback == "not_fixed");
+}
+
+// The player's answer and the way back to the form: each only from its own button, nothing filed or changed by itself.
+void TestPlayerTestWiring() {
+    const std::string page = Source("launcher/incident_page.cpp");
+    const std::string mine = Source("launcher/my_reports_page.cpp");
+    CHECK(Count(mine, "SendTestFeedback(") == 1 && Count(mine, "SendFeedback(report, kTestFixed, service)") == 1 &&
+          Count(mine, "SendFeedback(report, kTestNotFixed, service)") == 1);
+    CHECK(Has(mine, "if (ImGui::Button(Tr(\"Yes, fixed\"), ImVec2(yes, 0))) SendFeedback(report, kTestFixed, service);"));
+    CHECK(Has(mine, "if (ImGui::Button(Tr(\"No, still happening\"), ImVec2(no, 0))) SendFeedback(report, kTestNotFixed, service);"));
+    CHECK(Has(mine, "if (ImGui::Button(Tr(\"Send a new report\"))) new_report_requested_ = true;"));
+    CHECK(Has(mine, "if (feedback_ || !service.endpoint.configured()) return;"));
+    for (const char* part : {"Did this fix the issue?", "Yes, fixed", "No, still happening", "Send a new report", "The issue is still happening",
+                             "Please send a new report with a current log"}) {
+        CHECK(Has(mine, part));
+    }
+    const std::string handoff = Body(page, "    if (my_reports_.TakeNewReportRequest()) {");
+    CHECK(Has(handoff, "ImGui::SetScrollY(form_top_);") && !Has(handoff, "Send(") && !Has(handoff, "SelectLog") && !Has(handoff, "Preview"));
+    CHECK(Has(page, "Describe what still happens and choose the newest log. Nothing is sent until you press Send report."));
+    CHECK(Has(page, "DrawLoadingView(ui, \"Loading Bug Report...\");") && Has(page, "my_reports_.RefreshIfStale(service_, entered ? kEnteredCheck : kOpenPageCheck);"));
+    CHECK(Has(page, "kEnteredCheck = std::chrono::seconds(10)") && Has(page, "kOpenPageCheck = std::chrono::minutes(3)"));
+    CHECK(Has(page, "Attach crash report") && Has(page, "Retry crash report upload") && !Has(page, "Attach crash dump\""));
+    CHECK(!Has(page, "MarkSeen(") && Count(mine, "MarkSeen(") == 1 && Has(Body(mine, "void MyReports::DrawDetails("), "MarkSeen(report.ticket)"));
+    for (const std::string* text : {&page, &mine}) CHECK(!Has(*text, "status = \"fixed\"") && !Has(*text, "status = kTestFixed"));
 }
 
 void TestReceiptNeverLogged(const fs::path& scratch) {
@@ -974,7 +1180,8 @@ void TestNothingHappensByItself() {
     CHECK(!Has(page, "BeginPopupModal") && !Has(page, "StartDelivery") && !Has(page, "AskToSend"));
     CHECK(Has(page, "if (!CanSend(State(), service_.endpoint.configured()) || !AcceptDraft()) return;"));
     CHECK(Has(mine, "if (ImGui::Button(Tr(check_ ? \"Checking...\" : \"Refresh\"), ImVec2(width, 0))) Refresh(service, true);"));
-    CHECK(Count(mine, "Refresh(service, true)") == 1 && Count(mine, "Refresh(service)") == 1);
+    CHECK(Count(mine, "Refresh(service, true)") == 1 && Count(mine, "Refresh(service)") == 2);
+    CHECK(Has(mine, "if (refresh_wanted_ && !check_) {"));
     CHECK(Has(mine, "if (!report.unavailable || asked_by_player) reports.push_back(report);"));
     CHECK(Count(mine, "MarkSeen(") == 1 && Count(page, "MarkSeen(") == 0 && Count(launcher, "MarkSeen(") == 0);
     CHECK(Has(mine, "if (check_ || !service.endpoint.configured()) return;") && Has(mine, "if (reports.empty()) return;"));
@@ -1101,6 +1308,10 @@ int main() {
     TestSecretsAndAddresses();
     TestRetryAfterAndCancellation(scratch);
     TestNewReplyAndUpdated(scratch);
+    TestPlayerTestHistory(scratch);
+    TestMessageRevisions(scratch);
+    TestFeedbackClient();
+    TestPlayerTestWiring();
     TestReceiptNeverLogged(scratch);
     TestNothingHappensByItself();
     TestProductionPage();

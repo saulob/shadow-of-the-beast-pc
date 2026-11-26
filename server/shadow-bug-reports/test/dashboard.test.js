@@ -13,18 +13,19 @@ test('the dashboard lists reports with date, versions, system, renderer and stat
   env.service.setStatus(second.body.ticket, { status: 'investigating', fixed_version: '', player_message: '' });
   const page = await dashboardFor(env, { now: env.clock.now });
   const rows = page.rows('list');
-  assert.deepEqual(rows[0], ['Report ID', 'Status', 'Submitted', 'Launcher', 'Game build', 'Region', 'Operating system', 'Renderer · GPU',
-    'Description']);
+  assert.deepEqual(rows[0], ['Report ID', 'Status', 'Player feedback', 'Submitted', 'Launcher', 'Game build', 'Region', 'Operating system',
+    'Renderer · GPU', 'Description']);
   assert.equal(rows.length, 3);
   assert.equal(rows[1][0], second.body.ticket);
   assert.equal(rows[1][1], 'Investigating');
-  assert.equal(rows[2][1], 'Open');
-  assert.equal(rows[1][3], '0.1.0');
-  assert.equal(rows[1][4], 'CUSA03762 1.00 Korea 1.00');
-  assert.equal(rows[1][5], 'Korea');
-  assert.equal(rows[1][6], 'Windows 10 (build 19045)');
-  assert.equal(rows[1][7], 'OpenGL · NVIDIA GeForce RTX 4070');
-  assert.equal(rows[1][8], 'Second problem in the menu');
+  assert.equal(rows[2][1], 'New');
+  assert.equal(rows[1][2], '–');
+  assert.equal(rows[1][4], '0.1.0');
+  assert.equal(rows[1][5], 'CUSA03762 1.00 Korea 1.00');
+  assert.equal(rows[1][6], 'Korea');
+  assert.equal(rows[1][7], 'Windows 10 (build 19045)');
+  assert.equal(rows[1][8], 'OpenGL · NVIDIA GeForce RTX 4070');
+  assert.equal(rows[1][9], 'Second problem in the menu');
   assert.equal(page.text('c-new'), '2');
   assert.equal(page.text('c-new-status'), '1');
   assert.equal(page.text('c-investigating'), '1');

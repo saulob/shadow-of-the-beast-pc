@@ -150,8 +150,13 @@ test('a status is saved, validated and visible to the owner', async () => {
   assert.equal(seen.reports[0].status, 'fixed');
   assert.equal(seen.reports[0].fixed_version, '0.1.1');
   assert.equal(seen.reports[0].player_message, 'Fixed.');
-  await save({ status: 'investigating', fixed_version: '9.9.9' });
-  assert.equal((await (await admin(env, `/admin/api/reports/${filed.body.ticket}`)).json()).fixed_version, '');
+  const misplaced = await save({ status: 'investigating', fixed_version: '9.9.9' });
+  assert.equal(misplaced.status, 400);
+  assert.equal((await misplaced.json()).detail, 'fixed_version');
+  await save({ status: 'investigating' });
+  const moved = await (await admin(env, `/admin/api/reports/${filed.body.ticket}`)).json();
+  assert.equal(moved.fixed_version, '');
+  assert.equal(moved.player_message, 'Fixed.');
 });
 
 test('a request that names another origin is refused, the same origin passes', async () => {

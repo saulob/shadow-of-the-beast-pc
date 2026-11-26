@@ -16,6 +16,7 @@ constexpr char kStatusPath[] = "/v1/reports/status";
 constexpr char kReadPath[] = "/v1/reports/read";
 constexpr char kDumpPath[] = "/v1/reports/dump";
 constexpr char kDumpChunkPath[] = "/v1/reports/dump/chunk";
+constexpr char kFeedbackPath[] = "/v1/reports/feedback";
 
 void Say(const ServiceConfig& config, const std::string& line) {
     if (config.log) config.log(line);
@@ -373,9 +374,31 @@ StatusCheck FetchReportStatuses(const ServiceConfig& config, const std::vector<T
     for (const json::Value& entry : list->array) {
         if (!entry.IsObject() || !IsTicket(entry.StringOr("ticket"))) continue;
         check.statuses.push_back({entry.StringOr("ticket"), entry.StringOr("status"), entry.NumberOr("status_updated_at"),
-                                  entry.StringOr("fixed_version"), entry.StringOr("player_message")});
+                                  entry.StringOr("fixed_version"), entry.StringOr("player_message"), entry.NumberOr("message_updated_at"),
+                                  entry.StringOr("test_feedback")});
     }
     return check;
+}
+
+FeedbackAnswer SendTestFeedback(const ServiceConfig& config, const TrackedReport& report, std::string_view result, const ReportFacts& facts) {
+    if (result != kTestFixed && result != kTestNotFixed) return {FeedbackOutcome::kFailed, "result"};
+    const std::string body = "{\"ticket\":" + json::Quote(report.ticket) + ",\"receipt\":" + json::Quote(report.receipt) +
+                             ",\"revision\":" + std::to_string(report.status_updated_at) + ",\"result\":" + json::Quote(std::string(result)) +
+                             ",\"launcher_version\":" + json::Quote(facts.launcher_version) + ",\"game_build\":" + json::Quote(facts.game_build) + "}";
+    const Answer answer = Ask(config, kFeedbackPath, body, "player test answer");
+    if (Ok(answer)) {
+        const bool confirmed = answer.body->StringOr("ticket") == report.ticket && answer.body->NumberOr("revision") == report.status_updated_at &&
+                               answer.body->StringOr("test_feedback") == result;
+        return confirmed ? FeedbackAnswer{FeedbackOutcome::kSaved, "ok"} : FeedbackAnswer{FeedbackOutcome::kFailed, "malformed_reply"};
+    }
+    const bool object = answer.body && answer.body->IsObject();
+    const std::string code = object ? answer.body->StringOr("error") : std::string();
+    if (answer.status == 404 || code == "stale_request" || code == "already_answered") {
+        return {FeedbackOutcome::kStale, code.empty() ? "not_found" : code};
+    }
+    const bool unreachable = answer.failure == ReportOutcome::kUnreachable || answer.failure == ReportOutcome::kTimedOut ||
+                             answer.failure == ReportOutcome::kCertificate || answer.failure == ReportOutcome::kClientMissing;
+    return {unreachable ? FeedbackOutcome::kUnreachable : FeedbackOutcome::kFailed, code.empty() ? "no_answer" : code};
 }
 
 SentReportRead FetchSentReport(const ServiceConfig& config, const TrackedReport& report) {
@@ -414,6 +437,8 @@ TrackedReport TrackedReportOf(const IncidentPackage& package, const ReportReceip
     report.operating_system = package.Value("operating_system");
     report.renderer = package.Value("renderer");
     report.gpu = package.Value("gpu");
+    if (receipt.dump == DumpUpload::kUploaded) report.crash_dump = kDumpUploaded;
+    if (receipt.dump == DumpUpload::kFailed) report.crash_dump = kDumpNotUploaded;
     return report;
 }
 

@@ -141,6 +141,7 @@ endif()
 
 set(SOTB_GAME_SOURCES
     src/loader.c
+    src/simulate_crash.c
     src/import_slots.c
     src/isa_emulate.c
     ${SOTB_RUNTIME_SOURCES}

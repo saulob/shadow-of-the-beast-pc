@@ -22,10 +22,10 @@ test('the list puts Status next to the report id and marks the columns that narr
   await submit(env);
   const page = await dashboardFor(env);
   const heads = page.nodes.get('list').find((n) => n.tag === 'th');
-  assert.deepEqual(heads.map((h) => h.className), ['col-id', 'col-status', 'col-submitted', 'col-launcher', 'col-build', 'col-region',
-    'col-os', 'col-gpu', 'summary']);
+  assert.deepEqual(heads.map((h) => h.className), ['col-id', 'col-status', 'col-feedback', 'col-submitted', 'col-launcher', 'col-build',
+    'col-region', 'col-os', 'col-gpu', 'summary']);
   const cells = page.nodes.get('list').find((n) => n.tag === 'td');
-  assert.deepEqual(cells.map((c) => c.className), heads.map((h) => h.className));
+  assert.deepEqual(cells.map((c) => c.className.replace(/^muted /, '')), heads.map((h) => h.className));
   assert.match(ADMIN_CSS, /@media \(max-width: 1000px\) \{\s*#list \.col-os, #list \.col-gpu \{ display: none; \}/);
   assert.match(ADMIN_CSS, /@media \(max-width: 760px\) \{\s*#list \.col-launcher, #list \.col-region \{ display: none; \}/);
 });
@@ -34,7 +34,7 @@ test('a report with an empty region shows a dash in the list and in its facts', 
   const env = makeEnv();
   await handlePublic(post('/v1/reports', { ...fixture(), region: '', description: 'A report with no region known' }), {}, env.desk);
   const page = await dashboardFor(env);
-  assert.equal(page.rows('list')[1][5], '–');
+  assert.equal(page.rows('list')[1][6], '–');
   await openFirst(page);
   assert.ok(page.text('facts').includes('Region–'));
 });

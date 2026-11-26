@@ -15,6 +15,7 @@ const desk = {
   submit: async (report, address, dump, submission) => service.submit(report, address, dump, submission),
   statuses: async (claims, address) => service.statuses(claims, address),
   read: async (claim, address) => service.read(claim, address),
+  feedback: async (feedback, address) => service.feedback(feedback, address),
   dumpStatus: async (claim, address) => service.dumpStatus(claim, address),
   dumpChunk: async (claim, offset, bytes, address) => service.dumpChunk(claim, offset, bytes, address),
   dump: async (ticket) => service.dump(ticket),

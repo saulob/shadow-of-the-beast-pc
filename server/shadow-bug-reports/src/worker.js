@@ -48,6 +48,10 @@ export class BugReportDesk extends DurableObject {
     return this.service.statuses(claims, address);
   }
 
+  feedback(feedback, address) {
+    return this.service.feedback(feedback, address);
+  }
+
   read(claim, address) {
     return this.service.read(claim, address);
   }

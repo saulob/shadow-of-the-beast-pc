@@ -25,7 +25,6 @@ constexpr float kScrollRatio = 0.1f;
 constexpr float kMessagePadding = 12.0f, kMessageBar = 4.0f, kMessageRounding = 8.0f, kMessageGap = 6.0f;
 constexpr float kMessageTint = 0.12f, kMessageBorderQuiet = 0.45f, kBadgePadding = 8.0f;
 constexpr float kMarkerDot = 3.5f, kMarkerGap = 6.0f;
-constexpr auto kFreshCheck = std::chrono::seconds(30);
 
 std::string StatusText(const TrackedReport& report) {
     const char* note = report.unavailable ? "No longer available" : report.unseen ? "Updated" : nullptr;
@@ -113,7 +112,21 @@ void DrawFacts(trg::Ui& ui, const TrackedReport& report) {
     Fact(ui, "Status", status ? Tr(status) : report.status);
     Fact(ui, "Status updated", DateText(report.status_updated_at));
     if (report.status == "fixed" && !report.fixed_version.empty()) Fact(ui, "Fixed in version", report.fixed_version, true);
+    if (!report.crash_dump.empty()) Fact(ui, "Crash report", Tr(report.crash_dump == kDumpUploaded ? "Uploaded" : "Not uploaded"));
     ImGui::EndTable();
+}
+
+void QuestionLabel(trg::Ui& ui, const char* text) {
+    ImGui::PushFont(ui.fonts().semibold, trg::layout::kTextLabel);
+    ImGui::TextUnformatted(Tr(text));
+    ImGui::PopFont();
+}
+
+float ButtonWidth(const char* label) { return ImGui::CalcTextSize(Tr(label)).x + ImGui::GetStyle().FramePadding.x * 2.0f; }
+
+const char* FeedbackProblem(FeedbackOutcome outcome) {
+    return outcome == FeedbackOutcome::kUnreachable ? "Could not reach the report service. Your answer was not sent; try again."
+                                                    : "Your answer could not be sent. Try again later.";
 }
 
 void NewReplyMarker(trg::Ui& ui) {
@@ -208,8 +221,8 @@ void MyReports::Refresh(const ServiceConfig& service, bool asked_by_player) {
     }).detach();
 }
 
-void MyReports::RefreshIfStale(const ServiceConfig& service) {
-    if (!last_check_ || std::chrono::steady_clock::now() - *last_check_ >= kFreshCheck) Refresh(service);
+void MyReports::RefreshIfStale(const ServiceConfig& service, std::chrono::steady_clock::duration interval) {
+    if (!last_check_ || std::chrono::steady_clock::now() - *last_check_ >= interval) Refresh(service);
 }
 
 void MyReports::Collect() {
@@ -221,11 +234,43 @@ void MyReports::Collect() {
         }
         reading_.reset();
     }
+    CollectFeedback();
     if (!check_ || !check_->done) return;
     check_failed_ = asked_by_player_ && !check_->result.reached;
     check_failure_ = check_->result.failure;
     if (check_->result.reached && history_.Apply(check_->result.statuses, check_->asked)) SaveHistory();
     check_.reset();
+}
+
+void MyReports::CollectFeedback() {
+    if (!feedback_ || !feedback_->done) return;
+    const std::shared_ptr<FeedbackSend> sent = std::move(feedback_);
+    const FeedbackAnswer& answer = sent->answer;
+    std::printf("Bug report: player test answer for %s: %s, %s\n", sent->ticket.c_str(), sent->result.c_str(), answer.code.c_str());
+    if (answer.outcome == FeedbackOutcome::kSaved) {
+        feedback_error_ticket_.clear();
+        if (history_.RecordTestFeedback(sent->ticket, sent->revision, sent->result)) SaveHistory();
+        else refresh_wanted_ = true;
+    } else if (answer.outcome == FeedbackOutcome::kStale) {
+        feedback_error_ticket_.clear();
+        refresh_wanted_ = true;
+    } else {
+        feedback_error_ticket_ = sent->ticket;
+        feedback_error_ = answer.outcome;
+    }
+}
+
+void MyReports::SendFeedback(const TrackedReport& report, std::string_view result, const ServiceConfig& service) {
+    if (feedback_ || !service.endpoint.configured()) return;
+    feedback_error_ticket_.clear();
+    feedback_ = std::make_shared<FeedbackSend>();
+    feedback_->ticket = report.ticket;
+    feedback_->revision = report.status_updated_at;
+    feedback_->result = std::string(result);
+    std::thread([send = feedback_, service, report, facts = facts_] {
+        send->answer = SendTestFeedback(service, report, send->result, facts);
+        send->done = true;
+    }).detach();
 }
 
 void MyReports::SaveHistory() {
@@ -237,6 +282,10 @@ bool MyReports::Remember(const IncidentPackage& package, const ReportReceipt& re
     if (history_.Add(TrackedReportOf(package, receipt))) return true;
     std::printf("Bug report: could not save My Reports\n");
     return false;
+}
+
+void MyReports::NoteCrashDump(const std::string& ticket, DumpUpload outcome) {
+    if (history_.SetCrashDump(ticket, outcome == DumpUpload::kUploaded ? kDumpUploaded : kDumpNotUploaded)) SaveHistory();
 }
 
 bool MyReports::HasUpdates() {
@@ -294,8 +343,13 @@ void MyReports::ReadSentReport(const TrackedReport& report, const ServiceConfig&
     }).detach();
 }
 
-void MyReports::Draw(trg::Ui& ui, const ServiceConfig& service) {
+void MyReports::Draw(trg::Ui& ui, const ServiceConfig& service, const ReportFacts& facts) {
+    facts_ = facts;
     Collect();
+    if (refresh_wanted_ && !check_) {
+        refresh_wanted_ = false;
+        Refresh(service);
+    }
     DrawHeader(ui, service);
     if (history_.reports().empty()) {
         ui.Paragraph("No reports sent from this PC");
@@ -337,7 +391,7 @@ void MyReports::DrawHeader(trg::Ui& ui, const ServiceConfig& service) {
 void MyReports::DrawReports(trg::Ui& ui, const ServiceConfig& service) {
     const std::vector<TrackedReport>& reports = history_.reports();
     std::string toggled, removed;
-    for (size_t i = 0; i < reports.size(); ++i) {
+    for (const size_t i : ReportDisplayOrder(reports, fresh_reply_)) {
         if (reports[i].ticket == open_ticket_) {
             DrawDetails(ui, reports[i], i, service, toggled, removed);
         } else {
@@ -396,6 +450,7 @@ void MyReports::DrawDetails(trg::Ui& ui, const TrackedReport& report, size_t ind
         DrawDeveloperMessage(ui, report.player_message, fresh_reply_ == report.ticket);
         ImGui::Dummy(ImVec2(0, kDetailGap * scale));
     }
+    DrawPlayerTest(ui, report, service);
     DrawFacts(ui, report);
     ImGui::Dummy(ImVec2(0, kDetailGap * scale));
     DrawActions(ui, report, service, removed);
@@ -410,6 +465,34 @@ void MyReports::DrawDetails(trg::Ui& ui, const TrackedReport& report, size_t ind
     DrawCardFrame(ui, origin, ImVec2(origin.x + width, bottom));
     layers.Merge(draw);
     ImGui::PopID();
+}
+
+// The answer never sets the status; a report still broken needs a new report with a current log.
+void MyReports::DrawPlayerTest(trg::Ui& ui, const TrackedReport& report, const ServiceConfig& service) {
+    const PlayerTest state = PlayerTestOf(report);
+    if (state == PlayerTest::kNone || report.unavailable) return;
+    if (state == PlayerTest::kConfirmedFixed) {
+        HelpLine(ui.theme().accent, Tr("You confirmed that this issue is fixed. Thank you!"), true);
+    } else if (state == PlayerTest::kStillHappening) {
+        QuestionLabel(ui, "The issue is still happening");
+        HelpLine(ui.theme().dim, Tr("Please send a new report with a current log, so the developer sees what happens now. This report stays here."), true);
+        if (ImGui::Button(Tr("Send a new report"))) new_report_requested_ = true;
+    } else {
+        const ImGuiStyle& style = ImGui::GetStyle();
+        const float yes = ButtonWidth("Yes, fixed"), no = ButtonWidth("No, still happening");
+        QuestionLabel(ui, "Did this fix the issue?");
+        ImGui::BeginDisabled(feedback_ != nullptr || !service.endpoint.configured());
+        if (ImGui::Button(Tr("Yes, fixed"), ImVec2(yes, 0))) SendFeedback(report, kTestFixed, service);
+        if (ImGui::GetContentRegionAvail().x >= no + style.ItemSpacing.x) ImGui::SameLine();
+        if (ImGui::Button(Tr("No, still happening"), ImVec2(no, 0))) SendFeedback(report, kTestNotFixed, service);
+        ImGui::EndDisabled();
+        if (feedback_ && feedback_->ticket == report.ticket) {
+            HelpLine(ui.theme().dim, Tr("Sending..."));
+        } else if (feedback_error_ticket_ == report.ticket) {
+            HelpLine(ui.theme().warn_dot, Tr(FeedbackProblem(feedback_error_)), true);
+        }
+    }
+    ImGui::Dummy(ImVec2(0, kDetailGap * ui.scale()));
 }
 
 void MyReports::DrawActions(trg::Ui& ui, const TrackedReport& report, const ServiceConfig& service, std::string& removed) {

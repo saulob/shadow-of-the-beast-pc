@@ -39,9 +39,10 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <span id="count" class="muted" role="status"></span>
     </div>
     <div class="cards" id="cards">
-      <div class="card"><span class="label">New in the last 24 hours</span><span id="c-new" class="value">–</span></div>
-      <div class="card"><span class="label">Open</span><span id="c-new-status" class="value">–</span></div>
+      <div class="card"><span class="label">Received in the last 24 hours</span><span id="c-new" class="value">–</span></div>
+      <div class="card"><span class="label">New</span><span id="c-new-status" class="value">–</span></div>
       <div class="card"><span class="label">Investigating</span><span id="c-investigating" class="value">–</span></div>
+      <div class="card"><span class="label">Awaiting player test</span><span id="c-awaiting_player_test" class="value">–</span></div>
       <div class="card"><span class="label">Fixed</span><span id="c-fixed" class="value">–</span></div>
       <div class="card"><span class="label">Cannot reproduce</span><span id="c-cannot_reproduce" class="value">–</span></div>
       <div class="card"><span class="label">Duplicate</span><span id="c-duplicate" class="value">–</span></div>
@@ -58,13 +59,21 @@ export const ADMIN_HTML = String.raw`<!doctype html>
         <label for="filter-status">Status</label>
         <select id="filter-status">
             <option value="">All statuses</option>
-            <option value="new">Open</option>
+            <option value="new">New</option>
             <option value="investigating">Investigating</option>
+            <option value="awaiting_player_test">Awaiting player test</option>
             <option value="fixed">Fixed</option>
             <option value="cannot_reproduce">Cannot reproduce</option>
             <option value="duplicate">Duplicate</option>
             <option value="not_a_bug">Not a bug</option>
             <option value="closed">Closed</option>
+        </select>
+        <label for="filter-feedback">Player feedback</label>
+        <select id="filter-feedback">
+            <option value="">All</option>
+            <option value="pending">Awaiting response</option>
+            <option value="fixed">Player confirmed fixed</option>
+            <option value="not_fixed">Still happening</option>
         </select>
       </div>
       <p id="empty" class="empty" hidden>No bug reports yet.</p>
@@ -85,8 +94,9 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <div class="status-form">
         <label for="status">Status</label>
         <select id="status">
-            <option value="new">Open</option>
+            <option value="new">New</option>
             <option value="investigating">Investigating</option>
+            <option value="awaiting_player_test">Awaiting player test</option>
             <option value="fixed">Fixed</option>
             <option value="cannot_reproduce">Cannot reproduce</option>
             <option value="duplicate">Duplicate</option>
@@ -94,13 +104,19 @@ export const ADMIN_HTML = String.raw`<!doctype html>
             <option value="closed">Closed</option>
         </select>
         <p id="status-meaning" class="muted"></p>
+        <div id="feedback" class="feedback" hidden>
+          <h3>Player feedback</h3>
+          <p id="feedback-state" class="feedback-state"></p>
+          <dl id="feedback-facts" class="facts"></dl>
+        </div>
         <div id="fixed-field" class="status-field" hidden>
           <label for="fixed">Fixed in version</label>
           <input id="fixed" type="text" maxlength="32" autocomplete="off" placeholder="0.1.1">
         </div>
         <div class="status-field">
-          <label for="message">Message to player</label>
+          <label id="message-label" for="message">Message to player</label>
           <textarea id="message" rows="3" maxlength="500"></textarea>
+          <p id="message-hint" class="muted">Shown to the player in My Reports as a message from the developer. Leave it empty for none.</p>
         </div>
         <div class="toolbar">
           <button id="status-save" type="button">Save status</button>
@@ -112,7 +128,7 @@ export const ADMIN_HTML = String.raw`<!doctype html>
       <pre id="log" class="log" tabindex="0"></pre>
       <div class="danger-zone">
         <h3>Delete report</h3>
-        <p class="muted">Permanently removes this report, its log and the status its player sees. Meant for test and unwanted reports.</p>
+        <p class="muted">Permanently removes this report, its log, its crash dump, its player feedback and the status its player sees. Meant for test and unwanted reports.</p>
         <button id="delete-open" type="button" class="danger">Delete report</button>
       </div>
     </div>
@@ -121,7 +137,7 @@ export const ADMIN_HTML = String.raw`<!doctype html>
 <div id="delete-backdrop" class="backdrop" hidden>
   <div id="delete-dialog" class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="delete-title" aria-describedby="delete-text">
     <h2 id="delete-title"></h2>
-    <p id="delete-text">This removes the stored report and log and cannot be undone.</p>
+    <p id="delete-text">This removes the stored report, its log and its crash dump, and cannot be undone. The player keeps their local copy and sees the report as no longer available.</p>
     <p id="delete-error" class="error" role="alert"></p>
     <div class="dialog-actions">
       <button id="delete-cancel" type="button" class="quiet">Cancel</button>
@@ -145,6 +161,7 @@ export const ADMIN_CSS = String.raw`:root {
   --text-muted: #6d6c67;
   --accent: #2a78d6;
   --error: #b42318;
+  --ok: #1a7f37;
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
@@ -158,6 +175,7 @@ export const ADMIN_CSS = String.raw`:root {
     --text-muted: #9a998f;
     --accent: #3987e5;
     --error: #f97066;
+    --ok: #3fb950;
   }
 }
 :root[data-theme="dark"] {
@@ -171,6 +189,7 @@ export const ADMIN_CSS = String.raw`:root {
   --text-muted: #9a998f;
   --accent: #3987e5;
   --error: #f97066;
+  --ok: #3fb950;
 }
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
@@ -264,7 +283,17 @@ th { color: var(--text-secondary); font-weight: 600; }
   #list .col-launcher, #list .col-region { display: none; }
   #list td.summary { min-width: 10em; }
 }
+#list td.col-feedback { white-space: normal; min-width: 9em; }
 #list tr.selected td { background: var(--surface-0); }
+.badge { display: inline-block; padding: 0 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 12px; white-space: nowrap; color: var(--text-primary); }
+.badge::before { content: ""; display: inline-block; width: 8px; height: 8px; margin-right: 6px; border-radius: 50%; background: var(--text-muted); }
+.badge.fixed { border-color: var(--ok); font-weight: 600; }
+.badge.fixed::before { background: var(--ok); }
+.badge.not_fixed { border-color: var(--error); font-weight: 600; }
+.badge.not_fixed::before { background: var(--error); }
+.feedback { margin: 0 0 16px; }
+.feedback-state { margin: 0 0 8px; }
+.feedback .facts { margin: 0; }
 #list button.ticket { background: transparent; color: var(--text-primary); border: 0; padding: 0; text-decoration: underline; cursor: pointer; }
 .detail { margin-top: 16px; }
 .detail h2 { margin: 0; }
@@ -308,14 +337,16 @@ export const ADMIN_JS = String.raw`(function () {
   var $ = function (id) { return document.getElementById(id); };
   var stampLabel = new Intl.DateTimeFormat('en-GB', { timeZone: ZONE, day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   var STATUSES = {
-    new: ['Open', 'The report has not been reviewed yet.'],
+    new: ['New', 'The report has not been reviewed yet.'],
     investigating: ['Investigating', 'The report is being investigated.'],
+    awaiting_player_test: ['Awaiting player test', 'The launcher asks the player whether this fixed the issue, with the instructions below. Their answer never changes the status; saving a change asks again.'],
     fixed: ['Fixed', 'The problem has been corrected.'],
     cannot_reproduce: ['Cannot reproduce', 'The problem could not be reproduced with the available information.'],
     duplicate: ['Duplicate', 'The same problem is already tracked by another report.'],
     not_a_bug: ['Not a bug', 'The reported behavior is expected or is not a bug of this port.'],
     closed: ['Closed', 'The report was intentionally finished without a specific fix or another more precise status. It does not mean Fixed.']
   };
+  var FEEDBACK = { pending: 'Awaiting response', fixed: 'Player confirmed fixed', not_fixed: 'Still happening' };
   // Named by string: the page tests forbid any CSS-style address call in the script text.
   var OBJECT_MAKE = 'createObjectURL';
   var OBJECT_DROP = 'revokeObjectURL';
@@ -388,8 +419,10 @@ export const ADMIN_JS = String.raw`(function () {
     var version = $('filter-version').value;
     var os = $('filter-os').value;
     var status = $('filter-status').value;
+    var feedback = $('filter-feedback').value;
     return reports.filter(function (r) {
-      return (!version || r.launcher_version === version) && (!os || r.operating_system === os) && (!status || r.status === status);
+      return (!version || r.launcher_version === version) && (!os || r.operating_system === os) && (!status || r.status === status) &&
+        (!feedback || r.player_feedback === feedback);
     });
   }
 
@@ -411,10 +444,34 @@ export const ADMIN_JS = String.raw`(function () {
     list.appendChild(el('dd', '', value || '–'));
   }
 
+  function badge(feedback) {
+    return FEEDBACK[feedback] ? el('span', 'badge ' + feedback, FEEDBACK[feedback]) : null;
+  }
+
   function showStatusMeaning() {
     var status = $('status').value;
+    var testing = status === 'awaiting_player_test';
     $('status-meaning').textContent = STATUSES[status] ? STATUSES[status][1] : '';
     $('fixed-field').hidden = status !== 'fixed';
+    $('message-label').textContent = testing ? 'What the player should test' : 'Message to player';
+    $('message-hint').textContent = testing
+      ? 'Required. Shown to the player with Did this fix the issue? and the answers Yes, fixed and No, still happening.'
+      : 'Shown to the player in My Reports as a message from the developer. Leave it empty for none.';
+  }
+
+  function showFeedback(r) {
+    var facts = $('feedback-facts');
+    clear(facts);
+    var current = FEEDBACK[r.player_feedback];
+    var earlier = r.last_feedback && (r.status !== 'awaiting_player_test' || r.last_feedback_revision !== r.status_updated_at);
+    $('feedback').hidden = !current && !r.last_feedback;
+    $('feedback-state').textContent = current || 'No open test request.';
+    if (!r.last_feedback) return;
+    fact(facts, earlier ? 'Earlier answer' : 'Answer', FEEDBACK[r.last_feedback]);
+    fact(facts, 'Answered', stampLabel.format(r.last_feedback_at) + ' (Sao Paulo)');
+    fact(facts, 'Request of', stampLabel.format(r.last_feedback_revision) + ' (Sao Paulo)');
+    fact(facts, 'Launcher version used', r.last_feedback_launcher_version);
+    fact(facts, 'Game build used', r.last_feedback_game_build);
   }
 
   function statusForm(r) {
@@ -423,15 +480,16 @@ export const ADMIN_JS = String.raw`(function () {
     $('message').value = r.player_message || '';
     $('status-note').textContent = '';
     showStatusMeaning();
+    showFeedback(r);
   }
 
   var SESSION_ENDS = { clean: 'Normal exit', crash: 'Crash', device_lost: 'GPU device lost', stopped: 'Stopped by an error',
     startup_failure: 'Could not start', unsupported_build: 'Unsupported game build', unknown: 'Unknown' };
 
   function dumpLabel(r) {
-    if (r.dump_status === 'stored') return 'Attached, ' + r.dump_file + ' (' + fmt(r.dump_bytes) + ' bytes)';
+    if (r.dump_status === 'stored') return 'Stored, ' + r.dump_file + ' (' + fmt(r.dump_bytes) + ' bytes)';
     if (r.dump_status === 'uploading') return 'Announced, upload not finished (' + r.dump_file + ')';
-    return 'None';
+    return 'No crash report';
   }
 
   function showDetail(r) {
@@ -464,6 +522,8 @@ export const ADMIN_JS = String.raw`(function () {
     fact(facts, 'Original log file', r.log_file);
     fact(facts, 'Log clipped', r.log_clipped === 'yes' ? 'Yes, only its end was sent' : 'No');
     fact(facts, 'Crash dump', dumpLabel(r));
+    fact(facts, 'Status updated', stampLabel.format(r.status_updated_at) + ' (Sao Paulo)');
+    fact(facts, 'Message updated', r.player_message && r.message_updated_at ? stampLabel.format(r.message_updated_at) + ' (Sao Paulo)' : '');
     $('download-dump').hidden = r.dump_status !== 'stored';
     $('log-name').textContent = 'Sanitized log';
     $('log').textContent = logText;
@@ -539,6 +599,10 @@ export const ADMIN_JS = String.raw`(function () {
     if (!ticket) return Promise.resolve();
     var status = $('status').value;
     var change = { status: status, fixed_version: status === 'fixed' ? $('fixed').value.trim() : '', player_message: $('message').value };
+    if (status === 'awaiting_player_test' && !change.player_message.trim()) {
+      $('status-note').textContent = 'Write what the player should test first.';
+      return Promise.resolve();
+    }
     return request('/admin/api/reports/' + encodeURIComponent(ticket) + '/status', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(change)
     }).then(function (r) {
@@ -546,7 +610,7 @@ export const ADMIN_JS = String.raw`(function () {
       return r.json();
     }).then(function (saved) {
       reports.forEach(function (r) {
-        if (r.ticket === ticket) { r.status = saved.status; r.status_updated_at = saved.status_updated_at; }
+        if (r.ticket === ticket) { r.status = saved.status; r.status_updated_at = saved.status_updated_at; r.player_feedback = saved.player_feedback; }
       });
       renderCards();
       renderList();
@@ -617,7 +681,16 @@ export const ADMIN_JS = String.raw`(function () {
     return td;
   }
 
-  var LIST_COLUMNS = [['Report ID', 'col-id'], ['Status', 'col-status'], ['Submitted', 'col-submitted'], ['Launcher', 'col-launcher'],
+  function feedbackCell(r) {
+    var shown = badge(r.player_feedback);
+    if (!shown) return el('td', 'muted', '–');
+    var td = el('td');
+    td.appendChild(shown);
+    return td;
+  }
+
+  var LIST_COLUMNS = [['Report ID', 'col-id'], ['Status', 'col-status'], ['Player feedback', 'col-feedback'], ['Submitted', 'col-submitted'],
+    ['Launcher', 'col-launcher'],
     ['Game build', 'col-build'], ['Region', 'col-region'], ['Operating system', 'col-os'], ['Renderer · GPU', 'col-gpu'], ['Description', 'summary']];
 
   function renderList() {
@@ -629,7 +702,7 @@ export const ADMIN_JS = String.raw`(function () {
     node.appendChild(head);
     rows.forEach(function (r) {
       var tr = el('tr', r.ticket === openTicket ? 'selected' : '');
-      var cells = [ticketCell(r), statusLabel(r.status), stampLabel.format(r.ms), r.launcher_version, gameText(r), r.region || '–',
+      var cells = [ticketCell(r), statusLabel(r.status), feedbackCell(r), stampLabel.format(r.ms), r.launcher_version, gameText(r), r.region || '–',
         r.operating_system, gpuText(r), r.preview];
       cells.forEach(function (cell, i) {
         var td = typeof cell === 'string' ? el('td', '', cell) : cell;
@@ -721,6 +794,7 @@ export const ADMIN_JS = String.raw`(function () {
   $('filter-version').addEventListener('change', renderList);
   $('filter-os').addEventListener('change', renderList);
   $('filter-status').addEventListener('change', renderList);
+  $('filter-feedback').addEventListener('change', renderList);
   $('status').addEventListener('change', showStatusMeaning);
   $('status-save').addEventListener('click', saveStatus);
   $('download').addEventListener('click', downloadLog);

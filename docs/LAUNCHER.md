@@ -157,22 +157,25 @@ Vulkan operation, result, stage, GPU, driver and fault summary) and the last sta
 
 When the game crashes it writes `logs\shadow_of_the_beast_NNN.dmp` beside the session's log (thread stacks and module lists,
 no heap and no environment block) and names it in that log; the newest five dumps are kept. For the selected log the page
-offers **Attach crash dump**, on by default, only for that session's own dump: exactly that name in the same folder, a
+offers **Attach crash report**, on by default, only for that session's own dump: exactly that name in the same folder, a
 regular file the log names, written within two minutes of the log's end, 1 KiB to 8 MiB and starting with `MDMP`. A dump
 that fails a check is never sent and the page says why; the report goes without it. The dump is uploaded after the report in
 1 MiB chunks under the report's receipt and resumes from what the service already holds. If it does not arrive, the report
-stays sent and **Retry crash dump upload** sends only the dump again, under the same Report ID. Only the dump's file name,
+stays sent and **Retry crash report upload** sends only the dump again, under the same Report ID. Only the dump's file name,
 size and SHA-256 are in the report; no folder of the PC is sent.
 
 ### My Reports
 
 The reports sent from this PC (the newest 30) are listed under the form. The launcher asks the service about them off the UI
-thread when it starts, while the page is open once the last check is thirty seconds old, and on **Refresh**; nothing is asked when
-the list is empty.
+thread when it starts, when the page is entered (unless a check ran in the last ten seconds), every three minutes while the
+page stays open, and on **Refresh**; one check at a time, and nothing is asked when the list is empty. A failed check keeps
+the last known status and message. The page's first visit shows **Loading Bug Report...** while the game logs are listed off
+the UI thread.
 
-- A changed status marks the report **Updated**. A developer message that is new or changed is a **New reply**: the row shows a
-  New reply marker, the Bug Report item in the sidebar shows its dot, and the page shows "A report has a new reply" with
-  **Show**. A reply comes before a plain update.
+- A changed status marks the report **Updated**. A developer message that is new, changed, or saved again as a new revision is
+  a **New reply**: the row shows a New reply marker, the Bug Report item in the sidebar shows its dot, and the page shows "A
+  report has a new reply" with **Show**. A reply comes before a plain update, and reports with an unread reply are listed
+  first. A status change alone is never a reply.
 - Opening the page clears nothing. A report counts as seen only when it is opened, which also shows the **Message from
   developer** panel.
 - When the service answers a status check without a report that was asked about, the report is marked **No longer available**.
@@ -181,6 +184,15 @@ the list is empty.
 
 Failures never block the launcher or **Play**: requests run on their own threads with timeouts of 8 s to connect, 15 s to send,
 20 s to receive and 30 s in all, are cancelled between steps when the launcher closes, and end in a plain message.
+
+### Player tests
+
+When the developer sets a report to **Awaiting player test**, the message from the developer says what to test and the report
+asks **Did this fix the issue?** with **Yes, fixed** and **No, still happening**. The answer is sent with the report's receipt,
+the port version and the game build, for that one request (the status time it was shown with); a newer request asks again,
+and an answer to an older one is refused. The first answer to a request is final. The answer never changes the status: the
+developer sets **Fixed** or anything else. After **No, still happening** the report stays as it is and **Send a new report**
+returns to the form above, which sends nothing until **Send report** is pressed, so the new report carries a current log.
 
 ### Service address
 

@@ -24,6 +24,7 @@
 #include "lzcnt_compat.h"
 #include "runtime.h"
 #include "runtime_log.h"
+#include "simulate_crash.h"
 #include "sotb_launcher.h"
 #include "sotb_sdl_compat.h"
 #include "sotbgpu.h"
@@ -1138,6 +1139,7 @@ int main(int argc, char **argv) {
     boot = paths.boot;
     content_profile = paths.content_profile;
     app0 = paths.app0;
+    if (!cpu_only && !check_imports && !verify_slots) sotb_simulate_crash_from_environment();
 
     sotb_prepare_sdl_gamepad();
     SotbGameBuild game_build;

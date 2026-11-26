@@ -186,7 +186,7 @@ test('a status change reaches the owner with the fixed version and the developer
   assert.equal(saved.status, 'fixed');
   const answer = await (await lookup(env, '/v1/reports/status', { reports: [claim(mine)] })).json();
   assert.deepEqual(answer.reports[0], { ticket: mine.body.ticket, status: 'fixed', status_updated_at: env.clock.now,
-    fixed_version: '0.1.1', player_message: 'Fixed in the next build.' });
+    fixed_version: '0.1.1', player_message: 'Fixed in the next build.', message_updated_at: env.clock.now });
   const unchanged = env.service.setStatus(mine.body.ticket, readStatusChange({ status: 'fixed', fixed_version: '0.1.1', player_message: 'Fixed in the next build.' }).change);
   assert.equal(unchanged.status_updated_at, env.clock.now);
 });

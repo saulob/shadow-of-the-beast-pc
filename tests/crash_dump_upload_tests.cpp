@@ -405,13 +405,13 @@ void WriteContract(const fs::path& scratch) {
     CHECK(fs::file_size(here / "bug-report-dump-upload.json") > crash.bytes.size());
 }
 
-// The page connects only from Send report and from Retry crash dump upload, and a retry never files the report again.
+// The page connects only from Send report and from Retry crash report upload, and a retry never files the report again.
 void TestPageWiring() {
     const std::string page = Source("launcher/incident_page.cpp");
     const std::string client = Source("launcher/incident_client.cpp");
     CHECK(Count(page, "FileReport(") == 1 && Count(page, "UploadCrashDump(") == 2);
     CHECK(Has(page, "if (CanRetryDump(State(), sent_dump_.has_value(), !result_->credential.empty()) &&\n"
-                    "            ImGui::Button(Tr(\"Retry crash dump upload\"))) {\n"
+                    "            ImGui::Button(Tr(\"Retry crash report upload\"))) {\n"
                     "            RetryDump();"));
     CHECK(Count(page, "RetryDump();") == 1);
     const size_t retry = page.find("void IncidentPage::RetryDump()");

@@ -111,6 +111,18 @@ struct SentReportRead {
 };
 SentReportRead FetchSentReport(const ServiceConfig& config, const TrackedReport& report);
 
+// kStale: the request it answered is no longer open, it was already answered otherwise, or the report is gone; check again.
+enum class FeedbackOutcome { kSaved, kStale, kUnreachable, kFailed };
+
+struct FeedbackAnswer {
+    FeedbackOutcome outcome = FeedbackOutcome::kFailed;
+    std::string code; // the service's error code, or what went wrong locally; never report text
+};
+
+// The answer to the open player test request of `report` (its status time is the revision). The receipt is the only proof
+// sent, with the launcher version and game build used for the test; the status itself never changes from here. Blocks.
+FeedbackAnswer SendTestFeedback(const ServiceConfig& config, const TrackedReport& report, std::string_view result, const ReportFacts& facts);
+
 // What My Reports keeps of a sent report.
 TrackedReport TrackedReportOf(const IncidentPackage& package, const ReportReceipt& receipt);
 

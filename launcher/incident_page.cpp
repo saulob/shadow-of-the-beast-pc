@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -25,6 +26,9 @@ constexpr float kDescriptionHeight = 112.0f;
 constexpr float kPreviewHeight = 300.0f;
 constexpr float kAlertTint = 0.16f, kAlertFlashTint = 0.5f;
 constexpr float kAlertFlashSeconds = 0.9f;
+// Returning to the page asks again unless a check just ran; while it stays open, a check every few minutes is enough.
+constexpr auto kEnteredCheck = std::chrono::seconds(10);
+constexpr auto kOpenPageCheck = std::chrono::minutes(3);
 
 const char* kCrashDumpHelp =
     "Sends this session's crash dump after the report to help find the cause. A crash dump holds the program's threads and "
@@ -155,10 +159,18 @@ IncidentPage::~IncidentPage() {
 }
 
 void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
-    if (!logs_found_) FindLogs();
+    const int frame = ImGui::GetFrameCount();
+    const bool entered = frame != last_drawn_frame_ + 1;
+    last_drawn_frame_ = frame;
+    CollectLogScan();
     CollectDelivery();
     CollectDumpRetry();
-    my_reports_.RefreshIfStale(service_);
+    my_reports_.RefreshIfStale(service_, entered ? kEnteredCheck : kOpenPageCheck);
+    if (!logs_found_) {
+        StartLogScan();
+        DrawLoadingView(ui, "Loading Bug Report...");
+        return;
+    }
     const bool sending = SendBusy(State());
     if (CheckDraft(description_, !logs_.empty()) != problem_) problem_ = DraftProblem::kNone;
     KeepClearOfScrollbar(std::floor(trg::layout::kContentPadding * ui.scale()));
@@ -172,6 +184,7 @@ void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
             my_reports_.ShowUpdate();
         }
     }
+    form_top_ = ImGui::GetCursorPosY();
     ui.Heading("1. Report the problem");
     DrawDescription(ui, sending);
     ui.Heading("2. Choose one game log");
@@ -181,8 +194,13 @@ void IncidentPage::Draw(trg::Ui& ui, const ReportFacts& facts) {
     ui.Heading("4. Send");
     DrawSend(ui, facts, sending);
     ui.EndRows();
-    my_reports_.Draw(ui, service_);
+    my_reports_.Draw(ui, service_, facts);
     ui.EndRows();
+    if (my_reports_.TakeNewReportRequest()) {
+        new_report_requested_ = true;
+        focus_description_ = true;
+        ImGui::SetScrollY(form_top_);
+    }
 }
 
 SendState IncidentPage::State() const {
@@ -194,10 +212,24 @@ SendState IncidentPage::State() const {
     return ClassifySend(in_flight);
 }
 
-void IncidentPage::FindLogs() {
-    logs_ = FindGameLogs(places_.logs_dir, places_.running_log);
+// Reading the sessions and their dumps touches several files, so it runs beside the page; the logs already listed stay
+// until the new list is ready.
+void IncidentPage::StartLogScan() {
+    if (scan_) return;
+    scan_ = std::make_shared<LogScan>();
+    std::thread([scan = scan_, folder = places_.logs_dir, running_log = places_.running_log] {
+        scan->logs = FindGameLogs(folder, running_log);
+        scan->done = true;
+    }).detach();
+}
+
+void IncidentPage::CollectLogScan() {
+    if (!scan_ || !scan_->done) return;
+    logs_ = std::move(scan_->logs);
+    scan_.reset();
     logs_found_ = true;
     SelectLog(DefaultGameLog(logs_));
+    DraftChanged();
 }
 
 // Choosing a log chooses its crash dump too: attached unless the player says otherwise, and only when it can be sent.
@@ -230,6 +262,7 @@ void IncidentPage::CollectDelivery() {
     sent_dump_ = delivery_->package->crash_dump;
     if (result_->outcome == ReportOutcome::kSent) {
         Log("Bug report: sent as " + result_->ticket);
+        new_report_requested_ = false;
         sent_report_remembered_ = my_reports_.Remember(*delivery_->package, *result_);
         description_[0] = '\0';
         DraftChanged();
@@ -242,7 +275,10 @@ void IncidentPage::CollectDelivery() {
 
 void IncidentPage::CollectDumpRetry() {
     if (!dump_retry_ || !dump_retry_->done) return;
-    if (result_) result_->dump = dump_retry_->outcome;
+    if (result_) {
+        result_->dump = dump_retry_->outcome;
+        my_reports_.NoteCrashDump(result_->ticket, dump_retry_->outcome);
+    }
     dump_retry_.reset();
     bring_result_into_view_ = true;
 }
@@ -267,7 +303,7 @@ std::shared_ptr<const IncidentPackage> IncidentPage::BuildPackage(const ReportFa
     if (!package) {
         log_failed_ = true;
         bring_problem_into_view_ = true;
-        FindLogs();
+        StartLogScan();
         return nullptr;
     }
     if (package->crash_dump_requested && !package->crash_dump) {
@@ -325,6 +361,8 @@ void IncidentPage::Save(const ReportFacts& facts) {
 void IncidentPage::DrawDescription(trg::Ui& ui, bool sending) {
     ui.EndRows();
     const bool too_short = problem_ == DraftProblem::kDescriptionTooShort;
+    if (new_report_requested_) ui.Help("Describe what still happens and choose the newest log. Nothing is sent until you press Send report.");
+    if (std::exchange(focus_description_, false)) ImGui::SetKeyboardFocusHere();
     if (too_short && std::exchange(bring_problem_into_view_, false)) ImGui::SetKeyboardFocusHere();
     const ImVec4 frame = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
     ImGui::BeginDisabled(sending);
@@ -391,7 +429,7 @@ void IncidentPage::DrawCrashDump(trg::Ui& ui, bool sending) {
     ui.Spacer(4);
     ImGui::BeginDisabled(sending || !attachable);
     bool attach = attach_crash_dump_ && attachable;
-    if (ImGui::Checkbox(Tr("Attach crash dump"), &attach)) {
+    if (ImGui::Checkbox(Tr("Attach crash report"), &attach)) {
         attach_crash_dump_ = attach;
         DraftChanged();
     }
@@ -482,7 +520,7 @@ void IncidentPage::DrawDumpResult(trg::Ui& ui) {
     case DumpUpload::kFailed:
         WarningText(ui, "The report was sent, but its crash dump could not be uploaded.");
         if (CanRetryDump(State(), sent_dump_.has_value(), !result_->credential.empty()) &&
-            ImGui::Button(Tr("Retry crash dump upload"))) {
+            ImGui::Button(Tr("Retry crash report upload"))) {
             RetryDump();
         }
         break;

@@ -18,7 +18,7 @@ namespace Sotb {
 
 // The launcher's Bug Report page: report the problem, choose one game log, preview what will be sent, send it. Nothing is
 // sent until the player presses Send report. A connection is opened to ask about reports already sent, and only when there
-// are some.
+// are some, and to send an answer to a player test, only from its buttons.
 class IncidentPage {
 public:
     struct Places {
@@ -52,9 +52,14 @@ private:
         std::atomic<bool> done{false};
         DumpUpload outcome = DumpUpload::kFailed;
     };
+    struct LogScan {
+        std::atomic<bool> done{false};
+        std::vector<GameLog> logs;
+    };
 
     SendState State() const;
-    void FindLogs();
+    void StartLogScan();
+    void CollectLogScan();
     void SelectLog(size_t index);
     void DraftChanged();
     void ForgetPreview();
@@ -85,6 +90,11 @@ private:
     char description_[kMostDescriptionCharacters * 4 + 1] = {};
     std::vector<GameLog> logs_;
     bool logs_found_ = false;
+    std::shared_ptr<LogScan> scan_;
+    int last_drawn_frame_ = -2;
+    float form_top_ = 0.0f;
+    bool new_report_requested_ = false;
+    bool focus_description_ = false;
     size_t selected_ = 0;
     DraftProblem problem_ = DraftProblem::kNone;
     double problem_time_ = 0.0;

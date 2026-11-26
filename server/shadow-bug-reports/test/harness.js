@@ -23,6 +23,7 @@ export function makeEnv(options = {}) {
     submit: async (...args) => service.submit(...args),
     statuses: async (...args) => service.statuses(...args),
     read: async (...args) => service.read(...args),
+    feedback: async (...args) => service.feedback(...args),
     dumpStatus: async (...args) => service.dumpStatus(...args),
     dumpChunk: async (...args) => service.dumpChunk(...args),
     dump: async (ticket) => service.dump(ticket),

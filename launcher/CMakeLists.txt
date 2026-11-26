@@ -192,13 +192,15 @@ target_compile_options(sotb-bug-report-tests PRIVATE -Wall -Wextra)
 
 # Crash reports without a window or a network: dump pairing and checks, the resumable upload against a stand-in service,
 # device-lost sessions from the monitor's own lines, and the startup stage.
-set(SOTB_CRASH_REPORT_TESTS sotb-crash-dump-upload-tests sotb-device-lost-reporting-tests sotb-startup-diagnostics-tests)
+set(SOTB_CRASH_REPORT_TESTS sotb-crash-dump-upload-tests sotb-device-lost-reporting-tests sotb-startup-diagnostics-tests
+    sotb-simulate-crash-tests)
 if (WIN32)
     add_executable(sotb-crash-dump-correlation-tests EXCLUDE_FROM_ALL ../tests/crash_dump_correlation_tests.cpp ../src/crash_dump.c
         ../src/runtime_log.c ../src/runtime_session_log.c)
     list(APPEND SOTB_CRASH_REPORT_TESTS sotb-crash-dump-correlation-tests)
 endif()
 add_executable(sotb-crash-dump-upload-tests EXCLUDE_FROM_ALL ../tests/crash_dump_upload_tests.cpp)
+add_executable(sotb-simulate-crash-tests EXCLUDE_FROM_ALL ../tests/simulate_crash_tests.cpp ../src/simulate_crash.c)
 add_executable(sotb-device-lost-reporting-tests EXCLUDE_FROM_ALL ../tests/device_lost_reporting_tests.cpp)
 target_include_directories(sotb-device-lost-reporting-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shadps4)
 add_executable(sotb-startup-diagnostics-tests EXCLUDE_FROM_ALL ../tests/startup_diagnostics_tests.cpp ../src/module_history.c)

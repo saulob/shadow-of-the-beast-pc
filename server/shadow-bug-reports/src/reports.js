@@ -33,7 +33,9 @@ export const REPORT = {
   submissionKeptMs: DAY_MS,
 };
 
-export const REPORT_STATUSES = ['new', 'investigating', 'fixed', 'cannot_reproduce', 'duplicate', 'not_a_bug', 'closed'];
+export const AWAITING_TEST = 'awaiting_player_test';
+export const REPORT_STATUSES = ['new', 'investigating', AWAITING_TEST, 'fixed', 'cannot_reproduce', 'duplicate', 'not_a_bug', 'closed'];
+export const TEST_RESULTS = ['fixed', 'not_fixed'];
 export const SESSION_ENDS = ['unknown', 'clean', 'crash', 'device_lost', 'stopped', 'startup_failure', 'unsupported_build'];
 
 const LOG_FILE = /^shadow_of_the_beast_[0-9]{3,10}\.log$/;
@@ -47,6 +49,7 @@ const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,31}$/;
 const TICKET = /^SOB-[A-HJ-NP-Z2-9]{6}$/;
 const RECEIPT = /^[0-9a-f]{64}$/;
 const STATUS_FIELDS = new Set(['status', 'fixed_version', 'player_message']);
+const FEEDBACK_FIELDS = new Set(['ticket', 'receipt', 'revision', 'result', 'launcher_version', 'game_build']);
 const TICKET_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 
 // SOB-XXXXXX from six random bytes; the alphabet has 32 letters, so each byte maps without bias.
@@ -231,32 +234,101 @@ export function readClaims(body) {
   return claims.includes(null) ? null : claims;
 }
 
-// An admin's change: { change } or { detail }. A fixed version exists only on a Fixed report, so a stale one never shows.
+// An admin's change: { change } or { detail }. A field left out keeps its stored value, so a message is cleared only when
+// sent empty. A fixed version exists only on a Fixed report, and a player test needs its instructions.
 export function readStatusChange(body) {
   if (body === null || typeof body !== 'object' || Array.isArray(body)) return { detail: 'body' };
   for (const key of Object.keys(body)) if (!STATUS_FIELDS.has(key)) return { detail: key };
-  const { status, fixed_version: version = '', player_message: message = '' } = body;
+  const { status } = body;
   if (!REPORT_STATUSES.includes(status)) return { detail: 'status' };
-  if (typeof version !== 'string' || (status === 'fixed' && version && !VERSION.test(version))) return { detail: 'fixed_version' };
-  if (typeof message !== 'string' || HAS_FORBIDDEN.test(message) || message.includes('\r')) return { detail: 'player_message' };
-  if (Array.from(message).length > REPORT.messageChars) return { detail: 'player_message' };
-  return { change: { status, fixed_version: status === 'fixed' ? version : '', player_message: message.trim() } };
+  const change = { status };
+  if (Object.hasOwn(body, 'fixed_version')) {
+    const version = body.fixed_version;
+    if (typeof version !== 'string' || (version && (status !== 'fixed' || !VERSION.test(version)))) return { detail: 'fixed_version' };
+    if (status === 'fixed') change.fixed_version = version;
+  }
+  if (status !== 'fixed') change.fixed_version = '';
+  if (Object.hasOwn(body, 'player_message')) {
+    const message = body.player_message;
+    if (typeof message !== 'string' || HAS_FORBIDDEN.test(message) || message.includes('\r')) return { detail: 'player_message' };
+    if (Array.from(message).length > REPORT.messageChars) return { detail: 'player_message' };
+    change.player_message = message.trim();
+  }
+  if (status === AWAITING_TEST && !change.player_message) return { detail: 'test_instructions' };
+  return { change };
+}
+
+// { feedback } or { detail }. Whether the revision is the open request is decided by ReportDesk.answer.
+export function readFeedback(body) {
+  if (body === null || typeof body !== 'object' || Array.isArray(body)) return { detail: 'body' };
+  for (const key of Object.keys(body)) if (!FEEDBACK_FIELDS.has(key)) return { detail: key.slice(0, REPORT.metadataChars) };
+  const claim = readClaim(body);
+  if (!claim) return { detail: 'receipt' };
+  if (!Number.isSafeInteger(body.revision) || body.revision <= 0) return { detail: 'revision' };
+  if (!TEST_RESULTS.includes(body.result)) return { detail: 'result' };
+  const launcher = body.launcher_version ?? '';
+  if (typeof launcher !== 'string' || (launcher && !VERSION.test(launcher))) return { detail: 'launcher_version' };
+  const build = body.game_build ?? '';
+  if (typeof build !== 'string' || HAS_CONTROL.test(build) || build !== build.trim() || Array.from(build).length > REPORT.metadataChars) {
+    return { detail: 'game_build' };
+  }
+  return { feedback: { claim, revision: body.revision, result: body.result, launcher_version: launcher, game_build: build } };
 }
 
 const LIST_COLUMNS = `reports.ticket AS ticket, ms, launcher_version, game_build, region, game_version, operating_system, cpu,
   renderer_selected, renderer, gpu, driver, render_resolution, session_end, log_file, log_clipped,
   substr(description, 1, ${REPORT.previewChars}) AS preview, COALESCE(t.status, 'new') AS status,
   COALESCE(t.status_ms, ms) AS status_updated_at,
+  CASE WHEN t.status = '${AWAITING_TEST}' THEN CASE WHEN t.feedback_revision = t.status_ms AND t.feedback <> '' THEN t.feedback
+    ELSE 'pending' END ELSE '' END AS player_feedback,
   COALESCE((SELECT CASE complete WHEN 1 THEN 'stored' ELSE 'uploading' END FROM report_dumps d WHERE d.ticket = reports.ticket),
     'none') AS dump_status`;
 
-const SESSION_COLUMNS = ['session_end', 'session_detail', 'session_stage'];
+const SESSION_COLUMNS = ['session_end', 'session_detail', 'session_stage'].map((name) => [name, "TEXT NOT NULL DEFAULT ''"]);
+
+const TRACKING_COLUMNS = [
+  ['message_ms', 'INTEGER NOT NULL DEFAULT 0'],
+  ['feedback', "TEXT NOT NULL DEFAULT ''"],
+  ['feedback_revision', 'INTEGER NOT NULL DEFAULT 0'],
+  ['feedback_ms', 'INTEGER NOT NULL DEFAULT 0'],
+  ['feedback_launcher_version', "TEXT NOT NULL DEFAULT ''"],
+  ['feedback_game_build', "TEXT NOT NULL DEFAULT ''"],
+];
+
+// A database made before these columns gains them; its older rows read as the default.
+function addMissingColumns(sql, table, columns) {
+  for (const [column, type] of columns) {
+    try {
+      sql.get(`SELECT ${column} FROM ${table} LIMIT 0`);
+    } catch {
+      sql.run(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+    }
+  }
+}
+
+// An answer belongs to the request whose status time it names; a newer request reads as pending and the old answer stays
+// stored for the dashboard.
+const feedbackOf = (row) => {
+  if (row.status !== AWAITING_TEST) return '';
+  return row.feedback && row.feedback_revision === row.status_ms ? row.feedback : 'pending';
+};
+
+const lastAnswerOf = (row) => (TEST_RESULTS.includes(row.feedback) && row.feedback_revision > 0 ? {
+  last_feedback: row.feedback,
+  last_feedback_revision: row.feedback_revision,
+  last_feedback_at: row.feedback_ms,
+  last_feedback_launcher_version: row.feedback_launcher_version,
+  last_feedback_game_build: row.feedback_game_build,
+} : {});
 
 const statusOf = (row) => ({
   status: row.status,
   status_updated_at: row.status_ms,
   fixed_version: row.fixed_version,
   player_message: row.player_message,
+  message_updated_at: row.player_message ? row.message_ms ?? 0 : 0,
+  player_feedback: feedbackOf(row),
+  ...lastAnswerOf(row),
 });
 
 // The report store. `sql` is { all, get, run } over a SQLite database.
@@ -273,14 +345,8 @@ export class ReportDesk {
     sql.run(`CREATE TABLE IF NOT EXISTS report_tracking (ticket TEXT PRIMARY KEY, receipt_hash TEXT NOT NULL,
       submitted_ms INTEGER NOT NULL, status TEXT NOT NULL, status_ms INTEGER NOT NULL, fixed_version TEXT NOT NULL,
       player_message TEXT NOT NULL)`);
-    // A database made before the session fields gains them; its older reports read as empty.
-    for (const column of SESSION_COLUMNS) {
-      try {
-        sql.get(`SELECT ${column} FROM reports LIMIT 0`);
-      } catch {
-        sql.run(`ALTER TABLE reports ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
-      }
-    }
+    addMissingColumns(sql, 'reports', SESSION_COLUMNS);
+    addMissingColumns(sql, 'report_tracking', TRACKING_COLUMNS);
     sql.run(`CREATE TABLE IF NOT EXISTS report_dumps (ticket TEXT PRIMARY KEY, file TEXT NOT NULL, bytes INTEGER NOT NULL,
       sha256 TEXT NOT NULL, complete INTEGER NOT NULL, ms INTEGER NOT NULL)`);
     sql.run(`CREATE TABLE IF NOT EXISTS report_dump_chunks (ticket TEXT NOT NULL, pos INTEGER NOT NULL, data BLOB NOT NULL,
@@ -440,7 +506,31 @@ export class ReportDesk {
       status_updated_at: row.status_ms,
       ...(row.fixed_version ? { fixed_version: row.fixed_version } : {}),
       ...(row.player_message ? { player_message: row.player_message } : {}),
+      ...(row.player_message && row.message_ms > 0 ? { message_updated_at: row.message_ms } : {}),
+      ...this.testState(row),
     }));
+  }
+
+  testState(row) {
+    const feedback = feedbackOf(row);
+    if (!feedback) return {};
+    return { test_feedback: feedback, ...(feedback === 'pending' ? {} : { test_feedback_at: row.feedback_ms }) };
+  }
+
+  // The first answer to a request is final: the same answer again changes nothing, another one is refused, and an answer
+  // to any request but the open one is stale.
+  answer({ claim, revision, result, launcher_version: launcher, game_build: build }, now) {
+    const row = this.claimed(claim);
+    if (!row) return { code: 'not_found' };
+    if (row.status !== AWAITING_TEST || row.status_ms !== revision) return { code: 'stale_request' };
+    const given = feedbackOf(row);
+    if (given !== result) {
+      if (given !== 'pending') return { code: 'already_answered' };
+      this.sql.run(`UPDATE report_tracking SET feedback = ?, feedback_revision = ?, feedback_ms = ?, feedback_launcher_version = ?,
+        feedback_game_build = ? WHERE ticket = ?`, result, revision, now, launcher, build, row.ticket);
+    }
+    const stored = this.sql.get('SELECT * FROM report_tracking WHERE ticket = ?', row.ticket);
+    return { code: 'ok', state: { ticket: row.ticket, revision, ...this.testState(stored) } };
   }
 
   // The stored report for its owner, or null once its log is gone.
@@ -456,19 +546,28 @@ export class ReportDesk {
     const row = this.sql.get('SELECT * FROM report_tracking WHERE ticket = ?', ticket);
     if (row) return statusOf(row);
     const stored = this.sql.get('SELECT ms FROM reports WHERE ticket = ?', ticket);
-    return stored ? { status: 'new', status_updated_at: stored.ms, fixed_version: '', player_message: '' } : null;
+    return stored ? { status: 'new', status_updated_at: stored.ms, fixed_version: '', player_message: '', message_updated_at: 0,
+      player_feedback: '' } : null;
   }
 
-  // The status after the change, or null for an unknown report. A save that changes nothing keeps its time.
+  // The status after the change, or null for an unknown report. A save that changes nothing keeps its time; any other
+  // save gets a later time than the last one, so each player test request has a revision of its own.
   setStatus(ticket, change, now) {
     const current = this.status(ticket);
     if (!current) return null;
-    if (Object.keys(change).every((field) => current[field] === change[field])) return current;
+    const next = {
+      status: change.status,
+      fixed_version: change.fixed_version ?? current.fixed_version,
+      player_message: change.player_message ?? current.player_message,
+    };
+    if (Object.keys(next).every((field) => current[field] === next[field])) return current;
+    const changedAt = Math.max(now, current.status_updated_at + 1);
+    const messageAt = next.player_message === current.player_message ? current.message_updated_at : changedAt;
     const submitted = this.sql.get('SELECT ms FROM reports WHERE ticket = ?', ticket)?.ms ?? current.status_updated_at;
-    this.sql.run(`INSERT INTO report_tracking (ticket, receipt_hash, submitted_ms, status, status_ms, fixed_version, player_message)
-      VALUES (?, '', ?, ?, ?, ?, ?) ON CONFLICT(ticket) DO UPDATE SET status = excluded.status, status_ms = excluded.status_ms,
-      fixed_version = excluded.fixed_version, player_message = excluded.player_message`, ticket, submitted, change.status, now,
-    change.fixed_version, change.player_message);
+    this.sql.run(`INSERT INTO report_tracking (ticket, receipt_hash, submitted_ms, status, status_ms, fixed_version, player_message,
+      message_ms) VALUES (?, '', ?, ?, ?, ?, ?, ?) ON CONFLICT(ticket) DO UPDATE SET status = excluded.status,
+      status_ms = excluded.status_ms, fixed_version = excluded.fixed_version, player_message = excluded.player_message,
+      message_ms = excluded.message_ms`, ticket, submitted, next.status, changedAt, next.fixed_version, next.player_message, messageAt);
     return this.status(ticket);
   }
 
