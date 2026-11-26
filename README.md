@@ -37,7 +37,9 @@ All three are base game (`CATEGORY = gd`) Unreal Engine 4.8 packages (`EngineVer
 
 The package is identified by `param.sfo`, not by its file name. The launcher checks TITLE_ID, CONTENT_ID, CATEGORY,
 APP_VER and VERSION before unpacking, then the executable hash before activating the installation. Any other build is
-refused with a diagnostic block in the log.
+refused, and when it is still Shadow of the Beast (another version, region, revision or an update package) the launcher
+analyses it read-only and writes a diagnostic block to the log; nothing is installed and the installed game is not
+changed. Send that log with **Bug Report** so support for the build can be added.
 
 The package must be a decrypted (fake) PS4 PKG. A package encrypted for a retail console cannot be unpacked on a PC.
 

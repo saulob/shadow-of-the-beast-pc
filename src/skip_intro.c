@@ -26,14 +26,26 @@ static int fail(char *error, size_t size, const char *reason) {
 
 static void put32(uint8_t *at, uint32_t value) { memcpy(at, &value, sizeof(value)); }
 
-int skip_intro_apply(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+static const SotbPatchSite sites[] = {{"boot screen sequence", BOOT_TIMER_SITE, expected, sizeof(expected)}};
+
+size_t skip_intro_sites(const SotbPatchSite **out) {
+    *out = sites;
+    return sizeof(sites) / sizeof(*sites);
+}
+
+int skip_intro_check(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
     if (!image || image_size < BOOT_TIMER_SITE + SKIP_INTRO_PATCH_SIZE) {
         return fail(error, error_size, "image too short");
     }
-    uint8_t *site = image + BOOT_TIMER_SITE;
-    if (memcmp(site, expected, sizeof(expected))) {
+    if (memcmp(image + BOOT_TIMER_SITE, expected, sizeof(expected))) {
         return fail(error, error_size, "boot screen sequence does not match a supported build");
     }
+    return 1;
+}
+
+int skip_intro_apply(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!skip_intro_check(image, image_size, error, error_size)) return 0;
+    uint8_t *site = image + BOOT_TIMER_SITE;
 
     uint8_t patched[sizeof(expected)];
     memcpy(patched, expected, sizeof(patched));

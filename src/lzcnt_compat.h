@@ -60,6 +60,10 @@ size_t lzcnt_compat_stub_bytes(void);
 LzcntCompatStatus lzcnt_compat_apply(uint8_t *image, uint64_t size, const uint32_t *offsets, const LzcntShape *shapes,
                                      size_t count, uint8_t *stubs, size_t stubs_size);
 
+/* The site checks of lzcnt_compat_apply for `build`'s table, whatever the image's size and entry, without writing.
+ * `matched` gets the number of sites that hold their instruction. */
+LzcntCompatStatus lzcnt_compat_check(const uint8_t *image, uint64_t size, const LzcntBuild *build, size_t *matched);
+
 /* The same for the build whose size and entry the image has; `build` gets it. */
 LzcntCompatStatus lzcnt_compat_install(uint8_t *image, uint64_t size, uint64_t entry, uint8_t *stubs, size_t stubs_size,
                                        const LzcntBuild **build);

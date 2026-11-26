@@ -139,6 +139,28 @@ static int count(int ok, GuestPatchReport *report) {
     return ok;
 }
 
+static int byte_patch_matches(const uint8_t *image, size_t image_size, const BytePatch *patch) {
+    return patch->offset + patch->length <= image_size && matches(image + patch->offset, patch->expected, patch->length);
+}
+
+static int hook_sites_fit(size_t image_size) {
+    return image_size > OPTIONS_SITE + 8 && image_size > SHOW_SCREEN_SITE + 8 && image_size > SERIALIZE_SITES[1] + 8;
+}
+
+GuestPatchReport guest_patches_check(const uint8_t *image, size_t image_size) {
+    GuestPatchReport report = {0, 0};
+    for (size_t i = 0; i < sizeof(byte_patches) / sizeof(*byte_patches); ++i) {
+        count(image && byte_patch_matches(image, image_size, &byte_patches[i]), &report);
+    }
+    const int fits = image && hook_sites_fit(image_size);
+    for (size_t i = 0; i < sizeof(SERIALIZE_SITES) / sizeof(*SERIALIZE_SITES); ++i) {
+        count(fits && matches(image + SERIALIZE_SITES[i], SERIALIZE_EXPECTED, sizeof(SERIALIZE_EXPECTED)), &report);
+    }
+    count(fits && matches(image + SHOW_SCREEN_SITE, SHOW_SCREEN_EXPECTED, sizeof(SHOW_SCREEN_EXPECTED)), &report);
+    count(fits && matches(image + OPTIONS_SITE, OPTIONS_EXPECTED, sizeof(OPTIONS_EXPECTED)), &report);
+    return report;
+}
+
 GuestPatchReport guest_patches_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size) {
     GuestPatchReport report = {0, 0};
     image_base = image;
@@ -147,11 +169,10 @@ GuestPatchReport guest_patches_apply(uint8_t *image, size_t image_size, uint8_t 
 
     for (size_t i = 0; i < sizeof(byte_patches) / sizeof(*byte_patches); ++i) {
         const BytePatch *patch = &byte_patches[i];
-        const int ok = patch->offset + patch->length <= image_size && matches(image + patch->offset, patch->expected, patch->length);
-        if (count(ok, &report)) memcpy(image + patch->offset, patch->replacement, patch->length);
+        if (count(byte_patch_matches(image, image_size, patch), &report)) memcpy(image + patch->offset, patch->replacement, patch->length);
     }
 
-    const int fits = image_size > OPTIONS_SITE + 8 && image_size > SHOW_SCREEN_SITE + 8 && image_size > SERIALIZE_SITE + 8;
+    const int fits = hook_sites_fit(image_size);
     if (!fits || cave_size < 128 || !reachable(image, image_size, cave, cave_size)) {
         report.skipped += 4;
         return report;

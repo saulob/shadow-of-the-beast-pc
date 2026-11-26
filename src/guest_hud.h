@@ -50,6 +50,9 @@ void sotb_hud_full_canvas_tile(const SotbHudPlacement *placement, int real_width
  * is checked first; nothing is written unless all of them are the supported ones. */
 int guest_hud_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error, size_t error_size);
 
+/* The image checks of guest_hud_apply, cutscene fade included, without writing. */
+int guest_hud_check(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+
 #ifdef __cplusplus
 }
 #endif

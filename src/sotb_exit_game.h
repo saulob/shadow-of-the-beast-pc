@@ -4,6 +4,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "patch_sites.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -28,6 +30,10 @@ int sotb_exit_game_can_append_button(uint8_t screen_id, uint8_t show_bar, int32_
                                      const uint8_t *existing_hotkeys);
 int sotb_exit_game_apply(uint8_t *image, size_t image_size, const char *build_key, uint8_t *cave, size_t cave_size,
                          char *error, size_t error_size);
+/* The image checks of sotb_exit_game_apply for the build's table, without writing. */
+int sotb_exit_game_check(const uint8_t *image, size_t image_size, const char *build_key, char *error, size_t error_size);
+/* The build's four checked sites; 0 for an unknown build or fewer than 4 slots. */
+size_t sotb_exit_game_sites(const char *build_key, SotbPatchSite *sites, size_t capacity);
 
 void sotb_exit_game_set_confirm_handler(SotbExitConfirmHandler handler);
 void sotb_exit_game_set_clock(SotbExitGameClock clock);

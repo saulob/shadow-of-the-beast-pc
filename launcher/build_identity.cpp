@@ -189,28 +189,47 @@ ExecutableHeader ReadExecutableHeader(std::span<const uint8_t> head) {
         return fail("not a PS4 SELF image");
     }
     uint16_t segment_count = 0;
-    if (!Read(head, 24, segment_count)) {
+    if (!Read(head, 4, out.self_version) || !Read(head, 5, out.self_mode) || !Read(head, 6, out.self_endian) ||
+        !Read(head, 7, out.self_attributes) || !Read(head, 12, out.self_header_size) || !Read(head, 14, out.self_meta_size) ||
+        !Read(head, 16, out.self_file_size) || !Read(head, 24, segment_count)) {
         return fail("truncated SELF header");
     }
+    for (uint16_t i = 0; i < segment_count; ++i) {
+        SelfEntry entry;
+        const uint64_t at = 32 + uint64_t{i} * 32;
+        if (!Read(head, at, entry.flags) || !Read(head, at + 8, entry.offset) || !Read(head, at + 16, entry.size) ||
+            !Read(head, at + 24, entry.memory)) {
+            return fail("SELF segment table outside the bytes read");
+        }
+        out.self_entries.push_back(entry);
+    }
     const uint64_t base = 32 + uint64_t{segment_count} * 32;
-    uint16_t machine = 0, entry_size = 0, count = 0;
+    uint16_t entry_size = 0, count = 0;
     uint64_t entry = 0, table = 0;
     if (head.size() < base + 64 || std::memcmp(head.data() + base, kElfIdent, sizeof(kElfIdent)) != 0 ||
-        !Read(head, base + 18, machine) || machine != 62 || !Read(head, base + 24, entry) || !Read(head, base + 32, table) ||
-        !Read(head, base + 54, entry_size) || !Read(head, base + 56, count)) {
+        !Read(head, base + 16, out.elf_type) || !Read(head, base + 18, out.machine) || out.machine != 62 ||
+        !Read(head, base + 24, entry) || !Read(head, base + 32, table) || !Read(head, base + 54, entry_size) ||
+        !Read(head, base + 56, count)) {
         return fail("not a little-endian x86-64 ELF image");
     }
     if (entry_size != kProgramHeaderSize || count == 0 || count >= kMaxProgramHeaders) {
         return fail("unsupported program header table");
     }
+    if (table > head.size()) {
+        return fail("program headers outside the bytes read");
+    }
     out.entry = entry;
     for (uint16_t i = 0; i < count; ++i) {
         const uint64_t at = base + table + uint64_t{i} * kProgramHeaderSize;
-        uint32_t type = 0, flags = 0;
-        uint64_t vaddr = 0, memsz = 0;
-        if (!Read(head, at, type) || !Read(head, at + 4, flags) || !Read(head, at + 16, vaddr) || !Read(head, at + 40, memsz)) {
+        ProgramSegment segment;
+        if (!Read(head, at, segment.type) || !Read(head, at + 4, segment.flags) || !Read(head, at + 8, segment.offset) ||
+            !Read(head, at + 16, segment.vaddr) || !Read(head, at + 32, segment.filesz) || !Read(head, at + 40, segment.memsz) ||
+            !Read(head, at + 48, segment.align)) {
             return fail("program headers outside the bytes read");
         }
+        out.segments.push_back(segment);
+        const uint32_t type = segment.type, flags = segment.flags;
+        const uint64_t vaddr = segment.vaddr, memsz = segment.memsz;
         if (type != kPtLoad) {
             continue;
         }

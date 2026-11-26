@@ -259,15 +259,33 @@ size_t lzcnt_compat_stub_bytes(void) {
     return LZCNT_SITE_MAX * STUB_STRIDE;
 }
 
+static int site_holds(const uint8_t *image, uint64_t size, uint32_t offset, const LzcntShape *shape) {
+    return shape->length >= JMP_REL32 && shape->length <= LZCNT_SHAPE_MAX && (uint64_t)offset + shape->length <= size &&
+           !memcmp(image + offset, shape->bytes, shape->length);
+}
+
+LzcntCompatStatus lzcnt_compat_check(const uint8_t *image, uint64_t size, const LzcntBuild *build, size_t *matched) {
+    size_t held = 0;
+    int overlap = 0;
+    for (size_t i = 0; image && build && i < build->count; ++i) {
+        const uint32_t offset = build->offsets[i];
+        const LzcntShape *shape = &build->shapes[i];
+        Code scratch = {{0}, 0, 0};
+        held += site_holds(image, size, offset, shape) && build_stub(shape, image + offset, image + offset + shape->length, &scratch);
+        for (size_t j = 0; j < i; ++j)
+            overlap |= offset < build->offsets[j] + build->shapes[j].length && build->offsets[j] < offset + shape->length;
+    }
+    if (matched) *matched = held;
+    return build && image && held == build->count && !overlap ? LZCNT_COMPAT_OK : LZCNT_COMPAT_BAD_SITE;
+}
+
 LzcntCompatStatus lzcnt_compat_apply(uint8_t *image, uint64_t size, const uint32_t *offsets, const LzcntShape *shapes,
                                      size_t count, uint8_t *stubs, size_t stubs_size) {
     if (count * STUB_STRIDE > stubs_size) return LZCNT_COMPAT_NO_ROOM;
     for (size_t i = 0; i < count; ++i) {
         const LzcntShape *shape = &shapes[i];
         const uint8_t *site = image + offsets[i], *stub = stubs + i * STUB_STRIDE;
-        if (shape->length < JMP_REL32 || shape->length > LZCNT_SHAPE_MAX ||
-            (uint64_t)offsets[i] + shape->length > size || memcmp(site, shape->bytes, shape->length))
-            return LZCNT_COMPAT_BAD_SITE;
+        if (!site_holds(image, size, offsets[i], shape)) return LZCNT_COMPAT_BAD_SITE;
         for (size_t j = 0; j < i; ++j)
             if (offsets[i] < offsets[j] + shapes[j].length && offsets[j] < offsets[i] + shape->length)
                 return LZCNT_COMPAT_BAD_SITE;

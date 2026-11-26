@@ -60,7 +60,7 @@ add_library(sotb_launcher_core STATIC
     ${PROJECT_SOURCE_DIR}/src/trophies/trp_archive.cpp)
 target_include_directories(sotb_launcher_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src)
 target_link_libraries(sotb_launcher_core PUBLIC trg_core sotb_keys SDL3::SDL3 sotb_startup_phase sotb_resolution_guard sotb_guest_display
-    PRIVATE ZLIB::ZLIB)
+    sotb_guest_patches sotb_game_prompts PRIVATE ZLIB::ZLIB)
 if (WIN32)
     target_sources(sotb_launcher_core PRIVATE crypto_win.cpp)
     target_link_libraries(sotb_launcher_core PRIVATE bcrypt winhttp)
@@ -119,16 +119,14 @@ target_compile_definitions(sotb-launcher-tests PRIVATE SOTB_BOOT_IMAGE="${PROJEC
 set_target_properties(sotb-launcher-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-launcher-tests PRIVATE -Wall -Wextra)
 
-add_executable(sotb-aspect-ratio-tests EXCLUDE_FROM_ALL ../tests/aspect_ratio_tests.cpp ../src/guest_patches.c
-    ../src/sotb_exit_game.c ../src/sotb_menu_buttons.c)
+add_executable(sotb-aspect-ratio-tests EXCLUDE_FROM_ALL ../tests/aspect_ratio_tests.cpp)
 target_link_libraries(sotb-aspect-ratio-tests PRIVATE sotb_launcher_core sotb_exit_game_l10n sotb_keys SDL3::SDL3)
 target_include_directories(sotb-aspect-ratio-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim ${PROJECT_SOURCE_DIR}/tests)
 target_compile_definitions(sotb-aspect-ratio-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 set_target_properties(sotb-aspect-ratio-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-aspect-ratio-tests PRIVATE -Wall -Wextra)
 
-add_executable(sotb-true-ultrawide-tests EXCLUDE_FROM_ALL ../tests/true_ultrawide_tests.cpp ../src/guest_patches.c
-    ../src/sotb_exit_game.c ../src/sotb_menu_buttons.c)
+add_executable(sotb-true-ultrawide-tests EXCLUDE_FROM_ALL ../tests/true_ultrawide_tests.cpp)
 target_link_libraries(sotb-true-ultrawide-tests PRIVATE sotb_launcher_core sotb_exit_game_l10n sotb_keys SDL3::SDL3)
 target_include_directories(sotb-true-ultrawide-tests PRIVATE ${PROJECT_SOURCE_DIR}/gpu/shim ${PROJECT_SOURCE_DIR}/tests)
 target_compile_definitions(sotb-true-ultrawide-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
@@ -178,6 +176,13 @@ target_link_libraries(sotb-build-identity-tests PRIVATE sotb_launcher_core)
 target_compile_definitions(sotb-build-identity-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
 set_target_properties(sotb-build-identity-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
 target_compile_options(sotb-build-identity-tests PRIVATE -Wall -Wextra)
+
+add_executable(sotb-build-diagnostics-tests EXCLUDE_FROM_ALL ../tests/build_diagnostics_tests.cpp)
+target_link_libraries(sotb-build-diagnostics-tests PRIVATE sotb_launcher_core)
+target_include_directories(sotb-build-diagnostics-tests PRIVATE ${PROJECT_SOURCE_DIR}/tests)
+target_compile_definitions(sotb-build-diagnostics-tests PRIVATE SOTB_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+set_target_properties(sotb-build-diagnostics-tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON CXX_EXTENSIONS OFF)
+target_compile_options(sotb-build-diagnostics-tests PRIVATE -Wall -Wextra)
 
 add_executable(sotb-bug-report-tests EXCLUDE_FROM_ALL ../tests/bug_report_tests.cpp)
 target_link_libraries(sotb-bug-report-tests PRIVATE sotb_launcher_core)

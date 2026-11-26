@@ -1,6 +1,7 @@
 #ifndef PSN_NOTICE_H
 #define PSN_NOTICE_H
 #include "guest_patches.h"
+#include "patch_sites.h"
 #include <stddef.h>
 #include <stdint.h>
 #include <uchar.h>
@@ -26,6 +27,10 @@ int GUEST_ABI psn_notice_matches(const PsnNoticeString *ns, const PsnNoticeStrin
  * an unlocalized key. Everything is checked first; on false the image is untouched and `error` says why. */
 int psn_notice_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error,
                      size_t error_size);
+
+/* The image checks psn_notice_apply makes, without writing. */
+int psn_notice_check(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+size_t psn_notice_sites(const SotbPatchSite **sites);
 
 #ifdef __cplusplus
 }

@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "patch_sites.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -74,6 +76,12 @@ void guest_loading_screen_set_observer(void (*observer)(const GuestSlateGeometry
 /* The centered 16:9 part of a geometry that is wider than 16:9, at its full height; any other geometry unchanged. */
 GuestSlateGeometry guest_safe_area_geometry(const GuestSlateGeometry *allotted);
 int guest_apply_loading_screen_layout(uint8_t *image, size_t image_size, char *error, size_t error_size);
+
+/* The image checks of the two installers above, without writing. */
+int guest_check_display_size(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+int guest_check_loading_screen_layout(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+/* The display size sites, then the two loading screen layout sites. */
+size_t guest_display_sites(const SotbPatchSite **sites);
 
 #ifdef __cplusplus
 }

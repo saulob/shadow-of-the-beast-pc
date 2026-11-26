@@ -465,6 +465,36 @@ std::vector<Step> LoaderSteps(const std::string& key, uint64_t entry) {
     };
 }
 
+// The read-only check the unsupported-build diagnostics run in place of each installer, on the same image.
+bool DiagnosticCheck(const std::string& feature, const Workspace& w, const std::string& key, uint64_t entry) {
+    const uint8_t* p = w.buffer.data();
+    const size_t n = w.size;
+    char e[200];
+    if (feature == "cpu_compatibility") {
+        for (const LzcntBuild& known : lzcnt_builds) {
+            if (known.image.size == n && known.image.entry == entry && lzcnt_compat_check(p, n, &known, nullptr) == LZCNT_COMPAT_OK) {
+                return true;
+            }
+        }
+        return false;
+    }
+    if (feature == "offline_policy") {
+        const GuestPatchReport report = guest_patches_check(p, n);
+        return report.applied > 0 && report.skipped == 0;
+    }
+    if (feature == "menu_button_layout") return sotb_menu_buttons_check(p, n, key.c_str(), e, sizeof(e)) == 1;
+    if (feature == "exit_game") return sotb_exit_game_check(p, n, key.c_str(), e, sizeof(e)) == 1;
+    if (feature == "psn_notice") return psn_notice_check(p, n, e, sizeof(e)) == 1;
+    if (feature == "true_ultrawide") return guest_ultrawide_check(p, n, e, sizeof(e)) == 1;
+    if (feature == "frontend_safe_area") return guest_ultrawide_check_safe_area(p, n, e, sizeof(e)) == 1;
+    if (feature == "hud_anchoring") return guest_hud_check(p, n, e, sizeof(e)) == 1;
+    if (feature == "frontend_contexts") return guest_ultrawide_check_frontend(p, n, e, sizeof(e)) == 1;
+    if (feature == "skip_intro") return skip_intro_check(p, n, e, sizeof(e)) == 1;
+    if (feature == "aspect_ratio") return guest_check_display_size(p, n, e, sizeof(e)) == 1;
+    if (feature == "loading_hint") return guest_check_loading_screen_layout(p, n, e, sizeof(e)) == 1;
+    return false;
+}
+
 constexpr const char* kContextFeatures[] = {"title_context", "map_context", "mana_overlay_context", "options_context",
                                             "wisdom_of_shadows_context"};
 
@@ -483,8 +513,10 @@ void ApplyTogether(BuildRun& run, const BootImage& boot, std::set<size_t>& patch
     std::map<size_t, std::string> owner;
     for (const Step& step : LoaderSteps(key, boot.entry)) {
         std::string why;
+        const bool checked = DiagnosticCheck(step.feature, w, key, boot.entry);
         const bool ok = step.apply(w, why);
         run.Check(step.feature, ok, std::string(TitleOf(step.feature)) + " was refused: " + why);
+        run.Check(step.feature, checked == ok, "the unsupported-build diagnostics check disagrees with the installer");
         const std::vector<size_t> changed = w.Take();
         if (!ok) {
             run.Check(step.feature, changed.empty(), "a refused installer wrote " + std::to_string(changed.size()) + " bytes");

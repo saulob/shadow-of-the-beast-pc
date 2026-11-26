@@ -396,15 +396,10 @@ static int rel32_fits(intptr_t delta) {
     return delta >= -0x7fffffffLL && delta <= 0x7fffffffLL;
 }
 
-int sotb_exit_game_apply(uint8_t *image, size_t image_size, const char *build_key, uint8_t *cave, size_t cave_size,
-                         char *error, size_t error_size) {
-    const ExitGameBuild *build = find_exit_build(build_key);
-    if (!build) return fail(error, error_size, "not a supported build");
-    if (!image || !cave) return fail(error, error_size, "missing image or cave");
-    if (cave_size < SOTB_EXIT_GAME_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
+static int build_matches(const ExitGameBuild *build, const uint8_t *image, size_t image_size, char *error,
+                         size_t error_size) {
     if (image_size < build->createtext_site + sizeof(kCreateTextPrologue))
         return fail(error, error_size, "image too short");
-
     if (memcmp(image + build->tick_context, kTickContext, sizeof(kTickContext)))
         return fail(error, error_size, "MenuInfoBar::Tick bytes do not match");
     if (memcmp(image + build->refresh_context, kRefreshContext, sizeof(kRefreshContext)))
@@ -413,6 +408,33 @@ int sotb_exit_game_apply(uint8_t *image, size_t image_size, const char *build_ke
         return fail(error, error_size, "MenuInfoBar::AddButton bytes do not match");
     if (memcmp(image + build->createtext_site, kCreateTextPrologue, sizeof(kCreateTextPrologue)))
         return fail(error, error_size, "FText::CreateText bytes do not match");
+    return 1;
+}
+
+int sotb_exit_game_check(const uint8_t *image, size_t image_size, const char *build_key, char *error, size_t error_size) {
+    const ExitGameBuild *build = find_exit_build(build_key);
+    if (!build) return fail(error, error_size, "not a supported build");
+    if (!image) return fail(error, error_size, "missing image");
+    return build_matches(build, image, image_size, error, error_size);
+}
+
+size_t sotb_exit_game_sites(const char *build_key, SotbPatchSite *out, size_t capacity) {
+    const ExitGameBuild *build = find_exit_build(build_key);
+    if (!build || capacity < 4) return 0;
+    out[0] = (SotbPatchSite){"MenuInfoBar::Tick", build->tick_context, kTickContext, sizeof(kTickContext)};
+    out[1] = (SotbPatchSite){"RefreshInfoBar", build->refresh_context, kRefreshContext, sizeof(kRefreshContext)};
+    out[2] = (SotbPatchSite){"MenuInfoBar::AddButton", build->addbutton_site, kAddButtonPrologue, sizeof(kAddButtonPrologue)};
+    out[3] = (SotbPatchSite){"FText::CreateText", build->createtext_site, kCreateTextPrologue, sizeof(kCreateTextPrologue)};
+    return 4;
+}
+
+int sotb_exit_game_apply(uint8_t *image, size_t image_size, const char *build_key, uint8_t *cave, size_t cave_size,
+                         char *error, size_t error_size) {
+    const ExitGameBuild *build = find_exit_build(build_key);
+    if (!build) return fail(error, error_size, "not a supported build");
+    if (!image || !cave) return fail(error, error_size, "missing image or cave");
+    if (cave_size < SOTB_EXIT_GAME_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
+    if (!build_matches(build, image, image_size, error, error_size)) return 0;
 
     uint8_t *tick_stub = cave;
     uint8_t *setup_stub = cave + 128;

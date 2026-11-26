@@ -115,27 +115,51 @@ int sotb_menu_buttons_effective_circle_confirm(const char *build_key, SotbMenuBu
     return build ? build->original_circle_confirm : 0;
 }
 
-int sotb_menu_buttons_apply(uint8_t *image, size_t image_size, const char *build_key, SotbMenuButtonLayout layout) {
-    const MenuButtonsBuild *build = find_build(build_key);
-    if (!build) return unavailable(build_key, layout, "not a supported build");
+/* Why the image is not the build's, or NULL when every check holds. */
+static const char *build_mismatch(const MenuButtonsBuild *build, const uint8_t *image, size_t image_size) {
     if (!image || image_size < build->site_offset + kWesternSecondKeyOffset + sizeof(kWesternSecondKey))
-        return unavailable(build_key, layout, "the image is too short");
-    if (memcmp(image + build->context_offset, kContext, kContextLength))
-        return unavailable(build_key, layout, "the menu layout code does not match");
-    if (site_count(image, image_size) != 1) return unavailable(build_key, layout, "the menu layout code is not unique");
+        return "the image is too short";
+    if (memcmp(image + build->context_offset, kContext, kContextLength)) return "the menu layout code does not match";
+    if (site_count(image, image_size) != 1) return "the menu layout code is not unique";
 
     if (memcmp(image + build->site_offset + kOriginalFirstKeyOffset, kOriginalFirstKey, sizeof(kOriginalFirstKey)) ||
         memcmp(image + build->site_offset + kOriginalSecondKeyOffset, kOriginalSecondKey, sizeof(kOriginalSecondKey)) ||
         memcmp(image + build->site_offset + kWesternFirstKeyOffset, kWesternFirstKey, sizeof(kWesternFirstKey)) ||
         memcmp(image + build->site_offset + kWesternSecondKeyOffset, kWesternSecondKey, sizeof(kWesternSecondKey)))
-        return unavailable(build_key, layout, "the menu key sites do not match");
+        return "the menu key sites do not match";
 
     const uint64_t original_first = lea_target(image, image_size, build->site_offset + kOriginalFirstKeyOffset);
     const uint64_t original_second = lea_target(image, image_size, build->site_offset + kOriginalSecondKeyOffset);
     const uint64_t western_first = lea_target(image, image_size, build->site_offset + kWesternFirstKeyOffset);
     const uint64_t western_second = lea_target(image, image_size, build->site_offset + kWesternSecondKeyOffset);
     if (!original_first || !original_second || original_first != western_second || original_second != western_first)
-        return unavailable(build_key, layout, "the menu key sites do not match");
+        return "the menu key sites do not match";
+    return NULL;
+}
+
+int sotb_menu_buttons_check(const uint8_t *image, size_t image_size, const char *build_key, char *error, size_t error_size) {
+    const MenuButtonsBuild *build = find_build(build_key);
+    const char *reason = build ? build_mismatch(build, image, image_size) : "not a supported build";
+    if (reason && error && error_size) snprintf(error, error_size, "%s", reason);
+    return reason == NULL;
+}
+
+size_t sotb_menu_buttons_sites(const char *build_key, SotbPatchSite *out, size_t capacity) {
+    const MenuButtonsBuild *build = find_build(build_key);
+    if (!build || capacity < 5) return 0;
+    out[0] = (SotbPatchSite){"menu layout code", build->context_offset, kContext, kContextLength};
+    out[1] = (SotbPatchSite){"original first key", build->site_offset + kOriginalFirstKeyOffset, kOriginalFirstKey, sizeof(kOriginalFirstKey)};
+    out[2] = (SotbPatchSite){"original second key", build->site_offset + kOriginalSecondKeyOffset, kOriginalSecondKey, sizeof(kOriginalSecondKey)};
+    out[3] = (SotbPatchSite){"western first key", build->site_offset + kWesternFirstKeyOffset, kWesternFirstKey, sizeof(kWesternFirstKey)};
+    out[4] = (SotbPatchSite){"western second key", build->site_offset + kWesternSecondKeyOffset, kWesternSecondKey, sizeof(kWesternSecondKey)};
+    return 5;
+}
+
+int sotb_menu_buttons_apply(uint8_t *image, size_t image_size, const char *build_key, SotbMenuButtonLayout layout) {
+    const MenuButtonsBuild *build = find_build(build_key);
+    if (!build) return unavailable(build_key, layout, "not a supported build");
+    const char *reason = build_mismatch(build, image, image_size);
+    if (reason) return unavailable(build_key, layout, reason);
 
     if (layout == SOTB_MENU_BUTTON_LAYOUT_ORIGINAL) {
         if (build->original_circle_confirm)

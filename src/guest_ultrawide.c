@@ -198,16 +198,26 @@ static void emit_stub(uint8_t *cave, uint8_t *resume) {
     put_bytes(&p, jump, sizeof(jump));
 }
 
-int guest_ultrawide_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error,
-                          size_t error_size) {
-    if (!image || !cave) return fail(error, error_size, "missing image or cave");
-    if (cave_size < SOTB_ULTRAWIDE_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
+static int projection_matches(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
     if ((uint64_t)SOTB_ULTRAWIDE_SITE + SOTB_ULTRAWIDE_SIZE > image_size) return fail(error, error_size, "image too short");
     const uint8_t *function = image + SOTB_ULTRAWIDE_SITE;
     if (memcmp(function, displaced_prologue, sizeof(displaced_prologue)) ||
         fnv1a64(function, SOTB_ULTRAWIDE_SIZE) != FUNCTION_FNV64) {
         return fail(error, error_size, "projection function does not match a supported build");
     }
+    return 1;
+}
+
+int guest_ultrawide_check(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!image) return fail(error, error_size, "missing image");
+    return projection_matches(image, image_size, error, error_size);
+}
+
+int guest_ultrawide_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error,
+                          size_t error_size) {
+    if (!image || !cave) return fail(error, error_size, "missing image or cave");
+    if (cave_size < SOTB_ULTRAWIDE_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
+    if (!projection_matches(image, image_size, error, error_size)) return 0;
     const intptr_t rel = cave - (image + SOTB_ULTRAWIDE_SITE + 5);
     if (rel < INT32_MIN || rel > INT32_MAX) return fail(error, error_size, "cave out of 32-bit jump range");
 
@@ -228,7 +238,7 @@ static GUEST_ABI void layer_arrange_children(void *self, const GuestSlateGeometr
     original_layer_arrange(self, &safe, arranged);
 }
 
-int guest_ultrawide_apply_safe_area(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+int guest_ultrawide_check_safe_area(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
     if (!image) return fail(error, error_size, "missing image");
     const uint64_t vtable_end = (uint64_t)SOTB_GAME_LAYER_VTABLE + 65u * sizeof(uint64_t);
     if (vtable_end > image_size || (uint64_t)SOTB_GAME_LAYER_CONSTRUCTOR + CONSTRUCTOR_SIZE > image_size ||
@@ -248,6 +258,11 @@ int guest_ultrawide_apply_safe_area(uint8_t *image, size_t image_size, char *err
             return fail(error, error_size, "unexpected SGameLayerManager vtable");
         }
     }
+    return 1;
+}
+
+int guest_ultrawide_apply_safe_area(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!guest_ultrawide_check_safe_area(image, image_size, error, error_size)) return 0;
     original_layer_arrange = (ArrangeChildrenFn)(uintptr_t)(image + COMPOUND_ARRANGE_OFFSET);
     const uint64_t hook = (uint64_t)(uintptr_t)layer_arrange_children;
     memcpy(image + SOTB_GAME_LAYER_VTABLE + (uint64_t)SOTB_GAME_LAYER_ARRANGE_SLOT * sizeof(hook), &hook, sizeof(hook));
@@ -290,7 +305,7 @@ static GUEST_ABI void frontend_tick(void *self, uint64_t a1, uint64_t a2, uint64
     if (screen >= 0) set_frontend_context(sotb_frontend_context_of_screen(screen));
 }
 
-int guest_ultrawide_apply_frontend(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+int guest_ultrawide_check_frontend(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
     if (!image) return fail(error, error_size, "missing image");
     const uint64_t vtable_end = (uint64_t)SOTB_FRONTEND_VTABLE + (SOTB_FRONTEND_TICK_SLOT + 1u) * sizeof(uint64_t);
     if (vtable_end > image_size || (uint64_t)SOTB_FRONTEND_CONSTRUCTOR + SOTB_FRONTEND_CONSTRUCTOR_SIZE > image_size ||
@@ -306,6 +321,11 @@ int guest_ultrawide_apply_frontend(uint8_t *image, size_t image_size, char *erro
     uint64_t entry = 0;
     memcpy(&entry, image + SOTB_FRONTEND_VTABLE + (uint64_t)SOTB_FRONTEND_TICK_SLOT * sizeof(entry), sizeof(entry));
     if (entry != (uint64_t)(uintptr_t)(image + SOTB_FRONTEND_TICK)) return fail(error, error_size, "unexpected frontend manager vtable");
+    return 1;
+}
+
+int guest_ultrawide_apply_frontend(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!guest_ultrawide_check_frontend(image, image_size, error, error_size)) return 0;
     original_frontend_tick = (FrontendTickFn)(uintptr_t)(image + SOTB_FRONTEND_TICK);
     frontend_image = image;
     const uint64_t hook = (uint64_t)(uintptr_t)frontend_tick;

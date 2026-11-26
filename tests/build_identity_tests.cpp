@@ -394,7 +394,7 @@ void TestFolderDiagnostics() {
     CHECK(Has(text, "TITLE_ID: match (CUSA03762)"));
     CHECK(Has(text, "eboot SHA-256: differs"));
     CHECK(!Has(text, "Build verdict: SUPPORTED"));
-    CHECK(first.lines.size() < 80);
+    CHECK(first.lines.size() <= diagnostics::kMaxReportLines);
     CHECK(Join(DiagnoseUnsupportedBuild(*source, sfo).lines) == text);
 
     const std::string stranger = SfoWith({{"TITLE", "Another Game"}, {"TITLE_ID", "CUSA00001"}});

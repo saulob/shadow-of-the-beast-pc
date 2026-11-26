@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "patch_sites.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -12,7 +14,10 @@ extern "C" {
 #define SKIP_INTRO_SITE 0x28d5c21u
 #define SKIP_INTRO_PATCH_SIZE 0x21u
 
+/* The checks skip_intro_apply makes before writing, without writing. */
+int skip_intro_check(const uint8_t *image, size_t image_size, char *error, size_t error_size);
 int skip_intro_apply(uint8_t *image, size_t image_size, char *error, size_t error_size);
+size_t skip_intro_sites(const SotbPatchSite **sites);
 
 #ifdef __cplusplus
 }

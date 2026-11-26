@@ -69,6 +69,12 @@ target_include_directories(sotb_game_prompts PUBLIC src)
 target_link_libraries(sotb_game_prompts PUBLIC sotb_keys)
 target_compile_options(sotb_game_prompts PRIVATE -Wall -Wextra -Werror)
 
+# The loader's other image patches, linked by the launcher too: its unsupported-build diagnostics run their checks.
+add_library(sotb_guest_patches STATIC src/guest_patches.c src/sotb_exit_game.c src/sotb_menu_buttons.c src/lzcnt_compat.c)
+target_include_directories(sotb_guest_patches PUBLIC src)
+target_link_libraries(sotb_guest_patches PUBLIC sotb_exit_game_l10n sotb_keys)
+target_compile_options(sotb_guest_patches PRIVATE -Wall -Wextra -Werror -fno-omit-frame-pointer)
+
 add_library(sotb_ui_text INTERFACE)
 target_include_directories(sotb_ui_text INTERFACE launcher)
 
@@ -136,11 +142,7 @@ endif()
 set(SOTB_GAME_SOURCES
     src/loader.c
     src/import_slots.c
-    src/guest_patches.c
-    src/sotb_exit_game.c
-    src/sotb_menu_buttons.c
     src/isa_emulate.c
-    src/lzcnt_compat.c
     ${SOTB_RUNTIME_SOURCES}
     ${SOTB_PLATFORM_SOURCES})
 
@@ -151,7 +153,7 @@ else()
 endif()
 target_include_directories(shadow_of_the_beast PRIVATE src launcher gpu/shim ${CMAKE_BINARY_DIR}/generated)
 target_compile_options(shadow_of_the_beast PRIVATE $<$<COMPILE_LANGUAGE:C>:-Wall -Wextra -Werror -fno-omit-frame-pointer>)
-target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_game_prompts sotb_exit_game_l10n sotb_resolution_guard
+target_link_libraries(shadow_of_the_beast PRIVATE sotb_launcher sotb_guest_patches sotb_game_prompts sotb_exit_game_l10n sotb_resolution_guard
     sotbgpu sotb_atrac9 SDL3::SDL3 Freetype::Freetype)
 if (WIN32)
     target_compile_definitions(shadow_of_the_beast PRIVATE _WIN32_WINNT=0x0A00 NTDDI_VERSION=0x0A000007)

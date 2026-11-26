@@ -205,9 +205,7 @@ static int fade_call_supported(const uint8_t *image) {
            fnv1a64(image + SOTB_HUD_DRAW_ITEM, SOTB_HUD_DRAW_ITEM_SIZE) == DRAW_ITEM_FNV64;
 }
 
-int guest_hud_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error, size_t error_size) {
-    if (!image || !cave) return fail(error, error_size, "missing image or cave");
-    if (cave_size < SOTB_HUD_FADE_STUB_SIZE) return fail(error, error_size, "cave too small");
+static int hud_matches(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
     if ((uint64_t)SOTB_HUD_POST_RENDER + SOTB_HUD_POST_RENDER_SIZE > image_size ||
         (uint64_t)SOTB_HUD_DRAW_ITEM + SOTB_HUD_DRAW_ITEM_SIZE > image_size || (uint64_t)SOTB_HUD_FADE_CALL + 5 > image_size ||
         (uint64_t)SOTB_HUD_PUSH_TRANSFORM + SOTB_HUD_PUSH_TRANSFORM_SIZE > image_size ||
@@ -220,8 +218,6 @@ int guest_hud_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cav
         return fail(error, error_size, "HUD canvas code does not match a supported build");
     }
     if (!fade_call_supported(image)) return fail(error, error_size, "cutscene fade does not match a supported build");
-    const intptr_t fade_rel = cave - (image + SOTB_HUD_FADE_CALL + 5);
-    if (fade_rel < INT32_MIN || fade_rel > INT32_MAX) return fail(error, error_size, "cave out of 32-bit call range");
     for (size_t i = 0; i < HUD_DRAW_COUNT; ++i) {
         const HudDraw *draw = &hud_draws[i];
         const uint64_t slot_at = (uint64_t)draw->vtable_object + SOTB_HUD_DRAW_SLOT_OFFSET;
@@ -234,6 +230,20 @@ int guest_hud_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cav
             return fail(error, error_size, "HUD component does not match a supported build");
         }
     }
+    return 1;
+}
+
+int guest_hud_check(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!image) return fail(error, error_size, "missing image");
+    return hud_matches(image, image_size, error, error_size);
+}
+
+int guest_hud_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error, size_t error_size) {
+    if (!image || !cave) return fail(error, error_size, "missing image or cave");
+    if (cave_size < SOTB_HUD_FADE_STUB_SIZE) return fail(error, error_size, "cave too small");
+    if (!hud_matches(image, image_size, error, error_size)) return 0;
+    const intptr_t fade_rel = cave - (image + SOTB_HUD_FADE_CALL + 5);
+    if (fade_rel < INT32_MIN || fade_rel > INT32_MAX) return fail(error, error_size, "cave out of 32-bit call range");
     hud_image = image;
     const uint64_t handler = (uint64_t)(uintptr_t)hud_fade_draw;
     cave[0] = 0x48;

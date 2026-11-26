@@ -77,16 +77,28 @@ static int fail(char *error, size_t size, const char *what, uint32_t offset) {
 
 static void put32(uint8_t *at, uint32_t value) { memcpy(at, &value, 4); }
 
-int guest_apply_display_size(uint8_t *image, size_t image_size, int width, int height, char *error, size_t error_size) {
-    if (width < 8 || height < 8) return fail(error, error_size, "invalid render size", 0);
-    const size_t count = sizeof(size_sites) / sizeof(*size_sites);
-    for (size_t i = 0; i < count; ++i) {
+#define SIZE_SITE_COUNT (sizeof(size_sites) / sizeof(*size_sites))
+
+static int size_sites_match(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    for (size_t i = 0; i < SIZE_SITE_COUNT; ++i) {
         const SizeSite *site = &size_sites[i];
         if ((uint64_t)site->offset + site->length > image_size)
             return fail(error, error_size, "site outside the image", site->offset);
         if (memcmp(image + site->offset, site->original, site->length))
             return fail(error, error_size, "unexpected display size instruction", site->offset);
     }
+    return 1;
+}
+
+int guest_check_display_size(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!image) return fail(error, error_size, "missing image", 0);
+    return size_sites_match(image, image_size, error, error_size);
+}
+
+int guest_apply_display_size(uint8_t *image, size_t image_size, int width, int height, char *error, size_t error_size) {
+    if (width < 8 || height < 8) return fail(error, error_size, "invalid render size", 0);
+    const size_t count = SIZE_SITE_COUNT;
+    if (!size_sites_match(image, image_size, error, error_size)) return 0;
     for (size_t i = 0; i < count; ++i) {
         const SizeSite *site = &size_sites[i];
         uint8_t *at = image + site->offset + site->immediate;
@@ -173,7 +185,7 @@ static GUEST_ABI void loading_screen_arrange_children(void *self, const GuestSla
     original_loading_arrange(self, &scaled, arranged);
 }
 
-int guest_apply_loading_screen_layout(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+int guest_check_loading_screen_layout(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
     if (!image || (uint64_t)LOADING_VTABLE_ARRANGE_OFFSET + sizeof(uint64_t) > image_size)
         return fail(error, error_size, "loading screen vtable outside the image", LOADING_VTABLE_ARRANGE_OFFSET);
     if (memcmp(image + COMPOUND_ARRANGE_OFFSET, compound_arrange_bytes, sizeof(compound_arrange_bytes)))
@@ -182,9 +194,31 @@ int guest_apply_loading_screen_layout(uint8_t *image, size_t image_size, char *e
         return fail(error, error_size, "unexpected loading hint position bytes", HINT_TEXT_POS_OFFSET);
     uint64_t current = 0;
     memcpy(&current, image + LOADING_VTABLE_ARRANGE_OFFSET, sizeof(current));
-    const uint64_t expected = (uint64_t)(uintptr_t)(image + COMPOUND_ARRANGE_OFFSET);
-    if (current != expected)
+    if (current != (uint64_t)(uintptr_t)(image + COMPOUND_ARRANGE_OFFSET))
         return fail(error, error_size, "unexpected SBeastLoadingScreen vtable entry", LOADING_VTABLE_ARRANGE_OFFSET);
+    return 1;
+}
+
+static SotbPatchSite display_sites[SIZE_SITE_COUNT + 2];
+
+size_t guest_display_sites(const SotbPatchSite **out) {
+    static const char *const names[] = {"display size 1", "display size 2", "display size 3",
+                                        "display size 4", "display size 5", "display size 6"};
+    _Static_assert(sizeof(names) / sizeof(*names) == SIZE_SITE_COUNT, "one name per display size site");
+    for (size_t i = 0; i < SIZE_SITE_COUNT; ++i) {
+        display_sites[i] = (SotbPatchSite){names[i], size_sites[i].offset, size_sites[i].original, size_sites[i].length};
+    }
+    display_sites[SIZE_SITE_COUNT] = (SotbPatchSite){"SCompoundWidget::OnArrangeChildren", COMPOUND_ARRANGE_OFFSET,
+                                                     compound_arrange_bytes, sizeof(compound_arrange_bytes)};
+    display_sites[SIZE_SITE_COUNT + 1] =
+        (SotbPatchSite){"loading hint position", HINT_TEXT_POS_OFFSET, hint_text_pos_bytes, sizeof(hint_text_pos_bytes)};
+    *out = display_sites;
+    return SIZE_SITE_COUNT + 2;
+}
+
+int guest_apply_loading_screen_layout(uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!guest_check_loading_screen_layout(image, image_size, error, error_size)) return 0;
+    const uint64_t expected = (uint64_t)(uintptr_t)(image + COMPOUND_ARRANGE_OFFSET);
     original_loading_arrange = (GuestArrangeChildrenFn)(uintptr_t)expected;
     const uint64_t hook = (uint64_t)(uintptr_t)loading_screen_arrange_children;
     memcpy(image + LOADING_VTABLE_ARRANGE_OFFSET, &hook, sizeof(hook));

@@ -107,6 +107,11 @@ int guest_ultrawide_apply_safe_area(uint8_t *image, size_t image_size, char *err
  * checked before the vtable slot is replaced. */
 int guest_ultrawide_apply_frontend(uint8_t *image, size_t image_size, char *error, size_t error_size);
 
+/* The image checks of the three installers above, without writing. */
+int guest_ultrawide_check(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+int guest_ultrawide_check_safe_area(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+int guest_ultrawide_check_frontend(const uint8_t *image, size_t image_size, char *error, size_t error_size);
+
 #ifdef __cplusplus
 }
 #endif

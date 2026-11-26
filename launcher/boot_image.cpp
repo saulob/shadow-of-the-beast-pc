@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -206,6 +207,9 @@ void ParseSelf(const Bytes& data, Module& module) {
     }
     uint64_t end = 0;
     for (const ProgramHeader& p : module.ph) {
+        if (p.filesz > kMaxImage || p.offset > kMaxImage - p.filesz) {
+            Fail("image exceeds 512 MiB limit");
+        }
         end = std::max(end, p.offset + p.filesz);
     }
     if (end > kMaxImage) {
@@ -258,9 +262,22 @@ uint64_t Tag(const Module& module, uint64_t tag) {
     return it->second;
 }
 
+std::string Sha256Text(const Bytes& data) {
+    uint8_t digest[32];
+    if (!crypto::Sha256(data.data(), data.size(), digest)) {
+        return {};
+    }
+    static const char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (const uint8_t byte : digest) {
+        hex += digits[byte >> 4];
+        hex += digits[byte & 15];
+    }
+    return hex;
+}
+
 // The module's dynamic data: imports, exports, relocations and library identities.
-Module ReadModule(const std::filesystem::path& path) {
-    const Bytes source = ReadFile(path);
+Module ParseModule(const Bytes& source, const std::string& name) {
     Module m;
     ParseSelf(source, m);
     const ProgramHeader& dp = RequireHeader(m, PT_DYNAMIC);
@@ -347,11 +364,26 @@ Module ReadModule(const std::filesystem::path& path) {
             m.needed.push_back(string(value));
         }
     }
-    m.sha256 = Sha256Hex(path);
+    m.sha256 = Sha256Text(source);
     if (m.sha256.empty()) {
-        Fail("cannot read " + path.filename().string());
+        Fail("cannot hash " + name);
     }
     return m;
+}
+
+Module ReadModule(const std::filesystem::path& path) {
+    return ParseModule(ReadFile(path), path.filename().string());
+}
+
+bool Loadable(const ProgramHeader& p) {
+    return p.memsz <= kMaxImage && p.vaddr <= kMaxImage - p.memsz;
+}
+
+// Whether [address, address + length) lies in one of the segments.
+bool Within(const std::vector<const ProgramHeader*>& loads, uint64_t address, uint64_t length) {
+    return address <= ~uint64_t(0) - length && std::any_of(loads.begin(), loads.end(), [&](const ProgramHeader* p) {
+               return p->vaddr <= address && address + length <= p->vaddr + p->memsz;
+           });
 }
 
 // The runtime stands in for libc's _init_env, which is only valid when the original is a bare RET.
@@ -411,15 +443,14 @@ public:
         uint64_t size = 0;
         for (const ProgramHeader& p : main.ph) {
             if (IsLoadable(p)) {
+                if (!Loadable(p)) {
+                    Fail("invalid memory image");
+                }
                 loads.push_back(&p);
                 size = std::max(size, p.vaddr + p.memsz);
             }
         }
-        const auto mapped = [&](uint64_t address, uint64_t length = 8) {
-            return std::any_of(loads.begin(), loads.end(), [&](const ProgramHeader* p) {
-                return p->vaddr <= address && address + length <= p->vaddr + p->memsz;
-            });
-        };
+        const auto mapped = [&](uint64_t address, uint64_t length = 8) { return Within(loads, address, length); };
         if (size > kMaxImage || !mapped(main.entry, 1)) {
             Fail("invalid memory image");
         }
@@ -458,17 +489,20 @@ public:
         }
     }
 
-    void LinkModules(const std::filesystem::path& game, const Module& main) {
+    void LinkModules(const std::function<Module(const char* file)>& load, const Module& main) {
         uint64_t base = (image.size() + 65535) & ~uint64_t(65535);
-        fs_patched = PatchFsLoads(image, main.ph, 0);
+        fs_patched = main_fs_patched = PatchFsLoads(image, main.ph, 0);
         uint64_t tls_module = 2;
         for (const char* filename : kBundledModules) {
             const std::string file = filename;
-            const Module m = ReadModule(game / "sce_module" / file);
+            const Module m = load(filename);
             std::vector<const ProgramHeader*> loads;
             uint64_t modsize = 0;
             for (const ProgramHeader& p : m.ph) {
                 if (IsLoadable(p)) {
+                    if (!Loadable(p)) {
+                        Fail(file + ": invalid segment size");
+                    }
                     loads.push_back(&p);
                     modsize = std::max(modsize, p.vaddr + p.memsz);
                 }
@@ -480,11 +514,7 @@ public:
                 Fail(file + ": overlapping module layout");
             }
             image.resize(base + modsize, 0);
-            const auto mapped = [&](uint64_t address, uint64_t length = 8) {
-                return std::any_of(loads.begin(), loads.end(), [&](const ProgramHeader* p) {
-                    return p->vaddr <= address && address + length <= p->vaddr + p->memsz;
-                });
-            };
+            const auto mapped = [&](uint64_t address, uint64_t length = 8) { return Within(loads, address, length); };
             for (const ProgramHeader* p : loads) {
                 if (p->filesz > p->memsz) {
                     Fail(file + ": invalid segment size");
@@ -566,7 +596,7 @@ public:
     std::unordered_map<std::string, Export> exports;
     std::unordered_map<std::string, std::vector<Export>> by_nid;
     std::vector<ModuleEntry> table;
-    int fs_patched = 0;
+    int fs_patched = 0, main_fs_patched = 0;
 
 private:
     static const Symbol& SymbolOf(const Module& m, const Relocation& r) {
@@ -692,20 +722,11 @@ void WriteFile(const std::filesystem::path& path, const void* data, size_t size)
     }
 }
 
-void Build(const std::filesystem::path& game, const std::filesystem::path& out) {
-    const Module main = ReadModule(game / "eboot.bin");
-    const bool init_env_ret = LibcInitEnvIsRet(ReadModule(game / "sce_module" / "libc.prx"));
-    ImageBuilder builder;
-    builder.MapEboot(main);
-    const uint64_t eboot_size = builder.image.size();
-    builder.LinkModules(game, main);
-
-    std::vector<std::string> names;
+void ResolveBindings(const ImageBuilder& builder, std::vector<std::string>& names,
+                     std::vector<std::array<uint64_t, 3>>& bindings, std::vector<std::string>& unresolved) {
     for (const Identity& identity : builder.imported) {
         names.push_back(identity.Canonical());
     }
-    std::vector<std::array<uint64_t, 3>> bindings;
-    std::vector<std::string> unresolved;
     for (size_t index = 0; index < builder.imported.size(); ++index) {
         const Identity& identity = builder.imported[index];
         std::optional<Export> found;
@@ -730,6 +751,82 @@ void Build(const std::filesystem::path& game, const std::filesystem::path& out) 
             unresolved.push_back(names[index]);
         }
     }
+}
+
+void Describe(ImageBuilder& builder, LinkedImage& out) {
+    out.segments.clear();
+    for (const auto& segment : builder.segments) {
+        out.segments.push_back({segment[0], segment[1], segment[2]});
+    }
+    std::vector<bool> imported(builder.imported.size());
+    out.relative.clear();
+    for (const OutRelocation& r : builder.relocs) {
+        if (r.kind == 0) {
+            out.relative.emplace_back(r.target, uint64_t(r.value));
+        } else if (uint64_t(r.value) < imported.size()) {
+            imported[size_t(r.value)] = true;
+        }
+    }
+    out.relocations = builder.relocs.size();
+    out.imports = size_t(std::count(imported.begin(), imported.end(), true));
+    out.fs_loads = builder.fs_patched;
+    out.bytes = std::move(builder.image);
+}
+
+// Without its modules the image is the executable's alone, with the executable's own relocations and loads.
+void KeepExecutable(ImageBuilder& builder, uint64_t eboot_size) {
+    builder.image.resize(eboot_size);
+    std::erase_if(builder.segments, [&](const std::array<uint64_t, 3>& s) { return s[0] >= eboot_size; });
+    std::erase_if(builder.relocs, [&](const OutRelocation& r) { return r.target >= eboot_size; });
+    builder.fs_patched = builder.main_fs_patched;
+}
+
+void Link(std::span<const uint8_t> eboot, const ModuleReader& read_module, LinkedImage& out) {
+    Module main = ParseModule(Bytes(eboot.begin(), eboot.end()), "eboot.bin");
+    ImageBuilder builder;
+    builder.MapEboot(main);
+    main.elf = {};
+    out.entry = main.entry;
+    out.eboot_size = builder.image.size();
+    try {
+        builder.LinkModules(
+            [&](const char* file) {
+                Bytes bytes;
+                if (!read_module(file, bytes)) {
+                    Fail(std::string(file) + " is not available");
+                }
+                return ParseModule(bytes, file);
+            },
+            main);
+    } catch (const Failure& failure) {
+        out.module_error = failure.what();
+        KeepExecutable(builder, out.eboot_size);
+        Describe(builder, out);
+        return;
+    }
+    for (const ModuleEntry& entry : builder.table) {
+        out.modules.push_back({entry.file, entry.base, entry.size, entry.sha256});
+    }
+    std::vector<std::string> names, unresolved;
+    std::vector<std::array<uint64_t, 3>> bindings;
+    ResolveBindings(builder, names, bindings, unresolved);
+    out.bindings = bindings.size();
+    out.unresolved = unresolved.size();
+    Describe(builder, out);
+}
+
+void Build(const std::filesystem::path& game, const std::filesystem::path& out) {
+    const Module main = ReadModule(game / "eboot.bin");
+    const bool init_env_ret = LibcInitEnvIsRet(ReadModule(game / "sce_module" / "libc.prx"));
+    ImageBuilder builder;
+    builder.MapEboot(main);
+    const uint64_t eboot_size = builder.image.size();
+    builder.LinkModules([&](const char* file) { return ReadModule(game / "sce_module" / file); }, main);
+
+    std::vector<std::string> names;
+    std::vector<std::array<uint64_t, 3>> bindings;
+    std::vector<std::string> unresolved;
+    ResolveBindings(builder, names, bindings, unresolved);
 
     const ProgramHeader* main_tls = FindHeader(main, PT_TLS);
     const std::array<uint64_t, 4> tls_values =
@@ -850,6 +947,20 @@ void Build(const std::filesystem::path& game, const std::filesystem::path& out) 
 }
 
 } // namespace
+
+std::string LinkGameImage(std::span<const uint8_t> eboot, const ModuleReader& read_module, LinkedImage& out) {
+    out = {};
+    try {
+        Link(eboot, read_module, out);
+        return {};
+    } catch (const Failure& failure) {
+        out = {};
+        return failure.what();
+    } catch (const std::exception& error) {
+        out = {};
+        return std::string("unexpected error: ") + error.what();
+    }
+}
 
 std::string BuildBootImage(const std::filesystem::path& game, const std::filesystem::path& out) {
     try {

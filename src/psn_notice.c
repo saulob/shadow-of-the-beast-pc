@@ -97,11 +97,17 @@ static void emit_stub(uint8_t *cave, uint8_t *resume) {
     put_bytes(&p, jump, sizeof(jump));
 }
 
-int psn_notice_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error,
-                     size_t error_size) {
-    if (!image || !cave) return fail(error, error_size, "missing image or cave");
-    if (cave_size < PSN_NOTICE_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
-    if (image_size < HOOK_RESUME) return fail(error, error_size, "image too short");
+static const SotbPatchSite patch_sites[] = {{"GetDisplayString prologue", PSN_NOTICE_HOOK_SITE, hook_expected, sizeof(hook_expected)}};
+
+size_t psn_notice_sites(const SotbPatchSite **out) {
+    *out = patch_sites;
+    return sizeof(patch_sites) / sizeof(*patch_sites);
+}
+
+static int image_matches(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (image_size < PSN_NOTICE_HOOK_SITE + sizeof(hook_expected)) {
+        return fail(error, error_size, "image too short");
+    }
     if (memcmp(image + PSN_NOTICE_HOOK_SITE, hook_expected, sizeof(hook_expected))) {
         return fail(error, error_size, "text lookup does not match a supported build");
     }
@@ -110,6 +116,19 @@ int psn_notice_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t ca
             return fail(error, error_size, "connection success text does not match a supported build");
         }
     }
+    return 1;
+}
+
+int psn_notice_check(const uint8_t *image, size_t image_size, char *error, size_t error_size) {
+    if (!image) return fail(error, error_size, "missing image");
+    return image_matches(image, image_size, error, error_size);
+}
+
+int psn_notice_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size, char *error,
+                     size_t error_size) {
+    if (!image || !cave) return fail(error, error_size, "missing image or cave");
+    if (cave_size < PSN_NOTICE_MIN_CAVE_SIZE) return fail(error, error_size, "cave too small");
+    if (!image_matches(image, image_size, error, error_size)) return 0;
     const intptr_t rel = cave - (image + PSN_NOTICE_HOOK_SITE + 5);
     if (rel < INT32_MIN || rel > INT32_MAX) return fail(error, error_size, "cave out of 32-bit jump range");
 

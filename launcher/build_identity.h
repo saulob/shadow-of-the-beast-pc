@@ -47,6 +47,15 @@ BuildAssessment AssessBuild(const BuildEvidence& evidence, std::span<const GameB
 // The delimited-free report lines, identical for identical evidence.
 std::vector<std::string> DescribeAssessment(const BuildEvidence& evidence, const BuildAssessment& assessment);
 
+struct SelfEntry {
+    uint64_t flags = 0, offset = 0, size = 0, memory = 0;
+};
+
+struct ProgramSegment {
+    uint32_t type = 0, flags = 0;
+    uint64_t offset = 0, vaddr = 0, filesz = 0, memsz = 0, align = 0;
+};
+
 // The facts a SELF image's headers give without decrypting or running it. The first 4 KiB of eboot.bin is enough.
 struct ExecutableHeader {
     bool valid = false;
@@ -55,6 +64,12 @@ struct ExecutableHeader {
     uint64_t image_extent = 0;
     std::optional<ExecutableRange> code, data;
     size_t load_segments = 0;
+    uint8_t self_version = 0, self_mode = 0, self_endian = 0, self_attributes = 0;
+    uint16_t self_header_size = 0, self_meta_size = 0;
+    uint64_t self_file_size = 0;
+    uint16_t elf_type = 0, machine = 0;
+    std::vector<SelfEntry> self_entries;
+    std::vector<ProgramSegment> segments;
 };
 
 ExecutableHeader ReadExecutableHeader(std::span<const uint8_t> head);

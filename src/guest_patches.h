@@ -20,6 +20,9 @@ typedef struct {
  * bytes it replaces and is skipped when they differ. `cave` is writable code memory within 2 GB of `image`. */
 GuestPatchReport guest_patches_apply(uint8_t *image, size_t image_size, uint8_t *cave, size_t cave_size);
 
+/* Every site guest_patches_apply checks, without writing: `applied` counts the ones holding the expected bytes. */
+GuestPatchReport guest_patches_check(const uint8_t *image, size_t image_size);
+
 typedef void (*GuestRemoveFromNavigation)(void *controller, void *button);
 typedef void (*GuestSetCollapsed)(void *widget);
 

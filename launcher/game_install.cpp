@@ -227,9 +227,7 @@ InstallResult UnsupportedOrFailure(const GameCheck& check, const GameSource& sou
             result.diagnostics = std::move(report.lines);
             return result;
         }
-        if (!report.rejection.empty()) {
-            return Failure(FromCheck(check), check.detail + "; " + report.rejection);
-        }
+        return Failure(FromCheck(check), check.detail + " (" + SourceClassName(report.classification.kind) + ")");
     }
     return Failure(FromCheck(check), check.detail);
 }
@@ -240,7 +238,7 @@ InstallResult UnsupportedOrFailure(const GameCheck& check, const fs::path& folde
     }
     const std::unique_ptr<GameSource> source = OpenFolderSource(folder);
     std::vector<uint8_t> sfo;
-    source->Read("sce_sys/param.sfo", 1u << 20, sfo);
+    source->Read("sce_sys/param.sfo", diagnostics::kMaxSfoBytes, sfo);
     return UnsupportedOrFailure(check, *source, std::string(sfo.begin(), sfo.end()));
 }
 
@@ -865,14 +863,15 @@ InstallResult InstallFromPackage(const fs::path& package_file, const GameRoots& 
     if (std::optional<InstallResult> refused = RefuseUpdateOfOtherTitle(roots, hooks, builds, build)) {
         return recognized(*refused);
     }
-    if (std::optional<InstallResult> reused = ReuseInstalledBuild(roots, builds, build, hooks.replace_active)) {
-        return recognized(*reused);
-    }
+    // Before the installed build is reused: a package that only names it is not it.
     const PackageResult loaded = package.LoadFiles();
     if (loaded.ok()) {
         if (std::optional<InstallResult> foreign = RejectForeignExecutable(package, identity)) {
             return recognized(*foreign);
         }
+    }
+    if (std::optional<InstallResult> reused = ReuseInstalledBuild(roots, builds, build, hooks.replace_active)) {
+        return recognized(*reused);
     }
     const Layout layout(BuildPaths(roots, build));
     if (identity.layer > 0) {
@@ -1042,8 +1041,8 @@ InstallMessage DescribeInstall(InstallStatus status) {
                 Tr("Install the matching game version before applying this update.")};
     case InstallStatus::kUnsupportedBuild:
         return {Tr("Shadow of the Beast version not supported yet"),
-                Tr("Diagnostic information was written to the latest log. Please share the latest log when reporting "
-                   "this version on GitHub.")};
+                Tr("Technical information about this version was written to the current log. Your installed game was not "
+                   "changed. Please send the log with Bug Report.")};
     }
     return {Tr("Could not install the game"), Tr("An unexpected error occurred.")};
 }
