@@ -2,7 +2,7 @@
 
 # Shadow of the Beast - PC Port
 
-### The PS4 version of Shadow of the Beast running natively on Windows and Linux, with True Ultrawide, up to 4K, high frame rates, Xbox or PlayStation prompts and the TRG launcher
+### Shadow of the Beast, the PS4 action game, running natively on Windows and experimentally on Linux and Steam Deck, with exclusive True Ultrawide Hor+, up to 4K, up to 240 FPS presentation and modern PC display options
 
 [![Latest release](https://img.shields.io/github/v/release/saulob/shadow-of-the-beast-pc?style=for-the-badge&label=release&color=62d5ef&labelColor=10151b&include_prereleases&cacheSeconds=300)](https://github.com/saulob/shadow-of-the-beast-pc/releases/latest)
 [![Downloads](https://img.shields.io/github/downloads/saulob/shadow-of-the-beast-pc/total?style=for-the-badge&color=62d5ef&labelColor=10151b&cacheSeconds=300)](https://github.com/saulob/shadow-of-the-beast-pc/releases)
@@ -16,14 +16,15 @@
 
 ## Features
 
-- **True Ultrawide Hor+**: 21:9 and 32:9 show more of the world at the sides with the same vertical view. The HUD keeps
-  its 16:9 layout: health stays bottom left and the enemy counter bottom right, and the title, map, Options and Wisdom of
-  Shadows screens stay centered
-- **Up to 4K**: render at 480p, 720p, Native (1080p), 1440p, 1800p or 4K. This is the game's own render resolution, not
-  window scaling. A start that fails at a high resolution falls back to a safe one automatically
+- **True Ultrawide Hor+, exclusive to this PC port**: 21:9 and 32:9 show more of the world at the sides with the same
+  vertical view, without stretching the gameplay image. The HUD keeps its 16:9 layout: health stays bottom left and the
+  enemy counter bottom right, and the title, map, Options and Wisdom of Shadows screens stay centered
+- **Up to 4K internal render resolution**: 480p, 720p, Native (1080p), 1440p, 1800p or 4K. This is the game's own render
+  target, not window scaling. A start that fails at a high resolution falls back to a safe one automatically
 - **Aspect ratios**: 16:9 Original, 16:10, 21:9 Ultrawide, 32:9 Super Ultrawide, 4:3 and 5:4
-- **High frame rates**: 30, 60 (default), 90, 120, 144, 165, 240 or Unlimited, with deadline-based frame pacing. The
-  game's own logic keeps its 60 Hz tick
+- **High frame-rate presentation**: 30, 60 (Original, default), 90, 120, 144, 165, 240 or Unlimited, with deadline-based
+  pacing. The game simulation stays at its original 60 Hz: above 60 the latest completed game frame is presented again
+  between new game frames, with no motion interpolation, and gameplay does not speed up
 - **Graphics**: SMAA, AMD FSR 1 upscaling, RCAS sharpening with adjustable strength, anisotropic filtering (Game, 2x, 4x,
   8x, 16x), VSync and graphics card selection
 - **Display**: Windowed and Borderless Fullscreen (**F11** switches while playing), monitor selection, Letterbox or
@@ -209,8 +210,10 @@ bash tools/package-linux.sh            # dist/ShadowOfTheBeastPC-v<version>-x86_
 ```
 
 `tools\package-release.ps1` prepares both release files from Windows: it runs `tools\test.ps1 -Full`, packages the ZIP,
-builds and packages the AppImage in an Ubuntu 20.04 WSL distribution, and writes the release notes with both checksums.
-Nothing is published. See [docs/LINUX.md](docs/LINUX.md) for the requirements and the other commands.
+builds and packages the AppImage in an Ubuntu 20.04 WSL distribution, compares the two release builds' parity contracts,
+and writes the release notes and VirusTotal manifests with every checksum. Nothing is published or uploaded. The
+VirusTotal steps before publishing are in [docs/RELEASE_SECURITY.md](docs/RELEASE_SECURITY.md); see
+[docs/LINUX.md](docs/LINUX.md) for the requirements and the other commands.
 
 ### Repository layout
 

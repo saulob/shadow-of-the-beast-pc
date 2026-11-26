@@ -31,9 +31,14 @@ prefix=${name%%1.2.3*} suffix=${name#*1.2.3}
 check updater-asset-name grep -qF "\"$prefix\" + version.CoreString() + \"$suffix\"" "$root/launcher/update_config.cpp"
 check updater-checksum-name grep -qF "\"$prefix\" + version.CoreString() + \"$suffix.sha256\"" "$root/launcher/update_config.cpp"
 check release-script-name grep -qF '"ShadowOfTheBeastPC-v$version-x86_64.AppImage"' "$root/tools/package-release.ps1"
-check release-notes-name grep -qF "\`$(appimage_name "$version")\`" "$root/docs/releases/v$version.md"
-check release-notes-windows-name grep -qF "\`ShadowOfTheBeastPC-v$version-windows-x64.zip\`" "$root/docs/releases/v$version.md"
-check release-notes-checksums bash -c 'grep -qF @WINDOWS_SHA256@ "$1" && grep -qF @LINUX_SHA256@ "$1"' _ "$root/docs/releases/v$version.md"
+check release-script-windows-name grep -qF '"ShadowOfTheBeastPC-v$version-windows-x64"' "$root/tools/package-release.ps1"
+notes=$root/packaging/release-notes.md
+check release-notes-names bash -c 'grep -qF "\`@WINDOWS_ASSET@\`" "$1" && grep -qF "\`@LINUX_ASSET@\`" "$1"' _ "$notes"
+check release-notes-checksums bash -c 'for key in WINDOWS LINUX WINDOWS_EXE UPDATER_EXE; do
+    grep -qF "@${key}_SHA256@" "$1" && grep -qF "@${key}_VIRUSTOTAL@" "$1" || exit 1; done; grep -qF @VIRUSTOTAL_STATUS@ "$1"' _ "$notes"
+check release-notes-four-scans bash -c '[ "$(grep -cE "^\| .* \| @[A-Z_]+_VIRUSTOTAL@ \|$" "$1")" = 4 ] && ! grep -qF LINUX_EXE "$1" &&
+    ! grep -qE "LINUX_EXE|-extracted" "$2"' _ "$notes" "$root/tools/package-release.ps1"
+check release-notes-no-version bash -c '! grep -qE "[0-9]+\.[0-9]+\.[0-9]+" "$1"' _ "$notes"
 literal=$(grep -lF "$version" "$root"/tools/package-linux.sh "$root"/tools/package-release-linux.sh "$root"/tools/package-release.ps1 \
     "$root"/tools/build-appimage-runtime.sh "$root"/packaging/linux/* "$root"/packaging/README-linux.txt 2>/dev/null)
 check no-literal-version [ -z "$literal" ]

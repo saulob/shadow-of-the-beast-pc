@@ -191,6 +191,8 @@ function Test-ReleaseFolder([string]$Dir) {
                 $problems.Add("local path or stale name in $relative"); break
             }
         }
+        if ($text -cmatch '-----BEGIN [A-Z ]*PRIVATE KEY-----\r?\n[A-Za-z0-9+/=]{40}') { $problems.Add("private key in $relative") }
+        if ($text -cmatch 'gh[pousr]_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{40}|AKIA[0-9A-Z]{16}') { $problems.Add("access token in $relative") }
     }
     $licenceFiles = @('licenses\THIRD-PARTY-LICENSES.txt', 'licenses\MSYS2-PACKAGES.txt') +
         @($FFmpegLicences | ForEach-Object { "licenses\ffmpeg\$_" })

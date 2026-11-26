@@ -7,6 +7,7 @@
 #   tools/package-linux.sh --out-dir DIR           write the AppImage, .sha256 and symbols to DIR instead of dist/
 #   tools/package-linux.sh --verify DIR            check an AppDir
 #   tools/package-linux.sh --verify-appimage FILE  extract an AppImage (never running the program) and check it all
+#   tools/package-linux.sh --extract-program FILE OUT  copy usr/bin/shadow_of_the_beast out of an AppImage with unsquashfs
 #
 # Release AppImages are built on Ubuntu 20.04 (packaging/linux/ci-deps.sh): no shipped ELF may need a glibc newer than
 # 2.31. GPU drivers, the Vulkan loader, X11/Wayland, audio and glibc always come from the player's system.
@@ -316,6 +317,24 @@ verify_appimage() { # appimage [expected AppDir]
     echo "APPIMAGE_VERIFIED|$(basename -- "$appimage")|$version"
 }
 
+# Reads the AppImage's file system in place: neither the runtime nor the program is started.
+extract_program() { # appimage out
+    local appimage out=$2 work file
+    appimage=$(readlink -f -- "$1")
+    [[ -f $appimage ]] || die "no AppImage at $1"
+    [[ $(od -An -tx1 -j8 -N3 -- "$appimage" | tr -d ' \n') == 414902 ]] || die "$appimage is not a type 2 AppImage"
+    command -v unsquashfs >/dev/null || die 'unsquashfs is missing (squashfs-tools)'
+    work=$(mktemp -d)
+    unsquashfs -no-progress -offset "$(appimage_offset "$appimage")" -dest "$work/root" "$appimage" "usr/bin/$program" >/dev/null ||
+        { rm -rf -- "$work"; die "unsquashfs could not read $(basename -- "$appimage")"; }
+    file=$work/root/usr/bin/$program
+    if [[ ! -f $file || -L $file ]] || ! is_elf "$file"; then rm -rf -- "$work"; die "the AppImage holds no usr/bin/$program program"; fi
+    mkdir -p -- "$(dirname -- "$out")"
+    cp -- "$file" "$out"
+    rm -rf -- "$work"
+    echo "PROGRAM_SHA256|$(sha256sum -- "$out" | cut -d' ' -f1)"
+}
+
 stage_licences() { # appdir ffmpeg-prefix owners-file
     local appdir=$1 ff_prefix=$2 owners=$3 licenses=$1/$license_dir component lib path package version_of
     install -Dm644 "$root/LICENSE" "$licenses/LICENSE.txt"
@@ -376,7 +395,11 @@ main() {
             --out-dir) out_dir=${2:?--out-dir needs a folder}; shift ;;
             --verify) verify_dir=$(cd -- "${2:?--verify needs a folder}" && pwd) || exit 2; shift ;;
             --verify-appimage) verify_file=${2:?--verify-appimage needs a file}; shift ;;
-            -h|--help) sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+            --extract-program)
+                for tool in readelf od sha256sum; do command -v "$tool" >/dev/null || die "Missing $tool"; done
+                extract_program "${2:?--extract-program needs an AppImage}" "${3:?--extract-program needs an output file}"
+                return ;;
+            -h|--help) sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
             *) echo "Unknown option: $1" >&2; exit 2 ;;
         esac
         shift

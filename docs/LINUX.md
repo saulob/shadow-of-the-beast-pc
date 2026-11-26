@@ -40,12 +40,14 @@ without them. The program finds it through its build RPATH; the AppImage carries
 | `tools/test-linux.sh --parity` | builds and runs only `sotb-build-parity-tests` |
 | `tools/package-linux.sh` | builds, then writes `dist/ShadowOfTheBeastPC-v<version>-x86_64.AppImage` and its `.sha256` |
 | `tools/package-linux.sh --verify-appimage FILE` | extracts an AppImage (never starting it) and checks everything in it |
-| `tools/package-release-linux.sh` | from a checkout on a Windows drive: mirrors it, builds, tests, packages, copies to `dist/` |
-| `tools\package-release.ps1` | Windows: `test.ps1 -Full`, the Windows ZIP, the AppImage in Ubuntu 20.04 WSL, the checksums |
+| `tools/package-linux.sh --extract-program FILE OUT` | copies `usr/bin/shadow_of_the_beast` out of an AppImage with `unsquashfs`, never running it |
+| `tools/package-release-linux.sh` | from a checkout on a Windows drive: mirrors it, builds, tests, runs the parity contract, packages, copies to `dist/` |
+| `tools\package-release.ps1` | Windows: the complete release, `test.ps1 -Full` to VirusTotal manifests ([RELEASE_SECURITY.md](RELEASE_SECURITY.md)) |
 | `tools/build.sh --run` | starts the program that was just built |
 
 `tools/package-release-linux.sh` mirrors the sources into `~/.cache/shadow-of-the-beast-pc-build` inside WSL (game data,
-user data, builds and `cache/` never cross) and builds there.
+user data, builds and `cache/` never cross) and builds there. The only exception is `build/image/<build>/boot.bin` and
+`image.json` of the supported builds, which the parity contract reads; the packaging refuses both names in an AppImage.
 
 ## The AppImage
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # The Linux release flow for a checkout on a Windows drive (tools\package-release.ps1 starts it through wsl.exe in the
-# Ubuntu 20.04 distribution): mirrors the sources into a Linux folder, builds, runs the headless Linux suites, packages
-# and verifies the AppImage, and copies it into the checkout's dist/. Local only: nothing is published or uploaded, and
-# the program is never started.
+# Ubuntu 20.04 distribution): mirrors the sources into a Linux folder, builds, runs the headless Linux suites and the
+# parity contract (into the checkout's build/release/), packages and verifies the AppImage, and copies it into the
+# checkout's dist/. Local only: nothing is published or uploaded, and the program is never started.
 #
 #   tools/package-release-linux.sh [--clean] [--skip-build]
 #
@@ -40,6 +40,15 @@ rsync -rl --checksum --no-times --delete --chmod=D755,F644 \
     --exclude '/dist' --exclude '/out' --exclude '/.venv' --exclude 'node_modules' --exclude '.wrangler' \
     "$source/" "$mirror/"
 chmod +x "$mirror"/tools/*.sh "$mirror"/packaging/linux/*.sh "$mirror"/packaging/linux/AppRun
+# The parity contract reads each supported build's prepared boot image; nothing else from build/ crosses.
+[[ -d $source/build/image ]] || die 'No prepared boot images in build/image (install the supported builds with the launcher).'
+mkdir -p "$mirror/build/image"
+rsync -rt --delete --chmod=D755,F644 --include '/*/' --include '/*/boot.bin' --include '/*/image.json' --exclude '*' \
+    "$source/build/image/" "$mirror/build/image/"
+
+release=$source/build/release
+mkdir -p "$release"
+rm -f -- "$release/feature-contract-linux.txt" "$release/linux-program.sha256"
 
 cd "$mirror"
 ((clean)) && rm -rf build/cmake/linux build/appimage
@@ -50,7 +59,13 @@ if ((!skip_build)); then
     step 'Headless Linux suites (nothing is started)'
     bash tools/test-linux.sh --full
 fi
+step 'Parity contract of this build (nothing is started)'
+code=0
+bash tools/test-linux.sh --parity > "$release/feature-contract-linux.txt" 2>&1 || code=$?
+echo "EXIT|$code" >> "$release/feature-contract-linux.txt"
+grep -E '^(GROUP|VERSION)\|' "$release/feature-contract-linux.txt" || true
 bash tools/package-linux.sh --skip-build
+sha256sum -- build/appimage/AppDir/usr/bin/shadow_of_the_beast | cut -d' ' -f1 > "$release/linux-program.sha256"
 
 step "Copying the AppImage into $source/dist"
 shopt -s nullglob

@@ -471,33 +471,6 @@ function Invoke-LinuxParity {
     return Get-ContractResult $run.Lines $run.Code 'Linux'
 }
 
-# The contract lines both platforms must print identically, keyed by what they describe.
-function Read-Contract([string[]]$Lines) {
-    $table = [ordered]@{}
-    foreach ($line in $Lines) {
-        $p = "$line".Split('|')
-        if ($p[0] -eq 'VERSION' -and $p.Count -ge 2) { $table['VERSION'] = $p[1] }
-        elseif ($p[0] -eq 'SUPPORTED_BUILD' -and $p.Count -ge 4) { $table["SUPPORTED_BUILD|$($p[1])|$($p[2])"] = $p[3] }
-        elseif ($p[0] -eq 'FEATURE' -and $p.Count -ge 3) { $table["FEATURE|$($p[1])"] = $p[2] }
-        elseif ($p[0] -eq 'BUILD_FEATURE' -and $p.Count -ge 6) { $table["BUILD_FEATURE|$($p[1])|$($p[2])|$($p[3])"] = "$($p[4])|$($p[5])" }
-        elseif ($p[0] -eq 'BUILD_PARITY' -and $p.Count -ge 5) { $table["BUILD_PARITY|$($p[1])|$($p[2])"] = "$($p[3])|$($p[4])" }
-        elseif ($p[0] -eq 'FEATURE_PARITY' -and $p.Count -ge 3) { $table["FEATURE_PARITY|$($p[1])"] = $p[2] }
-    }
-    return $table
-}
-
-function Compare-Contracts($Windows, $Linux) {
-    $differences = New-Object System.Collections.Generic.List[string]
-    foreach ($key in $Windows.Keys) {
-        if (-not $Linux.Contains($key)) { $differences.Add("$key only on Windows ($($Windows[$key]))") }
-        elseif ($Windows[$key] -ne $Linux[$key]) { $differences.Add("${key}: Windows $($Windows[$key]), Linux $($Linux[$key])") }
-    }
-    foreach ($key in $Linux.Keys) {
-        if (-not $Windows.Contains($key)) { $differences.Add("$key only on Linux ($($Linux[$key]))") }
-    }
-    return $differences.ToArray()
-}
-
 function Invoke-PlatformParity {
     $windows = $script:Contracts['windows']
     $linux = $script:Contracts['linux']
