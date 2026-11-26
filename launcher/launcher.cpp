@@ -39,6 +39,7 @@
 #include "placement.h"
 #include "resolution_recovery.h"
 #include "settings.h"
+#include "shift_key.h"
 #include "startup_phase.h"
 #include "text_languages.h"
 #include "trophy_page.h"
@@ -215,7 +216,7 @@ public:
         if (config_.skip_once && !config_.force_show) {
             return ready ? SOTB_LAUNCHER_PLAY : Show(ready);
         }
-        if (!trg::ShouldShowLauncher(settings_, kShowLauncherKey, ready, config_.force_show)) {
+        if (!trg::ShouldShowLauncher(settings_, kShowLauncherKey, ready, config_.force_show || ShiftHeldAtStart())) {
             return SOTB_LAUNCHER_PLAY;
         }
         return Show(ready);

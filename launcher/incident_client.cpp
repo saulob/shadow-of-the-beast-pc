@@ -392,7 +392,8 @@ FeedbackAnswer SendTestFeedback(const ServiceConfig& config, const TrackedReport
         return confirmed ? FeedbackAnswer{FeedbackOutcome::kSaved, "ok"} : FeedbackAnswer{FeedbackOutcome::kFailed, "malformed_reply"};
     }
     const bool object = answer.body && answer.body->IsObject();
-    const std::string code = object ? answer.body->StringOr("error") : std::string();
+    const std::string error = object ? answer.body->StringOr("error") : std::string();
+    const std::string code = error.empty() ? std::string() : SafeName(error, 32);
     if (answer.status == 404 || code == "stale_request" || code == "already_answered") {
         return {FeedbackOutcome::kStale, code.empty() ? "not_found" : code};
     }

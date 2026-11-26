@@ -16,6 +16,7 @@
 #include <winhttp.h>
 #else
 #include <errno.h>
+#include <fcntl.h>
 #include <poll.h>
 #include <pthread.h>
 #include <signal.h>
@@ -338,7 +339,8 @@ HttpReply PostJsonHttps(const std::string& url, const std::string& body, const H
     argv.push_back(nullptr);
 
     int to_child[2] = {-1, -1}, from_child[2] = {-1, -1};
-    if (pipe(to_child) != 0 || pipe(from_child) != 0) {
+    // Close-on-exec, or a curl spawned by another request thread inherits these ends and never sees end of input.
+    if (pipe2(to_child, O_CLOEXEC) != 0 || pipe2(from_child, O_CLOEXEC) != 0) {
         for (int descriptor : {to_child[0], to_child[1], from_child[0], from_child[1]}) {
             if (descriptor >= 0) close(descriptor);
         }

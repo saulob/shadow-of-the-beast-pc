@@ -73,7 +73,8 @@ check 'build.sh does not require nasm for every build' '! grep -qE "^for tool in
 check 'build.sh stops with exit 3 when FFmpeg cannot be prepared' '[[ $build == *"build-ffmpeg-linux.sh\" \"\$ffmpeg\""*"|| exit \$?"* ]]'
 check 'build.sh points to the setup script' '[[ $build == *"Prepare: sudo bash packaging/linux/ci-deps.sh"* ]]'
 check 'test-linux.sh reports the setup procedure in LINUX_BLOCKED' '[[ $runner == *"^Missing:"*"^Prepare:"* ]]'
-check 'the setup script installs nasm and make' 'grep -qE "^\s+clang-20 .*\bmake nasm\b" <<<"$deps"'
+check 'the setup script installs make and the pinned NASM' 'grep -qE "^\s+clang-20 .*\bmake\b" <<<"$deps" &&
+    grep -qE "^NASM_SHA256=[0-9a-f]{64}$" <<<"$deps" && [[ $deps == *"die \"nasm is not \$NASM_VERSION\""* ]]'
 check 'the setup script keeps the Ubuntu 20.04 release baseline' '[[ $deps == *"\$VERSION_ID == 20.04"* ]]'
 check 'no script installs packages by itself' \
     '! grep -qE "^\s*(sudo\s+)?(apt|apt-get|dnf|pacman|zypper)\s" "$repo/tools/build.sh" "$repo/tools/test-linux.sh" "$script" "$repo/tools/test.ps1"'

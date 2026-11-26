@@ -682,12 +682,14 @@ static int sfo_value(const char *path, const char *key, char *text, size_t text_
         const unsigned char *e = data + 20 + i * 16;
         uint16_t key_offset, format; uint32_t length, offset;
         memcpy(&key_offset, e, 2); memcpy(&format, e + 2, 2); memcpy(&length, e + 4, 4); memcpy(&offset, e + 12, 4);
-        if (keys + key_offset >= n || values + offset + length > n ||
-            strcmp((const char *)data + keys + key_offset, key)) continue;
-        if (format == 0x0404 && number && length >= 4) { memcpy(number, data + values + offset, 4); return 1; }
+        const size_t key_at = (size_t)keys + key_offset, value_at = (size_t)values + offset;
+        const size_t key_size = strlen(key) + 1;
+        if (key_at >= n || n - key_at < key_size || memcmp(data + key_at, key, key_size) ||
+            value_at > n || length > n - value_at) continue;
+        if (format == 0x0404 && number && length >= 4) { memcpy(number, data + value_at, 4); return 1; }
         if (text && text_size) {
             const size_t copy = length < text_size - 1 ? length : text_size - 1;
-            memcpy(text, data + values + offset, copy);
+            memcpy(text, data + value_at, copy);
             text[copy] = 0;
         }
         return 1;

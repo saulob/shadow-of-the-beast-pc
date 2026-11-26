@@ -65,6 +65,32 @@ half
   https://github.com/permutationlock/half
   MIT
 
+SMAA (gpu/shadps4/video_core/host_shaders/smaa)
+  https://github.com/iryoku/smaa
+  MIT; Copyright (C) 2013 Jorge Jimenez, Jose I. Echevarria, Belen Masia, Fernando Navarro, Diego Gutierrez.
+  Full text in licenses/SMAA
+
+AMD FidelityFX Super Resolution 1 (gpu/shadps4/video_core/host_shaders/fsr: ffx_a.h, ffx_fsr1.h)
+  https://github.com/GPUOpen-Effects/FidelityFX-FSR
+  MIT; the notice follows.
+
+  Copyright (c) 2021 Advanced Micro Devices, Inc. All rights reserved.
+  Permission is hereby granted, free of charge, to any person obtaining a copy
+  of this software and associated documentation files (the "Software"), to deal
+  in the Software without restriction, including without limitation the rights
+  to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+  copies of the Software, and to permit persons to whom the Software is
+  furnished to do so, subject to the following conditions:
+  The above copyright notice and this permission notice shall be included in
+  all copies or substantial portions of the Software.
+  THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+  IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+  FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+  AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+  SOFTWARE.
+
 ANGLE runtime (OpenGL ES backend, prebuilt)
   https://github.com/google/angle
   BSD-3-Clause
@@ -73,9 +99,17 @@ LibAtrac9
   https://github.com/Thealexbarney/LibAtrac9
   MIT
 
-FFmpeg (avcodec, avformat, avutil, swresample, swscale DLLs)
+FFmpeg (avcodec, avformat, avutil, swresample, swscale libraries)
   https://ffmpeg.org/
   LGPL-2.1-or-later; built from gpu/ffmpeg.txt, configuration and licence texts in licenses/ffmpeg
+
+libpng
+  http://www.libpng.org/pub/png/libpng.html
+  libpng License
+
+OpenSSL libcrypto (Linux AppImage)
+  https://www.openssl.org/
+  Apache-2.0; full text in licenses/system/openssl inside the AppImage
 
 nanosvg
   https://github.com/memononen/nanosvg

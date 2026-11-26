@@ -487,6 +487,12 @@ void TestRefusedBeforeGuest() {
         const size_t at = loader.find(later);
         CHECK(at != std::string::npos && at > refusal);
     }
+    // param.sfo offsets are bounded in size_t and the key compare never runs past the bytes read.
+    const size_t sfo = loader.find("static int sfo_value(");
+    CHECK(sfo != std::string::npos);
+    const std::string sfo_body = loader.substr(sfo, loader.find("\n}\n", sfo) - sfo);
+    CHECK(Has(sfo_body, "(size_t)keys + key_offset") && Has(sfo_body, "(size_t)values + offset") &&
+          Has(sfo_body, "length > n - value_at") && Has(sfo_body, "n - key_at < key_size") && !Has(sfo_body, "strcmp("));
     // The diagnostics themselves only read files.
     const std::string diagnostics = ReadAll("launcher/build_diagnostics.cpp") + ReadAll("launcher/build_identity.cpp");
     for (const char* writes : {"ofstream", "fopen(", "CreateProcess", "system(", "remove(", "WriteFile", "LoadLibrary"}) {

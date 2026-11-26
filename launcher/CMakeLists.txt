@@ -86,7 +86,7 @@ add_custom_command(OUTPUT ${SOTB_PAGE_ICON_SOURCE}
     COMMENT "Embedding the page icons")
 target_sources(sotb_launcher_core PRIVATE ${SOTB_PAGE_ICON_SOURCE})
 
-add_library(sotb_launcher STATIC host.cpp incident_page.cpp launcher.cpp my_reports_page.cpp trophy_page.cpp update_config.cpp
+add_library(sotb_launcher STATIC host.cpp incident_page.cpp launcher.cpp my_reports_page.cpp shift_key.cpp trophy_page.cpp update_config.cpp
     updater/github_release.cpp updater/json.cpp updater/sha256.cpp updater/third_party/miniz/miniz.c
     updater/update_controller.cpp updater/update_job.cpp updater/update_paths.cpp updater/update_platform.cpp
     updater/update_ui.cpp updater/update_zip.cpp updater/version.cpp)

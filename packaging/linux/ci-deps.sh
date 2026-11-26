@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Release build environment of the Linux build: Ubuntu 20.04, whose glibc (2.31) is the oldest a release may need. Run once
-# as root on a clean Ubuntu 20.04 machine, container or WSL distribution (docs/LINUX.md); it needs network access and
-# changes system packages. Clang 20 and the GCC 14 C++ library come from apt.llvm.org and the ubuntu-toolchain-r PPA,
-# whose signing keys are checked by fingerprint. What 20.04 lacks or ships too old is built into /usr/local from pinned,
-# verified sources. nasm and make build the pinned FFmpeg (tools/build-ffmpeg-linux.sh).
+# Release build environment of the Linux AppImage: Ubuntu 20.04, whose glibc (2.31) is the oldest the AppImage runs on
+# (tools/package-linux.sh refuses any shipped ELF that needs a newer one). Run once as root on a clean Ubuntu 20.04
+# machine, container or WSL distribution (docs/LINUX.md); it needs network access and changes system packages. Clang 20
+# and the GCC C++ library come from apt.llvm.org and the ubuntu-toolchain-r PPA, whose signing keys are checked by
+# fingerprint. What 20.04 lacks or ships too old is built into /usr/local from pinned, verified sources. NASM and make
+# build the pinned FFmpeg (tools/build-ffmpeg-linux.sh); patchelf, binutils, dpkg and desktop-file-utils package it.
 set -euo pipefail
 
 CMAKE_VERSION=3.31.8
@@ -18,6 +19,8 @@ VMA_VERSION=v3.4.0
 VMA_SHA256=8487b7995ad3b263eb73bc5b9a77d71aa69b6bef5d58a715c02d2663afd81f1a
 BOOST_VERSION=1.83.0
 BOOST_SHA256=6478edfe2f3305127cffe8caf73ea0176c53769f4bf1585be237eb30798c3b8e
+NASM_VERSION=2.16.03
+NASM_SHA256=1412a1c760bbd05db026b6c0d1657affd6631cd0a63cddb6f73cc6d4aa616148
 UFFD_LINUX_TAG=v6.8
 UFFD_SHA256=ea46598f511c1f9156e16ffae7e76b3ded628caf9f8c52ca140315e0534cef86
 UFFD_INSTALLED_SHA256=b7c2f6ae0080a09372d221d286dcf86de3053f208233b835cfa3adf37128a551
@@ -74,7 +77,7 @@ echo 'deb [signed-by=/usr/share/keyrings/ubuntu-toolchain-r.gpg] https://ppa.lau
     > /etc/apt/sources.list.d/ubuntu-toolchain-r.list
 apt-get update
 apt-get install -y --no-install-recommends \
-    clang-20 lld-20 libstdc++-14-dev make nasm ninja-build pkg-config python3 perl file patchelf binutils rsync xz-utils bzip2 \
+    clang-20 lld-20 libstdc++-14-dev make ninja-build pkg-config python3 perl file patchelf binutils rsync xz-utils bzip2 \
     desktop-file-utils libvulkan-dev libfreetype-dev libpng-dev zlib1g-dev \
     libx11-dev libxext-dev libxrandr-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxfixes-dev \
     libxinerama-dev libxkbcommon-dev libwayland-dev libwayland-bin wayland-protocols libdrm-dev libgbm-dev \
@@ -174,5 +177,11 @@ for feature in SDL_VIDEO_DRIVER_X11_DYNAMIC SDL_VIDEO_DRIVER_WAYLAND_DYNAMIC SDL
 done
 ldconfig
 
-printf '\nReady: Ubuntu 20.04 (%s), %s. Build with tools/build.sh.\n' \
+step "NASM $NASM_VERSION (FFmpeg 8's assembly needs more than 20.04's 2.14)"
+fetch "https://www.nasm.us/pub/nasm/releasebuilds/$NASM_VERSION/nasm-$NASM_VERSION.tar.xz" "$NASM_SHA256" "$work/nasm.tar.xz"
+tar -xJf "$work/nasm.tar.xz" -C "$work"
+(cd "$work/nasm-$NASM_VERSION" && ./configure --prefix=/usr/local >/dev/null && make -j"$(nproc)" >/dev/null && make install >/dev/null)
+[[ $(nasm -v) == "NASM version $NASM_VERSION"* ]] || die "nasm is not $NASM_VERSION"
+
+printf '\nReady: Ubuntu 20.04 (%s), %s. Build and package with tools/package-linux.sh.\n' \
     "$(getconf GNU_LIBC_VERSION)" "$(clang --version | head -1)"

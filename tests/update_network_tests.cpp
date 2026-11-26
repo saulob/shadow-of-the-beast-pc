@@ -638,6 +638,31 @@ void TestProductionConfig() {
   CHECK(config.asset_name(next) == "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage");
   CHECK(config.checksum_asset_name(next) == "ShadowOfTheBeastPC-v0.2.0-x86_64.AppImage.sha256");
   CHECK(config.restart_executable == config.appimage_path);
+  {
+    // An AppImage whose folder cannot be written is not offered an install it cannot finish.
+    TempDir folder;
+    const std::filesystem::path image = folder.path / "ShadowOfTheBeastPC-v0.1.0-x86_64.AppImage";
+    {
+      const unsigned char head[16] = {0x7F, 'E', 'L', 'F', 2, 1, 1, 0, 'A', 'I', 2};
+      std::ofstream out(image, std::ios::binary | std::ios::trunc);
+      out.write(reinterpret_cast<const char*>(head), sizeof(head));
+    }
+    const char* appimage = std::getenv("APPIMAGE");
+    const char* appdir = std::getenv("APPDIR");
+    const std::string saved_appimage = appimage ? appimage : "", saved_appdir = appdir ? appdir : "";
+    setenv("APPIMAGE", image.c_str(), 1);
+    unsetenv("APPDIR");
+    const UpdateConfig writable = Sotb::MakeUpdateConfig(temp.path);
+    CHECK(writable.install_supported && writable.appimage_path == std::filesystem::weakly_canonical(image));
+    std::filesystem::permissions(folder.path, std::filesystem::perms::owner_read | std::filesystem::perms::owner_exec);
+    if (access(folder.path.c_str(), W_OK) != 0) {
+      const UpdateConfig read_only = Sotb::MakeUpdateConfig(temp.path);
+      CHECK(!read_only.install_supported && read_only.install_unsupported_reason.find("read-only") != std::string::npos);
+    }
+    std::filesystem::permissions(folder.path, std::filesystem::perms::owner_all);
+    if (appimage) setenv("APPIMAGE", saved_appimage.c_str(), 1); else unsetenv("APPIMAGE");
+    if (appdir) setenv("APPDIR", saved_appdir.c_str(), 1);
+  }
 #endif
   const std::string asset = "https://github.com/saulob/shadow-of-the-beast-pc/releases/download/v0.2.0/" + config.asset_name(next);
   CHECK(UrlAllowed(asset, config.allowed_hosts, config.download_url_prefix));

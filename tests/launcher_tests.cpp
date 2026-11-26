@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 #include "guest_display.h"
 #include "header_art.h"
 #include "launcher_quit.h"
@@ -324,6 +328,17 @@ void TestLauncherQuit() {
     CHECK(Contains(launcher, "config.hints = \"Enter  Play     Alt+F4  Quit     Ctrl+S  Save\""));
     CHECK(!Contains(launcher, "Esc  Quit"));
     CHECK(Contains(launcher, "host_.NextFrame()") && !Contains(launcher, "host_.PumpEvents()"));
+}
+
+// Shift at start reopens the launcher on every platform: trg's own check only sees it on Windows.
+void TestShiftReopensLauncher() {
+    const fs::path root(SOTB_SOURCE_DIR);
+    const std::string launcher = ReadAll(root / "launcher/launcher.cpp");
+    CHECK(Contains(launcher, "config_.force_show || ShiftHeldAtStart()"));
+    const std::string shift = ReadAll(root / "launcher/shift_key.cpp");
+    CHECK(Contains(shift, "bool ShiftHeldAtStart() { return trg::ShiftHeld(); }") && Contains(shift, "\"XQueryKeymap\"") &&
+          Contains(shift, "dlopen(\"libX11.so.6\""));
+    CHECK(Contains(ReadAll(root / "launcher/CMakeLists.txt"), " shift_key.cpp "));
 }
 
 void TestSkipIntro(const fs::path& base) {
@@ -827,6 +842,46 @@ void TestKeys(const fs::path& base) {
 
 } // namespace
 
+#ifndef _WIN32
+// The AppImage's mount is read-only: the data folders follow $APPIMAGE, never the program's own folder.
+void TestAppImageDataFolder(const fs::path& base) {
+    std::printf("AppImage data folder\n");
+    const char* names[] = {"APPIMAGE", "APPDIR", "SOTB_PORTABLE_DIR", "XDG_DATA_HOME"};
+    std::vector<std::pair<std::string, std::string>> saved;
+    for (const char* name : names) {
+        if (const char* value = std::getenv(name)) saved.emplace_back(name, value);
+        unsetenv(name);
+    }
+    const fs::path beside = base / "Apps", mount = base / "mount", data = base / "data";
+    fs::create_directories(beside);
+    fs::create_directories(mount / "usr" / "bin");
+    WriteAll(beside / "ShadowOfTheBeastPC-v1.2.3-x86_64.AppImage", "AppImage");
+    const SotbPathRequest request{};
+    SotbPaths paths{};
+    const auto resolve = [&] { return sotb_resolve_paths(&request, &paths) == 1; };
+
+    setenv("APPIMAGE", (beside / "ShadowOfTheBeastPC-v1.2.3-x86_64.AppImage").c_str(), 1);
+    setenv("APPDIR", mount.c_str(), 1);
+    setenv("XDG_DATA_HOME", data.c_str(), 1);
+    CHECK(resolve() && fs::path(paths.user_dir) == beside / "user" && fs::path(paths.logs_dir) == beside / "logs");
+    CHECK(fs::path(paths.app0).string().rfind((beside / "game").string(), 0) == 0);
+    CHECK(fs::path(paths.user_dir).string().rfind(mount.string(), 0) != 0);
+
+    fs::permissions(beside, fs::perms(0500));
+    if (access(beside.c_str(), W_OK) != 0) {
+        CHECK(resolve() && fs::path(paths.user_dir) == data / "ShadowOfTheBeastPC" / "user" &&
+              fs::path(paths.logs_dir) == data / "ShadowOfTheBeastPC" / "logs");
+    }
+    setenv("SOTB_PORTABLE_DIR", (base / "portable").c_str(), 1);
+    CHECK(resolve() && fs::path(paths.user_dir) == base / "portable" / "user" &&
+          fs::path(paths.logs_dir) == base / "portable" / "logs");
+    fs::permissions(beside, fs::perms(0700));
+
+    for (const char* name : names) unsetenv(name);
+    for (const auto& [name, value] : saved) setenv(name.c_str(), value.c_str(), 1);
+}
+#endif
+
 int main() {
     const fs::path base = fs::temp_directory_path() / ("sotb_launcher_tests_" + std::to_string(std::rand()));
     fs::create_directories(base);
@@ -843,6 +898,7 @@ int main() {
     TestSkipIntro(base);
     TestMenuButtonLayout(base);
     TestLauncherQuit();
+    TestShiftReopensLauncher();
     TestManagedSettings();
     TestSettingsFile(base);
     TestDetailedLogging(base);
@@ -855,6 +911,9 @@ int main() {
     TestFrameRates();
     TestSettingsSummary(base);
     TestKeys(base);
+#ifndef _WIN32
+    TestAppImageDataFolder(base);
+#endif
     std::error_code ec;
     fs::remove_all(base, ec);
     std::printf("%d checks, %d failures\n", checks, failures);

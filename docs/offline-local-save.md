@@ -6,7 +6,8 @@ NP Lookup and friends or presence calls return the signed-out error.
 
 ## Portable root
 
-`game\`, `user\` and `logs\` sit side by side next to the executable (`SOTB_PORTABLE_DIR`, or the AppImage folder).
+`game\`, `user\` and `logs\` sit side by side next to the executable. On Linux the root is `SOTB_PORTABLE_DIR` when set,
+else the AppImage's folder when it is writable, else `$XDG_DATA_HOME/ShadowOfTheBeastPC`.
 A development build resolves the same three to the repository's `game\prepared\<build>`, `user` and `build\logs`
 (`launcher\paths.cpp`). Nothing the player generates is written under `game\`.
 

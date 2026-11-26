@@ -18,7 +18,8 @@
   Linux (-Full, or -Filter naming a Linux group): tools/test-linux.sh runs in the first WSL distribution with clang, cmake
   and ninja, in build/cmake/linux. linux-tests builds the Linux program (never started) and runs every headless suite of
   the Linux build; linux-parity runs the same contract there. platform-parity then compares the two contracts (version,
-  supported builds, public features, per-build feature results) and prints PLATFORM_PARITY|windows_vs_linux. Without WSL or
+  supported builds, public features, per-build feature results) and prints PLATFORM_PARITY|windows_vs_linux. linux-packaging
+  runs the AppImage packaging contract (tests/package_linux_tests.sh) on synthetic AppDirs. Without WSL or
   the Linux libraries that is BLOCKED; with -SkipLinux it is SKIPPED; it is PASS only when the Linux program built, its
   suites passed and both contracts ran, passed and match. PLATFORM_CAPABILITY lines (Direct3D 11) are not compared.
 
@@ -445,6 +446,23 @@ function Invoke-LinuxTests {
     return Get-LinuxTestsResult $run.Lines $run.Code
 }
 
+function Invoke-LinuxPackaging {
+    if ($SkipLinux) { return Result 'SKIPPED' 'skipped with -SkipLinux' }
+    $linux = Resolve-Linux
+    if ($linux.Problem) { return Result 'BLOCKED' $linux.Problem }
+    Write-Host "    WSL distribution: $($linux.Distro)" -ForegroundColor DarkGray
+    $run = Invoke-Native 'wsl.exe' @('-d', $linux.Distro, '--exec', 'bash', "$($linux.Root)/tests/package_linux_tests.sh")
+    $blocked = @($run.Lines | Where-Object { "$_".StartsWith('PACKAGE_BLOCKED|') }) | Select-Object -First 1
+    if ($blocked) { return Result 'BLOCKED' ("$blocked" -replace '^PACKAGE_BLOCKED\|', '') }
+    $failed = @($run.Lines | Where-Object { "$_" -match '^PACKAGE_CASE\|([^|]+)\|FAIL' } | ForEach-Object { ("$_" -split '\|')[1] })
+    if ($run.Code -ne 0 -or $failed.Count) {
+        $run.Lines | Where-Object { "$_" -notmatch '\|PASS$' } | Select-Object -Last 40 | ForEach-Object { Write-Host "    $_" }
+        return Result 'FAIL' $(if ($failed.Count) { "failed: $($failed -join ', ')" } else { "tests/package_linux_tests.sh exited with $($run.Code)" })
+    }
+    Show-Last $run
+    return Result 'PASS'
+}
+
 function Invoke-LinuxParity {
     $run = Invoke-LinuxRunner '--parity'
     if ($run.Outcome) { return $run.Outcome }
@@ -607,6 +625,7 @@ $steps = @(
     @{ Name = 'ffmpeg-bootstrap'; Title = 'FFmpeg bootstrap: the pinned prefix and the build script checks as tools\build.ps1 drives them, and the Linux dependency policy (nasm and the other FFmpeg build tools required only when the pinned FFmpeg must be built, the setup script named when they are missing; nothing built, downloaded or installed)'; Tier = 'full'; Block = { Invoke-FFmpegBootstrap } },
     @{ Name = 'linux-tests'; Title = 'Linux program and headless suites (WSL: tools/test-linux.sh builds shadow_of_the_beast for Linux x86_64 with Clang in build/cmake/linux, checks its ELF header, then builds and runs every headless test target of the Linux build; every announced suite must report; no game, no window, no audio)'; Tier = 'full'; Parity = $true; Platform = 'linux'; Block = { Invoke-LinuxTests } },
     @{ Name = 'linux-parity'; Title = 'Linux supported-build parity and feature contract (WSL: the same sotb-build-parity-tests built from the Linux configuration of the production program and run on the same tables and boot images; no game, no window)'; Tier = 'full'; Parity = $true; Platform = 'linux'; Block = { Invoke-LinuxParity } },
+    @{ Name = 'linux-packaging'; Title = 'Linux AppImage packaging contract (WSL: tools/package-linux.sh''s release checks on synthetic AppDirs: game data, PS4 packages, user data, logs, dumps, receipts, test programs and fixtures, objects, debug files, RenderDoc and Vulkan layers, Wrangler state, local paths in ASCII and UTF-16, tokens and keys refused; DT_RPATH, dependency closure, glibc 2.31 ceiling per ELF group, required README, licences, desktop entry and metainfo; the pinned patched runtime and its FUSE fallback; AppRun arguments and fallback libraries; the AppImage name shared with the updater and the release flow; nothing real is packaged, no network)'; Tier = 'full'; Platform = 'linux'; Block = { Invoke-LinuxPackaging } },
     @{ Name = 'platform-parity'; Title = 'Windows/Linux parity: the two contracts compared (version, supported builds, public features, per-build feature results); PASS only when the Linux program built, its suites passed and both contracts ran, passed and match'; Tier = 'full'; Parity = $true; Platform = 'windows+linux'; Needs = @('build-parity', 'linux-tests', 'linux-parity'); Block = { Invoke-PlatformParity } },
     @{ Name = 'progress-reporter'; Title = 'Test progress: percentage, bar, durations, ETA, check counts, previous group, timing summary, redirected output and a synthetic long group (synthetic time, no sleeping)'; Block = { Invoke-ProgressReporter } }
 )

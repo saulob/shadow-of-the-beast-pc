@@ -1096,6 +1096,8 @@ void TestFeedbackClient() {
         {HttpFailure::kNone, 429, R"({"error":"limit"})", FeedbackOutcome::kFailed, "limit"},
         {HttpFailure::kNone, 400, R"({"error":"bad_request","detail":"revision"})", FeedbackOutcome::kFailed, "bad_request"},
         {HttpFailure::kNone, 502, R"({"error":"unavailable"})", FeedbackOutcome::kFailed, "unavailable"},
+        {HttpFailure::kNone, 500, R"({"error":"x\nFault: forged line"})", FeedbackOutcome::kFailed, "?"},
+        {HttpFailure::kNone, 500, R"({"error":"C:\\Users\\someone"})", FeedbackOutcome::kFailed, "?"},
         {HttpFailure::kUnreachable, 0, "", FeedbackOutcome::kUnreachable, "no_answer"},
         {HttpFailure::kTimedOut, 0, "", FeedbackOutcome::kUnreachable, "no_answer"},
         {HttpFailure::kNone, 200, R"({"ticket":"SOB-ABCDEF","revision":1700000000123,"test_feedback":"not_fixed"})", FeedbackOutcome::kFailed, "malformed_reply"},
@@ -1210,6 +1212,7 @@ void TestNothingHappensByItself() {
     CHECK(Has(transport, "WINHTTP_OPTION_REDIRECT_POLICY_NEVER") && Has(transport, "WINHTTP_FLAG_SECURE") && Has(transport, "WinHttpSetTimeouts"));
     CHECK(Has(transport, "\"=https\"") && Has(transport, "\"--max-redirs\"") && Has(transport, "posix_spawnp"));
     CHECK(!Has(transport, "popen(") && !Has(transport, "system("));
+    CHECK(Has(transport, "pipe2(to_child, O_CLOEXEC)") && Has(transport, "pipe2(from_child, O_CLOEXEC)") && !Has(transport, "(pipe("));
 
     const std::string profile = Source("launcher/game_profile.h");
     CHECK(!Has(profile, "localhost") && !Has(profile, "127.0.0.1") && Has(profile, "kBugReportServiceUrl"));

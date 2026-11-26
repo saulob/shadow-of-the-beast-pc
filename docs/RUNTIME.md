@@ -2,7 +2,7 @@
 
 ## Pipeline
 
-1. The launcher validates the package and installs the game into `game\prepared\CUSA03762-1.00`.
+1. The launcher validates the package and installs the game into `game\prepared\<TITLE_ID>-1.00`.
 2. `boot_image.cpp` maps the eboot at its link address, links `libc.prx` and `libSceFios2.prx` after it, records every
    relocation and leaves unresolved imports by `NID#library` name.
 3. `src/loader.c` maps `boot.bin`, reserves guest memory, initializes the video core, resolves imports and starts the
@@ -50,4 +50,4 @@ runtime can continue.
 - `libSceAjm` decodes ATRAC9 through LibAtrac9; other codecs stop explicitly.
 - `libSceAudio3d` is mixed to stereo over AudioOut.
 - PSN and online services are signed out or unavailable; they are not a goal.
-- Trophies are not implemented.
+- Trophies are local and offline (`docs/TROPHIES.md`).

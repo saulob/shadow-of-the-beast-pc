@@ -17,7 +17,8 @@ not manage, and comments, are kept. Shadow of the Beast is offline: there is no 
 - The boot image (`boot.bin`, `content.bin`, `image.json`) is built into `game\image\<TITLE_ID>-1.00`.
 - Progress, cancellation and failures are reported on the page; the log has the detailed reason.
 - **PLAY** is enabled only when the installed tree, executable hash and boot image all match a supported build.
-- **Show this launcher** (`show_launcher`): Off starts the game directly. Hold Shift while starting, or pass `--launcher`.
+- **Show this launcher** (`show_launcher`): Off starts the game directly. Hold Shift while starting (on Linux under X11),
+  or pass `--launcher`.
 
 The game package is only read. Reinstalling replaces the game folder and leaves `user\` and `logs\` untouched.
 
@@ -252,8 +253,8 @@ launcher window's placement, saves, scores, trophies, the installed game, logs a
 
 | Path | Contents |
 | --- | --- |
-| `game\prepared\CUSA03762-1.00\` | installed game (unpacked from your package) |
-| `game\image\CUSA03762-1.00\` | boot image built from the installed game |
+| `game\prepared\<TITLE_ID>-1.00\` | installed game (unpacked from your package) |
+| `game\image\<TITLE_ID>-1.00\` | boot image built from the installed game |
 | `user\sotb.ini` | launcher and runtime settings |
 | `user\keys.json`, `user\trophy\` | Trophy Key and trophy progress |
 | `user\bug_reports.json` | the reports sent from this PC, with their receipts |

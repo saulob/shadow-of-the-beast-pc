@@ -7,6 +7,10 @@
 #include <string_view>
 #include <vector>
 
+#ifndef _WIN32
+#include <unistd.h>
+#endif
+
 #include "update_restart_arguments.h"
 #include "updater/update_paths.h"
 #include "updater/update_platform.h"
@@ -95,7 +99,12 @@ trg::update::UpdateConfig MakeUpdateConfig(const std::filesystem::path& install_
     if (trg::update::HasOriginalAppImage(appimage)) {
         config.appimage_path = appimage;
         config.restart_executable = appimage;
-        config.install_supported = true;
+        // The update is written beside the AppImage and renamed over it.
+        config.install_supported = access(appimage.parent_path().c_str(), W_OK | X_OK) == 0;
+        if (!config.install_supported) {
+            config.install_unsupported_reason =
+                "The AppImage's folder is read-only. Move the AppImage to a folder you can write to, or download the new release.";
+        }
     } else {
         config.install_unsupported_reason = "Automatic installation is available in the AppImage build.";
     }

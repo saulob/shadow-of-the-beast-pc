@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Name=Shadow of the Beast PC
+Comment=Unofficial PC port of Shadow of the Beast, bring your own game package
+Exec=AppRun
+Icon=shadow-of-the-beast-pc
+Categories=Game;ActionGame;
+Keywords=Shadow of the Beast;Aarbron;action;
+Terminal=false
+Actions=Launcher;
+
+[Desktop Action Launcher]
+Name=Show launcher
+Exec=AppRun --launcher
