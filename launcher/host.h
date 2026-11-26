@@ -6,11 +6,13 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <imgui.h>
 
 #include "launcher_pacing.h"
+#include "launcher_renderer.h"
 #include "placement.h"
 
 struct SDL_Renderer;
@@ -31,6 +33,9 @@ struct HostOptions {
     bool hidden = false;                     // page screenshots without showing the window
 };
 
+// A message box of the system itself, for when the launcher window cannot open. Needs no SDL renderer and no Vulkan.
+void ShowStartupError(const std::string& title, const std::string& text);
+
 class LauncherHost {
 public:
     LauncherHost() = default;
@@ -38,8 +43,9 @@ public:
     LauncherHost(const LauncherHost&) = delete;
     LauncherHost& operator=(const LauncherHost&) = delete;
 
-    // False when no window or renderer could be created; nothing is left open then.
+    // False when no window or renderer could be created; nothing is left open then and FailureText says why.
     bool Open(const HostOptions& options);
+    const std::string& FailureText() const { return failure_text_; }
     // Shows the window once, after its first frame has been drawn, and presents that frame again. Does nothing before
     // a frame was drawn or when it was opened hidden.
     void Show();
@@ -69,6 +75,12 @@ public:
     void NoteDialogInFrame() { dialog_in_frame_ = true; }
 
 private:
+    struct Geometry;
+    bool Fail(std::string text);
+    SDL_Window* OpenWindow(const HostOptions& options, const Geometry& geometry);
+    RendererAttempt OpenAttempt(const HostOptions& options, const Geometry& geometry, std::string_view name, int& pinned);
+    std::string ProbeFirstFrame();
+    void ReleaseWindow(bool closing);
     bool PumpEvents();
     bool Minimized() const;
     void ConfigureVsync();
@@ -82,6 +94,9 @@ private:
     SDL_Renderer* renderer_ = nullptr;
     ImGuiContext* imgui_ = nullptr;
     std::vector<SDL_Texture*> textures_;
+    bool platform_backend_ = false;
+    bool renderer_backend_ = false;
+    std::string failure_text_;
     bool video_ = false;
     bool gamepad_ = false;
     bool hidden_ = false;

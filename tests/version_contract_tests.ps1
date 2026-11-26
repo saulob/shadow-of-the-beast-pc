@@ -53,8 +53,9 @@ if ($GeneratedHeader) {
     Check ($header.Contains("#define SOTB_VERSION_NUMBERS $($parts -join ','),0")) "the generated version numbers are $($parts -join ','),0"
 }
 
-# A literal port version in production code would not follow the canonical one. Third-party code and the updater tests'
-# later-release examples (asset names of a release after this one) are not declarations of this version.
+# A literal port version in production code would not follow the canonical one. Third-party code, the updater tests'
+# later-release examples (asset names of a release after this one) and the Bug Report tests' lists of accepted version
+# names are not declarations of this version.
 $git = Get-Command git -ErrorAction SilentlyContinue
 Check ([bool]$git) 'git is available to list the tracked files'
 if ($git) {
@@ -78,6 +79,9 @@ if ($git) {
         if ($path -match $thirdParty) { continue }
         $kind = if ($path -match '^tests/update(_network)?_tests\.cpp$' -and $text -match 'ParseVersion\("v?0\.2\.0|v0\.2\.0[-/]') {
             'later-release example'
+        } elseif ($path -match '^(tests/bug_report_tests\.cpp|server/shadow-bug-reports/test/launcher_contract\.test\.js)$' -and
+                  $text -match '0\.1\.0' -and $text -match '1\.0\.0-rc\.1') {
+            'accepted-version sample'
         } elseif ($path -eq 'tests/version_contract_tests.ps1') { 'this check' } else { 'active declaration' }
         Write-Host "VERSION_LITERAL|0.2.0|$($path):$number|$kind"
         Check ($kind -ne 'active declaration') "$($path):$number still says 0.2.0: $($text.Trim())"

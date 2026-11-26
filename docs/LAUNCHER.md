@@ -55,11 +55,24 @@ The launcher draws at 60 frames a second whatever the display's refresh rate, pa
 window sleeps and keeps its events and background work. On Windows it uses Direct3D 11 and falls back to SDL's software
 renderer when Direct3D 11 is unavailable; `d3d11.dll` and `dxgi.dll` are loaded once and pinned for the life of the process
 because SDL unloads `d3d11.dll` right after the device's last release while a driver thread may still be returning through
-it. `SOTB_LAUNCHER_RENDERER=software` forces the software renderer. Elsewhere SDL's first working renderer is used, with
-software as the fallback. VSync stays on only where the display really paces; a software renderer's simulated VSync is
-turned off and the 60 Hz cap alone paces the loop. The log has `renderer_selected`, `frame_pacing` and `loop_sample` lines
-with the requested and effective renderer, fallback, requested and effective VSync, pacing mode and target Hz; a present
-that stalls is reported once per incident.
+it. Elsewhere SDL's first working renderer is used, with software as the fallback. Each renderer is tried once: an attempt
+opens its own hidden window, creates the renderer, uploads a texture, clears, draws and presents a first frame and starts the
+ImGui backends; a step that fails releases what that attempt opened and the next renderer is tried. When none opens, a
+message box of the system lists each renderer and why it failed, and the game is not started. VSync stays on only where
+the display really paces; a software renderer's simulated VSync is turned off and the 60 Hz cap alone paces the loop. The
+log has `renderer_attempt` (stage `window`, `pin`, `create`, `first_frame` or `imgui_backend`, bounded reason),
+`renderer_selected` (with `fallback_reason`), `frame_pacing` and `loop_sample` lines with the requested and effective
+renderer, fallback, requested and effective VSync, pacing mode and target Hz; a present that stalls is reported once per
+incident.
+
+The launcher window needs no Vulkan. The Graphics card list is asked from Vulkan only after the visible launcher has drawn
+at least three frames over half a second; until then the row shows the saved choice, and a system where Vulkan is missing,
+too old or finds no card shows that no card was found and keeps every saved setting. The Renderer setting is the game's
+and is separate from the launcher's own renderer.
+
+**Software recovery.** `SOTB_LAUNCHER_RENDERER=software` in the environment of one start opens the launcher with SDL's
+software renderer and skips the Graphics card detection, so the settings can be reached when the GPU driver misbehaves. It
+is never saved, and the game does not read it.
 
 In a window too short for every page, only the sidebar's page list scrolls, with the launcher's usual scrollbar in place of
 its right padding (`gpu/patches/trg-launcher/0020-sidebar-scroll.patch`). The wheel over the sidebar scrolls it, the rows are

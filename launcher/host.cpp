@@ -76,42 +76,140 @@ int64_t NowNs() {
     return static_cast<int64_t>(SDL_GetTicksNS());
 }
 
-bool PinRendererModules(std::string_view renderer, int& pinned) {
+// The first module that could not be kept loaded; empty when all are.
+std::string PinRendererModules(std::string_view renderer, int& pinned) {
     for (const std::string_view module : RendererModulesToPin(renderer)) {
         if (!PinModule(module)) {
-            std::printf("Launcher: cannot keep %.*s loaded, skipping the %.*s renderer\n", int(module.size()), module.data(),
-                        int(renderer.size()), renderer.data());
-            return false;
+            return std::string(module);
         }
         ++pinned;
     }
-    return true;
+    return {};
 }
 
-SDL_Renderer* CreateLauncherRenderer(SDL_Window* window, const RendererPlan& plan, RendererSelection& selection, int& pinned) {
-    SDL_Renderer* renderer = nullptr;
-    selection = SelectRenderer(plan, [&](std::string_view requested) -> std::string {
-        const std::string name(requested);
-        if (!PinRendererModules(name, pinned)) {
-            return {};
-        }
-        renderer = SDL_CreateRenderer(window, name.empty() ? nullptr : name.c_str());
-        if (!renderer) {
-            std::printf("Launcher: no %s renderer (%s)\n", name.empty() ? "default" : name.c_str(), SDL_GetError());
-            return {};
-        }
-        const char* actual = SDL_GetRendererName(renderer);
-        return actual && *actual ? actual : "unknown";
-    });
-    return renderer;
+std::string SdlError(const char* what) {
+    const char* error = SDL_GetError();
+    return std::string(what) + ": " + (error && *error ? error : "unknown error");
 }
 
 } // namespace
 
+#ifdef _WIN32
+void ShowStartupError(const std::string& title, const std::string& text) {
+    const auto wide = [](const std::string& utf8) {
+        const int length = MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, nullptr, 0);
+        std::wstring result(static_cast<size_t>(length > 0 ? length : 1), L'\0');
+        if (length > 0) {
+            MultiByteToWideChar(CP_UTF8, 0, utf8.c_str(), -1, result.data(), length);
+        }
+        return result;
+    };
+    MessageBoxW(nullptr, wide(text).c_str(), wide(title).c_str(), MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
+}
+#else
+void ShowStartupError(const std::string& title, const std::string& text) {
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, title.c_str(), text.c_str(), nullptr);
+}
+#endif
+
+struct LauncherHost::Geometry {
+    int x = 0, y = 0, width = 0, height = 0;
+    float scale = 1.0f;
+};
+
+bool LauncherHost::Fail(std::string text) {
+    failure_text_ = std::move(text);
+    Close();
+    return false;
+}
+
+SDL_Window* LauncherHost::OpenWindow(const HostOptions& options, const Geometry& geometry) {
+    SDL_PropertiesID props = SDL_CreateProperties();
+    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, options.title.c_str());
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, geometry.x);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, geometry.y);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, geometry.width);
+    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, geometry.height);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
+    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
+    SDL_Window* window = SDL_CreateWindowWithProperties(props);
+    SDL_DestroyProperties(props);
+    if (window) {
+        SDL_SetWindowMinimumSize(window, std::min(static_cast<int>(options.min_width * geometry.scale), geometry.width),
+                                 std::min(static_cast<int>(options.min_height * geometry.scale), geometry.height));
+    }
+    return window;
+}
+
+// One texture upload, one clear, one draw and one present: what the first launcher frame needs from the renderer.
+// Empty when all of them worked.
+std::string LauncherHost::ProbeFirstFrame() {
+    constexpr int kSize = 512;
+    const std::vector<uint8_t> pixels(static_cast<size_t>(kSize) * kSize * 4, 255);
+    SDL_Texture* texture = SDL_CreateTexture(renderer_, SDL_PIXELFORMAT_RGBA32, SDL_TEXTUREACCESS_STATIC, kSize, kSize);
+    if (!texture) {
+        return SdlError("texture");
+    }
+    std::string problem;
+    if (!SDL_UpdateTexture(texture, nullptr, pixels.data(), kSize * 4)) {
+        problem = SdlError("texture upload");
+    } else if (!SDL_SetRenderDrawColor(renderer_, 0, 0, 0, 255) || !SDL_RenderClear(renderer_)) {
+        problem = SdlError("clear");
+    } else if (!SDL_RenderTexture(renderer_, texture, nullptr, nullptr)) {
+        problem = SdlError("draw");
+    } else if (!SDL_RenderPresent(renderer_)) {
+        problem = SdlError("present");
+    }
+    SDL_DestroyTexture(texture);
+    return problem;
+}
+
+RendererAttempt LauncherHost::OpenAttempt(const HostOptions& options, const Geometry& geometry, std::string_view name,
+                                          int& pinned) {
+    window_ = OpenWindow(options, geometry);
+    if (!window_) {
+        return RendererAttempt::Failed(name, RendererStage::kWindow, SdlError("window"));
+    }
+    sotb_startup_phase("launcher window created");
+    sotb_startup_phase(RendererAttemptPhase(name));
+    if (const std::string unpinned = PinRendererModules(name, pinned); !unpinned.empty()) {
+        return RendererAttempt::Failed(name, RendererStage::kPin, "cannot keep " + unpinned + " loaded");
+    }
+    const std::string sdl_name(name);
+    renderer_ = SDL_CreateRenderer(window_, sdl_name.empty() ? nullptr : sdl_name.c_str());
+    if (!renderer_) {
+        return RendererAttempt::Failed(name, RendererStage::kCreate, SdlError("renderer"));
+    }
+    const char* created = SDL_GetRendererName(renderer_);
+    renderer_name_ = created && *created ? created : "unknown";
+    if (const std::string problem = ProbeFirstFrame(); !problem.empty()) {
+        return RendererAttempt::Failed(name, RendererStage::kFirstFrame, problem);
+    }
+
+    IMGUI_CHECKVERSION();
+    imgui_ = ImGui::CreateContext();
+    ImGui::SetCurrentContext(imgui_);
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.LogFilename = nullptr;
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
+    platform_backend_ = ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
+    if (!platform_backend_) {
+        return RendererAttempt::Failed(name, RendererStage::kBackend, "ImGui SDL backend");
+    }
+    renderer_backend_ = ImGui_ImplSDLRenderer3_Init(renderer_);
+    if (!renderer_backend_) {
+        return RendererAttempt::Failed(name, RendererStage::kBackend, "ImGui renderer backend");
+    }
+    return RendererAttempt::Opened(name, renderer_name_);
+}
+
 bool LauncherHost::Open(const HostOptions& options) {
+    failure_text_.clear();
     if (!SDL_InitSubSystem(SDL_INIT_VIDEO)) {
-        std::printf("Launcher: SDL video failed: %s\n", SDL_GetError());
-        return false;
+        const std::string error = SdlError("SDL video failed");
+        std::printf("Launcher: %s\n", error.c_str());
+        return Fail("The launcher could not start: " + RendererReason(error));
     }
     video_ = true;
     gamepad_ = SDL_InitSubSystem(SDL_INIT_GAMEPAD);
@@ -119,8 +217,7 @@ bool LauncherHost::Open(const HostOptions& options) {
     const std::vector<Display> displays = ListDisplays();
     if (displays.empty()) {
         std::printf("Launcher: no display found\n");
-        Close();
-        return false;
+        return Fail("The launcher could not start: no display found.");
     }
     std::vector<DisplayArea> areas;
     for (const Display& display : displays) {
@@ -131,54 +228,34 @@ bool LauncherHost::Open(const HostOptions& options) {
                                    : std::optional<WindowPlacement>(
                                          WindowPlacement{placement.rect, placement.maximized, placement.fullscreen});
     const Display* target = &displays[placement.display];
-    const int x = placement.centered ? int(SDL_WINDOWPOS_CENTERED_DISPLAY(target->id)) : placement.rect.left;
-    const int y = placement.centered ? int(SDL_WINDOWPOS_CENTERED_DISPLAY(target->id)) : placement.rect.top;
-    const int width = placement.rect.width();
-    const int height = placement.rect.height();
+    Geometry geometry;
+    geometry.x = placement.centered ? int(SDL_WINDOWPOS_CENTERED_DISPLAY(target->id)) : placement.rect.left;
+    geometry.y = placement.centered ? int(SDL_WINDOWPOS_CENTERED_DISPLAY(target->id)) : placement.rect.top;
+    geometry.width = placement.rect.width();
+    geometry.height = placement.rect.height();
+    geometry.scale = target->scale;
 
-    SDL_PropertiesID props = SDL_CreateProperties();
-    SDL_SetStringProperty(props, SDL_PROP_WINDOW_CREATE_TITLE_STRING, options.title.c_str());
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_X_NUMBER, x);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_Y_NUMBER, y);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, width);
-    SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_HEIGHT_NUMBER, height);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_RESIZABLE_BOOLEAN, true);
-    SDL_SetBooleanProperty(props, SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true);
-    window_ = SDL_CreateWindowWithProperties(props);
-    SDL_DestroyProperties(props);
-    if (!window_) {
-        std::printf("Launcher: cannot create the window: %s\n", SDL_GetError());
-        Close();
-        return false;
-    }
-    sotb_startup_phase("launcher window created");
-    SDL_SetWindowMinimumSize(window_, std::min(static_cast<int>(options.min_width * target->scale), width),
-                             std::min(static_cast<int>(options.min_height * target->scale), height));
-    LogPlacement(placement, areas, target->name);
-
+    sotb_startup_phase("launcher renderer selection");
     const RendererPlan plan = PlanLauncherRenderer(kWindows, std::getenv(kLauncherRendererVariable));
-    RendererSelection selection;
     int pinned = 0;
-    renderer_ = CreateLauncherRenderer(window_, plan, selection, pinned);
-    if (!renderer_) {
+    const RendererSelection selection = SelectRenderer(
+        plan,
+        [&](std::string_view name) {
+            RendererAttempt attempt = OpenAttempt(options, geometry, name, pinned);
+            if (!attempt.ok()) {
+                std::printf("%s\n", RendererAttemptLine(attempt).c_str());
+                std::fflush(stdout);
+            }
+            return attempt;
+        },
+        [this] { ReleaseWindow(false); });
+    if (!selection.created) {
         std::printf("%s\n", RendererFailedLine(plan, selection).c_str());
-        std::printf("Launcher: cannot create a renderer: %s\n", SDL_GetError());
-        Close();
-        return false;
+        return Fail(RendererFailureText(selection));
     }
-    renderer_name_ = selection.actual;
+    LogPlacement(placement, areas, target->name);
     std::printf("%s\n", RendererSelectedLine(plan, selection, pinned).c_str());
     ConfigureVsync();
-
-    IMGUI_CHECKVERSION();
-    imgui_ = ImGui::CreateContext();
-    ImGui::SetCurrentContext(imgui_);
-    ImGuiIO& io = ImGui::GetIO();
-    io.IniFilename = nullptr;
-    io.LogFilename = nullptr;
-    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_NavEnableGamepad;
-    ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
-    ImGui_ImplSDLRenderer3_Init(renderer_);
 
     hidden_ = options.hidden;
     gate_ = LoopGate(hidden_ ? 0 : kLauncherTargetHz);
@@ -188,8 +265,8 @@ bool LauncherHost::Open(const HostOptions& options) {
     if (placement.fullscreen) {
         SDL_SetWindowFullscreen(window_, true);
     }
-    std::printf("Launcher: window %dx%d at %.2fx display scale, %s renderer\n", width, height, target->scale,
-                renderer_name_.c_str());
+    std::printf("Launcher: window %dx%d at %.2fx display scale, %s renderer\n", geometry.width, geometry.height,
+                target->scale, renderer_name_.c_str());
     sotb_startup_phase("launcher renderer ready");
     return true;
 }
@@ -262,28 +339,44 @@ void LauncherHost::DestroyTexture(ImTextureID texture) {
     }
 }
 
-void LauncherHost::Close() {
-    sotb_startup_phase("launcher host closing");
+// Whatever a renderer attempt opened, newest first. Safe after an attempt that stopped part way.
+void LauncherHost::ReleaseWindow(bool closing) {
     for (SDL_Texture* texture : textures_) {
         SDL_DestroyTexture(texture);
     }
     textures_.clear();
-    if (imgui_) {
+    if (renderer_backend_) {
         ImGui_ImplSDLRenderer3_Shutdown();
+        renderer_backend_ = false;
+    }
+    if (platform_backend_) {
         ImGui_ImplSDL3_Shutdown();
+        platform_backend_ = false;
+    }
+    if (imgui_) {
         ImGui::DestroyContext(imgui_);
         imgui_ = nullptr;
     }
-    sotb_startup_phase("launcher destroying renderer");
+    if (closing) {
+        sotb_startup_phase("launcher destroying renderer");
+    }
     if (renderer_) {
         SDL_DestroyRenderer(renderer_);
         renderer_ = nullptr;
     }
-    sotb_startup_phase("launcher destroying window");
+    if (closing) {
+        sotb_startup_phase("launcher destroying window");
+    }
     if (window_) {
         SDL_DestroyWindow(window_);
         window_ = nullptr;
     }
+    renderer_name_.clear();
+}
+
+void LauncherHost::Close() {
+    sotb_startup_phase("launcher host closing");
+    ReleaseWindow(true);
     sotb_startup_phase("launcher SDL shutdown");
     if (video_ || gamepad_) {
         // Nothing else uses SDL yet: the game window thread starts it again from scratch.

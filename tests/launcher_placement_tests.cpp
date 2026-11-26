@@ -285,12 +285,15 @@ void TestSourceWiring() {
     const std::string launcher = ReadAll(root / "launcher/launcher.cpp");
     CHECK(!host.empty() && !launcher.empty());
 
-    // Chosen once, from the display list, before the hidden window is created; logged once from Open.
+    // Chosen once, from the display list, before a renderer attempt creates the hidden window with that geometry;
+    // logged once from Open after the window that stays.
     const size_t open = host.find("bool LauncherHost::Open(");
     const size_t choose = host.find("ChoosePlacement(options.restore, areas, options.width, options.height)", open);
-    const size_t create = host.find("SDL_CreateWindowWithProperties(props)", open);
+    const size_t create = host.find("OpenAttempt(options, geometry, name, pinned)", open);
     const size_t log = host.find("LogPlacement(placement, areas, target->name);", open);
     CHECK(open != std::string::npos && choose != std::string::npos && choose < create && create < log);
+    CHECK(Count(host, "SDL_CreateWindowWithProperties(props)") == 1 && Contains(host, "window_ = OpenWindow(options, geometry);"));
+    CHECK(Contains(host, "SDL_SetNumberProperty(props, SDL_PROP_WINDOW_CREATE_WIDTH_NUMBER, geometry.width);"));
     CHECK(Count(host, "ChoosePlacement(") == 1 && Count(host, "LogPlacement(placement") == 1);
     CHECK(!Contains(launcher, "ChoosePlacement") && !Contains(launcher, "PlacementLine"));
     CHECK(Contains(host, "SDL_PROP_WINDOW_CREATE_HIDDEN_BOOLEAN, true"));

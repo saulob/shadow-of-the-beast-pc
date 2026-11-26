@@ -23,6 +23,7 @@
 #include "game_install.h"
 #include "game_profile.h"
 #include "gameplay_rows.h"
+#include "graphics_cards.h"
 #include "guest_display.h"
 #include "guest_ultrawide.h"
 #include "header_art.h"
@@ -30,6 +31,7 @@
 #include "launcher_quit.h"
 #include "launcher_theme.h"
 #include "host.h"
+#include "launcher_renderer.h"
 #include "options.h"
 #include "pad_capture.h"
 #include "page_icons.h"
@@ -231,20 +233,14 @@ private:
         options.restore = ReadPlacement(settings_);
         sotb_startup_phase("launcher opening");
         if (!host_.Open(options)) {
-            std::fprintf(stderr, "Launcher: could not open the launcher window\n");
+            std::fprintf(stderr, "Launcher: could not open the launcher window; the game was not started\n");
+            ShowStartupError(options.title, host_.FailureText() + "\n\nThe game was not started. The log has the details.");
             return SOTB_LAUNCHER_BLOCKED;
         }
         placement_ = PlacementTracker(host_.Restored());
         displays_ = ListDisplays();
         fonts_ = trg::LoadSystemFonts(trg::layout::kTextBody);
         sponsor_icon_ = LoadSponsorIcon(host_);
-        char gpu_names[16][256] = {};
-        const int gpu_count = sotb_gpu_names(gpu_names, 16);
-        for (int i = 0; i < gpu_count; ++i) {
-            if (gpu_names[i][0]) {
-                gpu_names_.emplace_back(gpu_names[i]);
-            }
-        }
 
         trophy_page_ = std::make_unique<TrophyPage>(host_, user_dir_);
         incident_page_ = std::make_unique<IncidentPage>(IncidentPlaces());
@@ -257,6 +253,8 @@ private:
         SotbLauncherResult outcome = SOTB_LAUNCHER_QUIT;
         bool first = true;
         bool shown = false;
+        double shown_at = 0.0;
+        int frames_shown = 0;
         while (true) {
             const Sotb::FrameGate gate = host_.NextFrame();
             if (gate == Sotb::FrameGate::kQuit) {
@@ -298,7 +296,11 @@ private:
                 // Shown only after a complete launcher frame was presented, so its first visible frame is never blank.
                 host_.Show();
                 shown = true;
+                shown_at = double(SDL_GetTicksNS()) / 1e9;
                 sotb_startup_phase("launcher running");
+            } else if (graphics_cards_ == GraphicsCardsState::kPending &&
+                       GraphicsProbeDue(++frames_shown, double(SDL_GetTicksNS()) / 1e9 - shown_at)) {
+                DetectGraphicsCards();
             }
         }
         sotb_startup_phase("launcher loop ended");
@@ -697,9 +699,36 @@ private:
         }
     }
 
+    // Vulkan is asked only once the launcher is visible and usable; a system without it keeps every other setting.
+    void DetectGraphicsCards() {
+        if (LauncherSoftwareRequested(std::getenv(kLauncherRendererVariable))) {
+            graphics_cards_ = GraphicsCardsState::kSkipped;
+        } else {
+            sotb_startup_phase("launcher graphics card detection");
+            char gpu_names[16][256] = {};
+            const int gpu_count = sotb_gpu_names(gpu_names, 16);
+            for (int i = 0; i < gpu_count; ++i) {
+                if (gpu_names[i][0]) {
+                    gpu_names_.emplace_back(gpu_names[i]);
+                }
+            }
+            graphics_cards_ = GraphicsCardsState::kProbed;
+            sotb_startup_phase("launcher running");
+        }
+        std::printf("%s\n", GraphicsCardsLine(graphics_cards_, gpu_names_.size()).c_str());
+    }
+
     void GraphicsCardCombo() {
+        if (graphics_cards_ == GraphicsCardsState::kPending) {
+            ImGui::BeginDisabled();
+            if (ImGui::BeginCombo("##graphics_card", GraphicsCardSavedText(settings_.Get(kGraphicsCardKey)).c_str())) {
+                ImGui::EndCombo();
+            }
+            ImGui::EndDisabled();
+            return;
+        }
         if (gpu_names_.empty()) {
-            ImGui::TextUnformatted("No graphics card found");
+            ImGui::TextUnformatted(GraphicsCardsProblem(graphics_cards_, 0));
             return;
         }
         const std::string current = settings_.Get(kGraphicsCardKey);
@@ -988,6 +1017,7 @@ private:
     PlacementTracker placement_;
     std::vector<Display> displays_;
     std::vector<std::string> gpu_names_;
+    GraphicsCardsState graphics_cards_ = GraphicsCardsState::kPending;
     std::unique_ptr<trg::Launcher> launcher_;
     std::unique_ptr<TrophyPage> trophy_page_;
     std::unique_ptr<IncidentPage> incident_page_;
