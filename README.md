@@ -12,7 +12,7 @@
 
 </div>
 
-<img src="assets/launcher/header-art-source.png" alt="Shadow of the Beast launcher art" width="100%" />
+<img width="1705" height="996" alt="2026-11-26_14-41" src="https://github.com/user-attachments/assets/3f16bb67-d0e0-4c97-afa4-fa482195cdc4" />
 
 ## Features
 
@@ -56,6 +56,10 @@ All three builds have the same intended PC-port feature set. The PC port version
 launcher, runtime and renderer; the game version (`1.00`) identifies the original game installed from your own package.
 More detail is in [docs/GAME_BUILDS.md](docs/GAME_BUILDS.md).
 
+<img width="1704" height="1006" alt="2026-11-26_14-43" src="https://github.com/user-attachments/assets/205349eb-ddbc-49e6-8cb6-36de8c0a5066" />
+
+<img width="1707" height="1002" alt="2026-11-26_14-43_1" src="https://github.com/user-attachments/assets/36265b7e-1ebd-4578-ad60-4d7b7f29e0ce" />
+
 ## Installing
 
 1. Download **ShadowOfTheBeastPC-v&lt;version&gt;-windows-x64.zip** from the
@@ -90,6 +94,8 @@ Ultrawide**, and can be switched off in the launcher.
 - **Prerendered videos** stay 16:9
 
 16:10, 4:3 and 5:4 are also offered; they change the shape of the picture without the Hor+ view.
+
+<img width="1918" height="862" alt="2026-11-26_14-46" src="https://github.com/user-attachments/assets/de5f4f58-f5a6-4b9d-97e1-dd206b527ea0" />
 
 ## Graphics and display
 
