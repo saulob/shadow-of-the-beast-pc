@@ -204,8 +204,13 @@ published digest when the release has one). A release with neither is refused. D
 
 Only the files of the package are replaced, each one backed up first and compared with its source afterwards; any failure puts the
 backups back, and a restart that fails restores the previous version. Nothing else is removed. A package that contains `game\`,
-`user\`, `logs\`, `cache\`, `shader\`, saves, trophies, `sotb.ini`, `keys.json`, `bug_reports.json`, anything named `CUSA03762*`, `.pak`,
-`.pkg` or `eboot.bin` is refused. The helper writes `trg-updater.log` in the update workspace (`trg-update-*` in the temporary folder).
+`user\`, `logs\`, `cache\`, `shader\`, saves, trophies, crash dumps, `sotb.ini`, `keys.json`, `bug_reports.json`, anything named
+`CUSA03762*`, `CUSA02871*` or `CUSA00951*`, `.pak`, `.pkg` or `eboot.bin` is refused. The helper writes `trg-updater.log` in the
+update workspace (`trg-update-*` in the temporary folder).
+
+`.\tools\package.ps1` builds and writes the release locally (nothing is published): `dist\ShadowOfTheBeastPC-v<version>-windows-x64.zip`,
+its `.zip.sha256` and the staged folder, checked first for game and user data, logs, dumps, debug files, local paths and
+unexpected files. `.\tools\package.ps1 -VerifyOnly <staged folder>` repeats only that check.
 
 Test mode never turns on by itself. With `SOTB_UPDATE_TEST=1`, `SOTB_UPDATE_TEST_CURRENT_VERSION`, `SOTB_UPDATE_TEST_RELEASE_JSON`
 (a release file instead of GitHub) and `SOTB_UPDATE_TEST_ASSET_SHA256` can simulate a newer release; the restarted program

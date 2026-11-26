@@ -197,8 +197,8 @@ bool IsProtectedRelativePath(std::string_view normalized_path) {
       "game", "user", "user_data", "user_data.migrating", "logs", "cache", "content", "save", "saves", "savedata",
       "trophy", "trophies", "shader", "local_services", "screenshot", "screenshots", "sce_sys", "sce_module",
       "prepared", "extracted", "image", "dlc", "download0", "temp0"};
-  // The game folders are named after the title and version, such as CUSA03762-1.00.
-  static constexpr std::string_view kProtectedPrefix = "cusa03762";
+  // The game folders of every supported build are named after the title and version, such as CUSA03762-1.00.
+  static constexpr std::string_view kProtectedPrefixes[] = {"cusa03762", "cusa02871", "cusa00951"};
   static constexpr const char* kProtectedFiles[] = {
       "sotb.ini", "keys.json", "bug_reports.json", "gamecontrollerdb.txt", "last_run.log", "last_run.prev.log",
       "eboot.bin", "param.sfo", "boot.bin", "content.bin", "image.json", "imports.json", "param.bin", "memory.dat",
@@ -224,8 +224,10 @@ bool IsProtectedRelativePath(std::string_view normalized_path) {
         return true;
       }
     }
-    if (segment.starts_with(kProtectedPrefix)) {
-      return true;
+    for (const std::string_view prefix : kProtectedPrefixes) {
+      if (segment.starts_with(prefix)) {
+        return true;
+      }
     }
     if (slash == std::string::npos) {
       break;

@@ -277,6 +277,7 @@ int main(int argc, char** argv) {
   WriteFile(install / "user" / "bug_reports.json", "report history");
   WriteFile(install / "user" / "shader" / "cache" / "pipeline.bin", "shader cache");
   WriteFile(install / "logs" / "shadow_of_the_beast_001.log", "log");
+  WriteFile(install / "logs" / "shadow_of_the_beast_001.dmp", "dump");
   WriteFile(install / "notes.txt", "keep me");
   std::filesystem::copy_file(marker, staging / "app.exe", std::filesystem::copy_options::overwrite_existing, ec);
   CHECK(!ec);
@@ -324,6 +325,7 @@ int main(int argc, char** argv) {
   CHECK(ReadFile(install / "user" / "bug_reports.json") == "report history");
   CHECK(ReadFile(install / "user" / "shader" / "cache" / "pipeline.bin") == "shader cache");
   CHECK(ReadFile(install / "logs" / "shadow_of_the_beast_001.log") == "log");
+  CHECK(ReadFile(install / "logs" / "shadow_of_the_beast_001.dmp") == "dump");
   CHECK(ReadFile(install / "notes.txt") == "keep me");
 
   const std::string helper_log = ReadFile(log);

@@ -577,6 +577,16 @@ void TestPackagingNames() {
   CHECK(project.find("add_dependencies(shadow_of_the_beast trg-updater)") != std::string::npos);
   CHECK(launcher.find("add_executable(trg-updater WIN32") != std::string::npos);
   CHECK(launcher.find("target_link_options(trg-updater PRIVATE -static)") != std::string::npos);
+
+  const std::string package = ReadFile(std::string(SOTB_SOURCE_DIR) + "/tools/package.ps1");
+  CHECK(package.find("project\\(shadow_of_the_beast_pc VERSION") != std::string::npos);
+  CHECK(package.find("\"ShadowOfTheBeastPC-v$version-windows-x64\"") != std::string::npos);
+  CHECK(package.find("\"$name.zip.sha256\"") != std::string::npos);
+  CHECK(package.find("\"$hash  $name.zip`n\"") != std::string::npos);
+  for (const char* file : {"shadow_of_the_beast.exe", "trg-updater.exe", "assets\\launcher\\header-art.png",
+                           "assets\\launcher\\sponsor-heart.png", "README.txt", "LICENSE.txt"}) {
+    CHECK(package.find(file) != std::string::npos);
+  }
 }
 
 void TestUrlPolicy() {
@@ -633,6 +643,15 @@ void TestPaths() {
   CHECK(IsProtectedRelativePath("CUSA03762/sce_module/libc.prx"));
   CHECK(IsProtectedRelativePath("CUSA03762-1.02/movie/opening.usm"));
   CHECK(IsProtectedRelativePath("cusa03762-1.00/readme.txt"));
+  CHECK(IsProtectedRelativePath("CUSA02871-1.00/eboot.bin"));
+  CHECK(IsProtectedRelativePath("CUSA02871-1.00/movie/opening.usm"));
+  CHECK(IsProtectedRelativePath("CUSA00951-1.00/movie/opening.usm"));
+  CHECK(IsProtectedRelativePath("cusa00951-1.00/readme.txt"));
+  CHECK(IsProtectedRelativePath("game/prepared/CUSA00951-1.00/eboot.bin"));
+  CHECK(IsProtectedRelativePath("logs/shadow_of_the_beast_433.dmp"));
+  CHECK(IsProtectedRelativePath("logs/shadow_of_the_beast_433_2.dmp"));
+  CHECK(IsProtectedRelativePath("shadow_of_the_beast_433.dmp"));
+  CHECK(IsProtectedRelativePath("Crash.DMP"));
   CHECK(IsProtectedRelativePath("beast/content/paks/pakchunk0-ps4.pak"));
   CHECK(IsProtectedRelativePath("user/gamecontrollerdb.txt"));
   CHECK(IsProtectedRelativePath("user/local_services/np.json"));
@@ -733,7 +752,8 @@ void TestPortContract() {
       {"user/savedata/1/a.txt", "save"},             {"user/sotb.ini", "settings"},
       {"logs/a.txt", "log"},                         {"package.pkg", "pkg"},
       {"trophy/TROPHY.TRP", "trophies"},             {"sce_module/libc.prx", "prx"},
-      {"keys.json", "keys"},
+      {"keys.json", "keys"},                         {"CUSA02871-1.00/movie/opening.usm", "movie"},
+      {"CUSA00951-1.00/movie/opening.usm", "movie"}, {"logs/shadow_of_the_beast_001.dmp", "dump"},
   };
   for (const auto& entry : game_data) {
     const bool accepted = PortPackageAccepted(temp.path, required, {}, {entry});
@@ -819,6 +839,9 @@ void TestRestartArguments() {
       {"--user", "C:/with space", "--sotb-skip-launcher", "--launcher", "--launcher=0", "--log", "a.log"});
   CHECK((cleaned == std::vector<std::string>{"--user", "C:/with space", "--log", "a.log", "--launcher"}));
   CHECK(Sotb::UpdateRestartArguments({}) == std::vector<std::string>{"--launcher"});
+  CHECK((Sotb::UpdateRestartArguments({"--sotb-skip-launcher=1", "--launcher=1", "--launcher-width", "800"}) ==
+         std::vector<std::string>{"--launcher-width", "800", "--launcher"}));
+  CHECK(Sotb::UpdateRestartArguments({"--launcher"}) == std::vector<std::string>{"--launcher"});
   CHECK(!Sotb::IsLauncherVisibilityArgument("--launcher-width"));
   CHECK(!Sotb::IsLauncherVisibilityArgument("--sotb-skip-launcher-x"));
   CHECK(Sotb::IsLauncherVisibilityArgument("--sotb-skip-launcher"));

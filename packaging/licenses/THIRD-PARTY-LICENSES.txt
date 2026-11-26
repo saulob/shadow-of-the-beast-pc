@@ -73,6 +73,10 @@ LibAtrac9
   https://github.com/Thealexbarney/LibAtrac9
   MIT
 
+FFmpeg (avcodec, avformat, avutil, swresample, swscale DLLs)
+  https://ffmpeg.org/
+  LGPL-2.1-or-later; built from gpu/ffmpeg.txt, configuration and licence texts in licenses/ffmpeg
+
 nanosvg
   https://github.com/memononen/nanosvg
   zlib
